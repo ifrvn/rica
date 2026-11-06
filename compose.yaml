@@ -1,27 +1,27 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: character
       POSTGRES_USER: character
       POSTGRES_PASSWORD: local-dev-only
     ports: ["127.0.0.1:55432:5432"]
-    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    volumes: ["postgres-18-data:/var/lib/postgresql"]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "character", "-d", "character"]
       interval: 2s
       timeout: 3s
       retries: 15
   redis:
-    image: redis:7.4-alpine
+    image: redis:8-alpine
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports: ["127.0.0.1:56379:6379"]
-    volumes: ["redis-data:/data"]
+    volumes: ["redis-8-data:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 15
 volumes:
-  postgres-data:
-  redis-data:
+  postgres-18-data:
+  redis-8-data:
