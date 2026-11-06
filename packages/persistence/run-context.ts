@@ -15,16 +15,7 @@ type Binding = {
 export async function lockSimulatedBinding(tx: Prisma.TransactionClient, accountId: string) {
   // Keep the binding and activation state stable through the enclosing transaction.
   const [binding] = await tx.$queryRaw<Binding[]>`
-    SELECT c.id AS "characterId", i.id AS "identityId", a.id AS "accountId",
-           c.active_core_version AS "coreVersion", i.active_version AS "identityVersion",
-           a.binding_version AS "bindingVersion", c.auth_epoch AS "authEpoch"
-    FROM platform_accounts a
-    JOIN identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)
-    JOIN characters c ON c.id = i.character_id
-    WHERE a.id = ${accountId}::uuid
-      AND a.platform IN ('mock-a', 'mock-b')
-      AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'
-    FOR SHARE OF c, i, a
+    SELECT * FROM public.rica_lock_simulated_binding(${accountId}::uuid)
   `
   return binding
 }
@@ -52,11 +43,10 @@ export async function lockEventContext(
   if (!conversationId) return { conversationId: null, contactId: contactId ?? null, channel: null }
 
   const [conversation] = await tx.$queryRaw<{ channel: ConversationChannel }[]>`
-    SELECT channel FROM conversations
-    WHERE id = ${conversationId}::uuid AND character_id = ${binding.characterId}::uuid
-      AND identity_id = ${binding.identityId}::uuid AND account_id = ${binding.accountId}::uuid
-      AND (channel = 'PUBLIC' OR private_contact_id = ${contactId ?? null}::uuid)
-    FOR SHARE
+    SELECT channel FROM public.rica_lock_conversation(
+      ${binding.characterId}::uuid, ${binding.identityId}::uuid, ${binding.accountId}::uuid,
+      ${conversationId}::uuid, ${contactId ?? null}::uuid
+    )
   `
   if (!conversation) return null
   return { conversationId, contactId: contactId ?? null, channel: conversation.channel }

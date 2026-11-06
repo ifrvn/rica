@@ -452,3 +452,102 @@ test('conversation recipients cannot be rebound and duplicate ingress preserves 
   assert.equal(run.inboundEvent.conversationId, scope.conversationId)
   assert.equal(run.inboundEvent.contactId, scope.contactId)
 })
+
+function testDatabaseRole(role: 'rica_runtime' | 'rica_memory_reader' | 'rica_memory_admin') {
+  const url = new URL(config.databaseUrl)
+  const options = url.searchParams.get('options')
+  url.searchParams.set('options', [options, '-c role=' + role].filter(Boolean).join(' '))
+  return createDatabase(url.toString())
+}
+
+test('runtime role can prepare and read a run through policy but cannot read raw memory', async () => {
+  assert.ok(fixture)
+  const personal = fixture.accounts[1]
+  const { memory } = await testMemory('IDENTITY', 'PERSONAL', { identityId: personal.identityId })
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const [permission] = await runtime.$queryRaw<{ canSetReader: boolean; canSetAdmin: boolean }[]>`
+      SELECT pg_has_role(current_user, 'rica_memory_reader', 'SET') AS "canSetReader",
+             pg_has_role(current_user, 'rica_memory_admin', 'SET') AS "canSetAdmin"
+    `
+    assert.deepEqual(permission, { canSetReader: true, canSetAdmin: false })
+    const result = await ingestSimulatedEvent(runtime, {
+      accountId: personal.id, sourceKey: randomUUID(), kind: 'MENTION', occurredAt,
+    })
+    assert.equal(result.status, 'ACCEPTED')
+    const event = await runtime.outboxEvent.findFirstOrThrow({
+      where: { runId: result.runId, type: runQueuedEvent },
+    })
+    await prepareSimulatedRun(runtime, event.eventId)
+    const candidates = await listAuthorizedMemoryCandidates(runtime, result.runId, { purpose: 'INTERNAL_CONTEXT' })
+    assert.ok(candidates.some(({ id }) => id === memory.id))
+    await assert.rejects(runtime.$queryRaw`SELECT content FROM public.memories`, /permission denied/)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('direct memory reads enforce identity and character scope and a reused connection loses context', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts: [company, personal] } = fixture
+  const { memory: own } = await testMemory('IDENTITY', 'PERSONAL', { identityId: personal.identityId })
+  const { memory: secret } = await testMemory('IDENTITY', 'CONFIDENTIAL', { identityId: company.identityId })
+  const foreign = await db.character.create({ data: { slug: fixtureKey + '-foreign' } })
+  const reader = testDatabaseRole('rica_memory_reader')
+  try {
+    const foreignMemory = await db.memory.create({
+      data: {
+        characterId: foreign.id, scope: 'CORE', visibility: 'PUBLIC', coreApprovedAt: occurredAt,
+        content: 'another character',
+      },
+    })
+    const source = await db.sourceRecord.create({
+      data: { characterId: foreign.id, kind: 'fixture', sourceKey: fixtureKey, classification: 'PUBLIC' },
+    })
+    await db.memorySource.create({
+      data: { characterId: foreign.id, memoryId: foreignMemory.id, sourceId: source.id },
+    })
+    const pid = await reader.$transaction(async (tx) => {
+      const scope = JSON.stringify({
+        character_id: characterId, identity_id: personal.identityId, account_id: personal.id,
+        purpose: 'INTERNAL_CONTEXT',
+      })
+      await tx.$queryRaw`SELECT set_config('rica.memory_scope', ${scope}, true)`
+      const rows = await tx.$queryRaw<{ id: string; pid: number }[]>`
+        SELECT id, pg_backend_pid() AS pid FROM public.memories
+        WHERE id IN (${own.id}::uuid, ${secret.id}::uuid, ${foreignMemory.id}::uuid)
+      `
+      assert.deepEqual(rows.map(({ id }) => id), [own.id])
+      return rows[0].pid
+    })
+    const [after] = await reader.$queryRaw<{ pid: number; visible: number }[]>`
+      SELECT pg_backend_pid() AS pid, (SELECT count(*)::int FROM public.memories) AS visible
+    `
+    assert.deepEqual(after, { pid, visible: 0 })
+  } finally {
+    await reader.$disconnect()
+    await db.$transaction(async (tx) => {
+      await tx.memorySource.deleteMany({ where: { characterId: foreign.id } })
+      await tx.sourceRecord.deleteMany({ where: { characterId: foreign.id } })
+      await tx.memory.deleteMany({ where: { characterId: foreign.id } })
+      await tx.character.delete({ where: { id: foreign.id } })
+    })
+  }
+})
+
+test('memory administration can revoke a source without gaining account write access', async () => {
+  assert.ok(fixture)
+  const account = fixture.accounts[1]
+  const { source } = await testMemory('IDENTITY', 'PERSONAL', { identityId: account.identityId })
+  const admin = testDatabaseRole('rica_memory_admin')
+  try {
+    assert.equal(await revokeMemoryAccess(admin, {
+      kind: 'SOURCE', characterId: account.characterId, id: source.id,
+    }), true)
+    await assert.rejects(admin.$executeRaw`
+      UPDATE public.platform_accounts SET status = 'PAUSED' WHERE id = ${account.id}::uuid
+    `, /permission denied/)
+  } finally {
+    await admin.$disconnect()
+  }
+})

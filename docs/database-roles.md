@@ -1,0 +1,20 @@
+# 数据库角色与记忆隔离
+
+本地 Compose 的开发账号可以用于初始化和测试。分离部署时，为迁移、API／Worker 和记忆管理分别创建数据库登录，凭据由部署环境注入。
+
+| 用途 | 配置 | 权限 |
+| --- | --- | --- |
+| 迁移 | 在迁移任务设置 `MIGRATION_DATABASE_URL`。本地可使用 `DATABASE_URL` 作为回退。 | 拥有应用表和迁移函数。执行角色迁移的账号需要创建角色及管理本项目角色成员关系的权限。 |
+| API／Worker | `DATABASE_URL` 使用继承 `rica_runtime` 的应用登录。 | 读写运行与出箱所需字段。记忆读取时在事务内切换到 `rica_memory_reader`，由 RLS 判定可见内容。 |
+| 记忆管理 | 管理服务单独使用继承 `rica_memory_admin` 的登录。 | 管理记忆、授权和来源，能推进角色授权版本。业务层负责验证管理员身份和操作范围。 |
+
+迁移完成后，数据库管理员为预先创建的登录赋予组角色。登录名称按部署替换。
+
+```sql
+GRANT rica_runtime TO rica_api_worker WITH INHERIT TRUE, SET TRUE;
+GRANT rica_memory_admin TO rica_memory_operator WITH INHERIT TRUE, SET TRUE;
+```
+
+应用登录应为普通非所有者角色，保持 `NOBYPASSRLS`。迁移凭据只注入迁移任务。应用通过已校验的 Run 生成事务作用域，连接池复用时不带入上次读取的身份或用途。作用域参数由受信任的服务端设置，数据库服务凭据不得暴露给终端用户或插件。
+
+RLS 覆盖记忆、来源登记、来源关联和记忆授权。读角色仅能读取策略所需的来源和授权字段。会话、账号和运行入口仍由应用的绑定检查管理。管理端认证与独立管理连接的接线由后续工作包交付。
