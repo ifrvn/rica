@@ -52,6 +52,32 @@ export async function listAuthorizedMemoryCandidates(db: PrismaClient, runId: st
   }, { isolationLevel: 'ReadCommitted' })
 }
 
+type Derivation = { characterId: string; parentMemoryId: string; content: string }
+
+// The database verifies the current parent and copies its complete source set atomically.
+export async function deriveMemory(db: PrismaClient, { characterId, parentMemoryId, content }: Derivation) {
+  return db.$transaction(async (tx) => {
+    const parent = await tx.memory.findUniqueOrThrow({
+      where: { characterId_id: { characterId, id: parentMemoryId } },
+    })
+    return tx.memory.create({
+      data: {
+        characterId,
+        parentMemoryId,
+        identityId: parent.identityId,
+        accountId: parent.accountId,
+        conversationId: parent.conversationId,
+        scope: parent.scope,
+        visibility: parent.visibility,
+        expiresAt: parent.expiresAt,
+        confidence: parent.confidence,
+        importance: parent.importance,
+        content,
+      },
+    })
+  })
+}
+
 type Revocation = { kind: 'GRANT' | 'SOURCE'; characterId: string; id: string }
 
 // Administrative callers must authorize the command before entering this persistence boundary.
@@ -67,6 +93,16 @@ export async function revokeMemoryAccess(db: PrismaClient, { kind, characterId, 
     const { count } = kind === 'GRANT'
       ? await tx.memoryGrant.updateMany(update)
       : await tx.sourceRecord.updateMany(update)
+    if (kind === 'SOURCE') {
+      await tx.$executeRaw`
+        UPDATE public.memories m SET status = 'REVOKED', content = ''
+        FROM public.memory_sources ms
+        JOIN public.sources_registry source ON (source.character_id, source.id) = (ms.character_id, ms.source_id)
+        WHERE (m.character_id, m.id) = (ms.character_id, ms.memory_id)
+          AND source.character_id = ${characterId}::uuid AND source.id = ${id}::uuid AND source.revoked_at IS NOT NULL
+          AND (m.status <> 'REVOKED' OR m.content <> '')
+      `
+    }
     if (count === 0) return false
 
     await tx.character.update({

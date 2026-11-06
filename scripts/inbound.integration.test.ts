@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import type { MemoryPurpose, MemoryScope, MemoryVisibility } from '../packages/persistence/generated/client.js'
-import { listAuthorizedMemoryCandidates, revokeMemoryAccess } from '../packages/persistence/memory.js'
+import { deriveMemory, listAuthorizedMemoryCandidates, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
@@ -549,5 +549,131 @@ test('memory administration can revoke a source without gaining account write ac
     `, /permission denied/)
   } finally {
     await admin.$disconnect()
+  }
+})
+
+test('derivation inherits complete sources and revocation clears each affected generation', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts: [, account] } = fixture
+  const { memory: parent, source } = await testMemory('ACCOUNT', 'PERSONAL', {
+    identityId: account.identityId, accountId: account.id,
+  })
+  const { memory: unrelated, source: secondSource } = await testMemory('ACCOUNT', 'PERSONAL', {
+    identityId: account.identityId, accountId: account.id,
+  })
+  await db.memorySource.create({ data: { characterId, memoryId: parent.id, sourceId: secondSource.id } })
+  const admin = testDatabaseRole('rica_memory_admin')
+  try {
+    const child = await deriveMemory(admin, { characterId, parentMemoryId: parent.id, content: 'summary' })
+    const grandchild = await deriveMemory(admin, { characterId, parentMemoryId: child.id, content: 'derived summary' })
+    const affectedIds = [parent.id, child.id, grandchild.id]
+    const links = await db.memorySource.findMany({
+      where: { memoryId: { in: [child.id, grandchild.id] } },
+    })
+    for (const memory of [child, grandchild]) {
+      assert.equal(memory.identityId, parent.identityId)
+      assert.equal(memory.accountId, parent.accountId)
+      assert.equal(memory.visibility, parent.visibility)
+      assert.deepEqual(new Set(links.filter(({ memoryId }) => memoryId === memory.id).map(({ sourceId }) => sourceId)),
+        new Set([source.id, secondSource.id]))
+    }
+
+    const run = await preparedMemoryRun(account.id)
+    const purpose = { purpose: 'INTERNAL_CONTEXT' } as const
+    const candidates = await listAuthorizedMemoryCandidates(db, run, purpose)
+    assert.ok(affectedIds.every((id) => candidates.some((candidate) => candidate.id === id)))
+    assert.equal(await revokeMemoryAccess(admin, { kind: 'SOURCE', characterId, id: source.id }), true)
+
+    const cleared = await db.memory.findMany({ where: { id: { in: affectedIds } } })
+    assert.equal(cleared.length, 3)
+    assert.ok(cleared.every(({ status, content }) => status === 'REVOKED' && content === ''))
+    assert.equal(cleared.find(({ id }) => id === grandchild.id)?.parentMemoryId, child.id)
+    const newRun = await preparedMemoryRun(account.id)
+    const remaining = await listAuthorizedMemoryCandidates(db, newRun, purpose)
+    assert.ok(remaining.some(({ id }) => id === unrelated.id))
+    assert.ok(remaining.every(({ id }) => !affectedIds.includes(id)))
+    await assert.rejects(deriveMemory(admin, { characterId, parentMemoryId: parent.id, content: 'stale' }),
+      /Invalid memory derivation parent or scope/)
+  } finally {
+    await admin.$disconnect()
+  }
+})
+
+test('database prevents widening derivation scope, changing parents or adding late provenance', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts: [, account] } = fixture
+  const { memory: parent } = await testMemory('ACCOUNT', 'CONFIDENTIAL', {
+    identityId: account.identityId, accountId: account.id,
+  })
+  const { source: extra } = await testMemory('IDENTITY', 'PERSONAL', { identityId: account.identityId })
+  await assert.rejects(db.memory.create({
+    data: {
+      characterId, parentMemoryId: parent.id, identityId: account.identityId,
+      scope: 'IDENTITY', visibility: 'PUBLIC', content: 'invalid widening',
+    },
+  }), /Invalid memory derivation parent or scope/)
+  const child = await deriveMemory(db, { characterId, parentMemoryId: parent.id, content: 'valid' })
+  await assert.rejects(db.$executeRaw`
+    UPDATE public.memories SET parent_memory_id = ${child.id}::uuid WHERE id = ${parent.id}::uuid
+  `, /Memory provenance and scope cannot change/)
+  await assert.rejects(db.memorySource.create({
+    data: { characterId, memoryId: parent.id, sourceId: extra.id },
+  }), /Memory source links are frozen after derivation/)
+})
+
+async function waitForDatabaseLock(applicationName: string) {
+  const deadline = Date.now() + 900
+  while (Date.now() < deadline) {
+    const [status] = await db.$queryRaw<{ blocked: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_stat_activity WHERE application_name = ${applicationName} AND wait_event_type = 'Lock'
+      ) AS blocked
+    `
+    if (status.blocked) return
+    await sleep(20)
+  }
+  assert.fail('Expected the operation to wait on a database lock')
+}
+
+test('a recall queued behind source revocation observes the new authorization epoch', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts: [, account] } = fixture
+  const { memory, source } = await testMemory('IDENTITY', 'PERSONAL', { identityId: account.identityId })
+  const runId = await preparedMemoryRun(account.id)
+  const purpose = { purpose: 'INTERNAL_CONTEXT' } as const
+  assert.ok((await listAuthorizedMemoryCandidates(db, runId, purpose)).some(({ id }) => id === memory.id))
+
+  const clients = ['revoke', 'recall'].map((action) => {
+    const name = fixtureKey + '-' + action
+    const url = new URL(config.databaseUrl)
+    url.searchParams.set('application_name', name)
+    return { name, client: createDatabase(url.toString()) }
+  })
+  const [revoker, reader] = clients
+  let signalLocked!: () => void
+  const locked = new Promise<void>((resolve) => { signalLocked = resolve })
+  let release!: () => void
+  const hold = new Promise<void>((resolve) => { release = resolve })
+  const blocker = db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM public.characters WHERE id = ${characterId}::uuid FOR UPDATE`
+    signalLocked()
+    await hold
+  })
+  let revoke: ReturnType<typeof revokeMemoryAccess> | undefined
+  let recall: ReturnType<typeof listAuthorizedMemoryCandidates> | undefined
+  try {
+    await Promise.race([locked, blocker])
+    revoke = revokeMemoryAccess(revoker.client, { kind: 'SOURCE', characterId, id: source.id })
+    await waitForDatabaseLock(revoker.name)
+    recall = listAuthorizedMemoryCandidates(reader.client, runId, purpose)
+    await waitForDatabaseLock(reader.name)
+    release()
+    await blocker
+    assert.equal(await revoke, true)
+    assert.deepEqual(await recall, [])
+  } finally {
+    release()
+    await Promise.allSettled([blocker, revoke, recall])
+    await Promise.all(clients.map(({ client }) => client.$disconnect()))
   }
 })

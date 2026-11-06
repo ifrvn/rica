@@ -242,7 +242,12 @@ model Memory {
   conversationId String?          @map("conversation_id") @db.Uuid
   conversation   Conversation?    @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
 
+  parentMemoryId  String?  @map("parent_memory_id") @db.Uuid
+  parentMemory    Memory?  @relation("MemoryDerivation", fields: [characterId, parentMemoryId], references: [characterId, id], onDelete: NoAction, onUpdate: NoAction)
+  derivedMemories Memory[] @relation("MemoryDerivation")
+
   @@unique([characterId, id])
+  @@index([characterId, parentMemoryId])
   @@index([characterId, status, scope, identityId, accountId])
   @@map("memories")
 }
