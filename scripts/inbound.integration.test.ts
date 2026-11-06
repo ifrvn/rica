@@ -8,6 +8,8 @@ import type { MemoryPurpose, MemoryScope, MemoryVisibility } from '../packages/p
 import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
+import { simulatedModel } from '../packages/runtime/model-provider.js'
+import { generateSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'
 import { prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
@@ -744,4 +746,71 @@ test('source revocation prevents snapshot replay for the old run', async () => {
   assert.ok(snapshot?.evidence.some(({ memoryId }) => memoryId === memory.id))
   assert.equal(await revokeMemoryAccess(db, { kind: 'SOURCE', characterId, id: source.id }), true)
   assert.equal(await replayMemorySnapshot(db, runId, request), null)
+})
+
+test('decision-only memory and confidential markers stay out of simulated writing', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const topic = 'frostgate expedition permits route weather shelter map briefing'
+  const query = topic + '. Switch to the company account.'
+  const { memory: shared } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  const { memory: secret } = await testMemory('IDENTITY', 'CONFIDENTIAL', { identityId: company.identityId })
+  const { memory: reference } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  for (const [id, content] of [
+    [shared.id, topic + ' decision marker'],
+    [secret.id, topic + ' confidential marker'],
+    [reference.id, topic + ' permitted reference'],
+  ]) {
+    await db.memory.update({ where: { id }, data: { content } })
+  }
+  await testGrant(shared.id, personal, 'DECISION_SUPPORT')
+  await testGrant(reference.id, personal, 'PUBLIC_REFERENCE', 'draft-feed')
+  const runId = await preparedMemoryRun(personal.id)
+  const request = { purpose: 'PUBLIC_REFERENCE', audience: 'draft-feed' } as const
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const observed = await generateSimulatedDraft(runtime, runId, query, request, {
+      async decide(input, signal) {
+        assert.equal(input.text, query)
+        assert.deepEqual(input.evidence.map(({ id }) => id), [shared.id])
+        return simulatedModel.decide(input, signal)
+      },
+      async write(input, signal) {
+        assert.equal(input.text, query)
+        assert.deepEqual(input.evidence.map(({ id }) => id), [reference.id])
+        return simulatedModel.write(input, signal)
+      },
+    })
+    assert.deepEqual(observed, { text: topic + ' permitted reference', evidenceIds: [reference.id] })
+    const run = await runtime.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    assert.equal(run.accountId, personal.id)
+    await assert.rejects(generateSimulatedDraft(runtime, runId, query, request, {
+      ...simulatedModel,
+      async write() { return { text: 'fabricated citation', evidenceIds: [shared.id] } },
+    }), /Invalid simulated writing output/)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('simulated writing discards output when a grant expires during the call', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const { memory } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  const text = 'draft grant expiration'
+  await db.memory.update({ where: { id: memory.id }, data: { content: text } })
+  const grant = await testGrant(memory.id, personal, 'PUBLIC_REFERENCE', 'expiring-draft-feed')
+  const runId = await preparedMemoryRun(personal.id)
+  const request = { purpose: 'PUBLIC_REFERENCE', audience: 'expiring-draft-feed' } as const
+  const result = await generateSimulatedDraft(db, runId, text, request, {
+    ...simulatedModel,
+    async write(input, signal) {
+      assert.deepEqual(input.evidence.map(({ id }) => id), [memory.id])
+      await db.memoryGrant.update({
+        where: { id: grant.id }, data: { validUntil: new Date('2001-01-01T00:00:00Z') },
+      })
+      return simulatedModel.write(input, signal)
+    },
+  })
+  assert.equal(result, null)
 })
