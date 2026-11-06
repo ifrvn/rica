@@ -17,3 +17,148 @@ model OutboxEvent {
   @@index([processedAt, enqueuedAt, createdAt])
   @@map("outbox")
 }
+
+enum EntityStatus {
+  ACTIVE
+  PAUSED
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  REAUTH_REQUIRED
+  REVOKED
+}
+
+enum InboundKind {
+  POST
+  REPLY
+  MENTION
+}
+
+enum RunMode {
+  SIMULATION
+}
+
+enum RunState {
+  QUEUED
+}
+
+model Character {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug              String        @unique
+  status            EntityStatus  @default(PAUSED)
+  timezone          String        @default("UTC")
+  activeCoreVersion Int?          @map("active_core_version")
+  authEpoch         Int           @default(0) @map("auth_epoch")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  activeCore        CoreVersion?  @relation("ActiveCore", fields: [id, activeCoreVersion], references: [characterId, version], onDelete: NoAction, onUpdate: NoAction)
+  coreVersions      CoreVersion[] @relation("CharacterCoreVersions")
+  identities        Identity[]
+
+  @@map("characters")
+}
+
+model CoreVersion {
+  characterId String      @map("character_id") @db.Uuid
+  version     Int
+  hardProfile Json        @map("hard_profile")
+  actorId     String      @map("actor_id")
+  reason      String
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  character   Character   @relation("CharacterCoreVersions", fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  activeFor   Character[] @relation("ActiveCore")
+  runs        AgentRun[]
+
+  @@id([characterId, version])
+  @@map("core_versions")
+}
+
+model Identity {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId   String            @map("character_id") @db.Uuid
+  slug          String
+  status        EntityStatus      @default(PAUSED)
+  activeVersion Int?              @map("active_version")
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  character     Character         @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  activeProfile IdentityVersion?  @relation("ActiveIdentity", fields: [characterId, id, activeVersion], references: [characterId, identityId, version], onDelete: NoAction, onUpdate: NoAction)
+  versions      IdentityVersion[] @relation("IdentityVersions")
+  accounts      PlatformAccount[]
+
+  @@unique([characterId, id])
+  @@unique([characterId, slug])
+  @@map("identities")
+}
+
+model IdentityVersion {
+  characterId String     @map("character_id") @db.Uuid
+  identityId  String     @map("identity_id") @db.Uuid
+  version     Int
+  roleProfile Json       @map("role_profile")
+  actorId     String     @map("actor_id")
+  reason      String
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  identity    Identity   @relation("IdentityVersions", fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  activeFor   Identity[] @relation("ActiveIdentity")
+  runs        AgentRun[]
+
+  @@id([characterId, identityId, version])
+  @@map("identity_versions")
+}
+
+model PlatformAccount {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId     String         @map("character_id") @db.Uuid
+  identityId      String         @map("identity_id") @db.Uuid
+  platform        String
+  instanceKey     String         @map("instance_key")
+  remoteAccountId String         @map("remote_account_id")
+  status          AccountStatus  @default(PENDING)
+  bindingVersion  Int            @default(1) @map("binding_version")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  identity        Identity       @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  inboundEvents   InboundEvent[]
+
+  @@unique([characterId, identityId, id])
+  @@unique([platform, instanceKey, remoteAccountId])
+  @@map("platform_accounts")
+}
+
+model InboundEvent {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId String          @map("character_id") @db.Uuid
+  identityId  String          @map("identity_id") @db.Uuid
+  accountId   String          @map("account_id") @db.Uuid
+  sourceKey   String          @map("source_key") @db.VarChar(256)
+  kind        InboundKind
+  occurredAt  DateTime        @map("occurred_at") @db.Timestamptz
+  receivedAt  DateTime        @default(now()) @map("received_at") @db.Timestamptz
+  account     PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  runs        AgentRun[]
+
+  @@unique([accountId, sourceKey])
+  @@unique([characterId, identityId, accountId, id])
+  @@map("inbound_events")
+}
+
+model AgentRun {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId     String          @map("character_id") @db.Uuid
+  identityId      String          @map("identity_id") @db.Uuid
+  accountId       String          @map("account_id") @db.Uuid
+  inboundEventId  String          @unique @map("inbound_event_id") @db.Uuid
+  coreVersion     Int             @map("core_version")
+  identityVersion Int             @map("identity_version")
+  bindingVersion  Int             @map("binding_version")
+  authEpoch       Int             @map("auth_epoch")
+  mode            RunMode         @default(SIMULATION)
+  state           RunState        @default(QUEUED)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  inboundEvent    InboundEvent    @relation(fields: [characterId, identityId, accountId, inboundEventId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
+  core            CoreVersion     @relation(fields: [characterId, coreVersion], references: [characterId, version], onDelete: Restrict, onUpdate: NoAction)
+  identity        IdentityVersion @relation(fields: [characterId, identityId, identityVersion], references: [characterId, identityId, version], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("agent_runs")
+}
