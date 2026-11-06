@@ -1,0 +1,20 @@
+import { Hono } from 'hono'
+import type { Readiness } from '../../packages/contracts/health.js'
+
+type Checks = Record<keyof Readiness['checks'], () => Promise<unknown>>
+
+export function createApp(check: Checks) {
+  const app = new Hono()
+  app.get('/health/live', (c) => c.json({ status: 'alive' }))
+  app.get('/health/ready', async (c) => {
+    const [postgres, redis] = await Promise.allSettled([
+      Promise.resolve().then(check.postgres),
+      Promise.resolve().then(check.redis),
+    ])
+    const checks = { postgres: postgres.status === 'fulfilled', redis: redis.status === 'fulfilled' }
+    const ready = checks.postgres && checks.redis
+    const data: Readiness = { status: ready ? 'ready' : 'unavailable', checks }
+    return c.json(data, ready ? 200 : 503)
+  })
+  return app
+}

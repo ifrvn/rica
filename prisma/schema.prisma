@@ -1,0 +1,19 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../packages/persistence/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model OutboxEvent {
+  eventId     String    @id @default(uuid()) @map("event_id") @db.Uuid
+  type        String
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  enqueuedAt  DateTime? @map("enqueued_at") @db.Timestamptz
+  processedAt DateTime? @map("processed_at") @db.Timestamptz
+
+  @@index([processedAt, enqueuedAt, createdAt])
+  @@map("outbox")
+}

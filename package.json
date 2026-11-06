@@ -1,0 +1,42 @@
+{
+  "name": "rica",
+  "description": "A multi-platform AI character runtime with a unified core self, isolated persona memory, and policy-controlled actions.",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
+  },
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "dev:api": "tsx watch apps/api/main.ts",
+    "dev:worker": "tsx watch apps/worker/main.ts",
+    "dev:admin": "vite --config apps/admin/vite.config.ts",
+    "typecheck": "tsc -p tsconfig.server.json && vue-tsc --noEmit",
+    "test": "tsx --test apps/api/app.test.ts",
+    "test:integration": "tsx scripts/outbox-smoke.ts",
+    "build": "vite build --config apps/admin/vite.config.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "bullmq": "^6.7.0",
+    "dotenv": "^18.0.9",
+    "hono": "^4.13.16",
+    "ioredis": "^6.0.0",
+    "vue": "^3.5.45"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "prisma": "^7.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vite": "^8.3.6",
+    "vue-tsc": "^3.3.14"
+  }
+}

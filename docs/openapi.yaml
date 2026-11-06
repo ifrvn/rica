@@ -1,0 +1,45 @@
+openapi: 3.1.0
+info:
+  title: 虚拟角色运行服务
+  version: 0.1.0
+paths:
+  /health/live:
+    get:
+      operationId: getLiveness
+      responses:
+        '200':
+          description: API 进程可响应
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { const: alive }
+  /health/ready:
+    get:
+      operationId: getReadiness
+      responses:
+        '200':
+          description: PostgreSQL 与 Redis 都可达
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+        '503':
+          description: 至少一个依赖不可达
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+components:
+  schemas:
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { enum: [ready, unavailable] }
+        checks:
+          type: object
+          required: [postgres, redis]
+          properties:
+            postgres: { type: boolean }
+            redis: { type: boolean }
