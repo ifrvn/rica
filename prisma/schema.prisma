@@ -14,6 +14,10 @@ model OutboxEvent {
   enqueuedAt  DateTime? @map("enqueued_at") @db.Timestamptz
   processedAt DateTime? @map("processed_at") @db.Timestamptz
 
+  runId String?   @map("run_id") @db.Uuid
+  run   AgentRun? @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([type, runId])
   @@index([processedAt, enqueuedAt, createdAt])
   @@map("outbox")
 }
@@ -43,6 +47,13 @@ enum RunMode {
 
 enum RunState {
   QUEUED
+  CONTEXT_READY
+  CANCELED
+}
+
+enum RunStateReason {
+  ACCOUNT_UNAVAILABLE
+  BINDING_CHANGED
 }
 
 model Character {
@@ -159,6 +170,10 @@ model AgentRun {
   inboundEvent    InboundEvent    @relation(fields: [characterId, identityId, accountId, inboundEventId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
   core            CoreVersion     @relation(fields: [characterId, coreVersion], references: [characterId, version], onDelete: Restrict, onUpdate: NoAction)
   identity        IdentityVersion @relation(fields: [characterId, identityId, identityVersion], references: [characterId, identityId, version], onDelete: Restrict, onUpdate: NoAction)
+
+  stateVersion Int             @default(1) @map("state_version")
+  stateReason  RunStateReason? @map("state_reason")
+  outboxEvents OutboxEvent[]
 
   @@map("agent_runs")
 }

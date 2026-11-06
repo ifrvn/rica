@@ -1,4 +1,5 @@
 import type { InboundKind, PrismaClient } from './generated/client.js'
+import { lockSimulatedBinding, runQueuedEvent } from './run-context.js'
 
 type SimulatedEvent = Readonly<{
   accountId: string
@@ -6,16 +7,6 @@ type SimulatedEvent = Readonly<{
   kind: InboundKind
   occurredAt: Date
 }>
-
-type Binding = {
-  characterId: string
-  identityId: string
-  accountId: string
-  coreVersion: number
-  identityVersion: number
-  bindingVersion: number
-  authEpoch: number
-}
 
 // Internal entry point for trusted simulation fixtures. Public ingress must authenticate its source.
 export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEvent) {
@@ -25,19 +16,7 @@ export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEve
   }
 
   return db.$transaction(async (tx) => {
-    // Keep the resolved binding and activation state stable until the event and run commit.
-    const [binding] = await tx.$queryRaw<Binding[]>`
-      SELECT c.id AS "characterId", i.id AS "identityId", a.id AS "accountId",
-             c.active_core_version AS "coreVersion", i.active_version AS "identityVersion",
-             a.binding_version AS "bindingVersion", c.auth_epoch AS "authEpoch"
-      FROM platform_accounts a
-      JOIN identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)
-      JOIN characters c ON c.id = i.character_id
-      WHERE a.id = ${accountId}::uuid
-        AND a.platform IN ('mock-a', 'mock-b')
-        AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'
-      FOR SHARE OF c, i, a
-    `
+    const binding = await lockSimulatedBinding(tx, accountId)
     if (!binding) return { status: 'ACCOUNT_UNAVAILABLE' } as const
 
     const { count } = await tx.inboundEvent.createMany({
@@ -67,6 +46,7 @@ export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEve
       data: { ...binding, inboundEventId: inbound.id },
       select: { id: true },
     })
+    await tx.outboxEvent.create({ data: { type: runQueuedEvent, runId: run.id } })
     return { status: 'ACCEPTED', runId: run.id } as const
   }, { isolationLevel: 'ReadCommitted' })
 }

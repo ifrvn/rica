@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
-const db = createDatabase(loadConfig().databaseUrl)
+import { prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
+
+const config = loadConfig()
+const db = createDatabase(config.databaseUrl)
 const fixtureKey = `integration-${randomUUID()}`
 const occurredAt = new Date('2026-11-06T00:00:00.000Z')
 
@@ -70,6 +75,7 @@ after(async () => {
     if (fixture) {
       const { characterId } = fixture
       await db.$transaction(async (tx) => {
+        await tx.outboxEvent.deleteMany({ where: { run: { characterId } } })
         await tx.agentRun.deleteMany({ where: { characterId } })
         await tx.inboundEvent.deleteMany({ where: { characterId } })
         await tx.platformAccount.deleteMany({ where: { characterId } })
@@ -91,6 +97,24 @@ after(async () => {
     await db.$disconnect()
   }
 })
+
+async function consumeRuns(runIds: string[]) {
+  const worker = startOutboxWorker(config.databaseUrl, config.redisUrl)
+  try {
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      const processed = await db.outboxEvent.findMany({
+        where: { runId: { in: runIds }, type: runQueuedEvent, processedAt: { not: null } },
+        select: { eventId: true },
+      })
+      if (processed.length === runIds.length) return processed
+      await sleep(100)
+    }
+    assert.fail('Timed out waiting for simulated runs to be consumed')
+  } finally {
+    await worker.close()
+  }
+}
 
 test('concurrent retries keep one run per account and source event', async () => {
   assert.ok(fixture)
@@ -123,17 +147,49 @@ test('concurrent retries keep one run per account and source event', async () =>
     assert.equal(run.mode, 'SIMULATION')
     assert.equal(run.state, 'QUEUED')
   }
+  const runIds = runs.map(({ id }) => id)
+  const queued = await db.outboxEvent.count({ where: { runId: { in: runIds }, type: runQueuedEvent } })
+  assert.equal(queued, 2)
+
+  const processed = await consumeRuns(runIds)
+  await prepareSimulatedRun(db, processed[0].eventId)
+  const prepared = await db.agentRun.findMany({ where: { id: { in: runIds } } })
+  assert.equal(prepared.length, 2)
+  assert.ok(prepared.every((run) =>
+    run.state === 'CONTEXT_READY' && run.stateVersion === 2 && run.stateReason === null,
+  ))
 })
 
-test('paused accounts do not fall back to an active account', async () => {
+test('the worker cancels paused or stale runs without changing their bound account', async () => {
   assert.ok(fixture)
   const account = fixture.accounts[2]
+  const beforePause = await ingestSimulatedEvent(db, {
+    accountId: account.id, sourceKey: 'before-pause', kind: 'POST', occurredAt,
+  })
+  const beforeRevocation = await ingestSimulatedEvent(db, {
+    accountId: fixture.accounts[0].id, sourceKey: 'before-revocation', kind: 'POST', occurredAt,
+  })
+  assert.equal(beforePause.status, 'ACCEPTED')
+  assert.equal(beforeRevocation.status, 'ACCEPTED')
+  await db.character.update({
+    where: { id: fixture.characterId },
+    data: { authEpoch: { increment: 1 } },
+  })
   await db.platformAccount.update({ where: { id: account.id }, data: { status: 'PAUSED' } })
   const result = await ingestSimulatedEvent(db, {
     accountId: account.id, sourceKey: 'paused', kind: 'POST', occurredAt,
   })
   assert.equal(result.status, 'ACCOUNT_UNAVAILABLE')
   assert.equal(await db.inboundEvent.count({ where: { characterId: fixture.characterId, sourceKey: 'paused' } }), 0)
+  await consumeRuns([beforePause.runId, beforeRevocation.runId])
+  const paused = await db.agentRun.findUniqueOrThrow({ where: { id: beforePause.runId } })
+  const stale = await db.agentRun.findUniqueOrThrow({ where: { id: beforeRevocation.runId } })
+  assert.equal(paused.state, 'CANCELED')
+  assert.equal(paused.stateReason, 'ACCOUNT_UNAVAILABLE')
+  assert.equal(paused.accountId, account.id)
+  assert.equal(stale.state, 'CANCELED')
+  assert.equal(stale.stateReason, 'BINDING_CHANGED')
+  assert.equal(stale.accountId, fixture.accounts[0].id)
 })
 
 test('PostgreSQL rejects an inbound event with a mismatched identity binding', async () => {

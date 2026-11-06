@@ -2,6 +2,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue, Worker } from 'bullmq'
 import { Redis } from 'ioredis'
 import { createDatabase } from '../../packages/persistence/client.js'
+import { prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 const queueName = 'character-bootstrap'
@@ -12,7 +13,11 @@ export function startOutboxWorker(databaseUrl: string, redisUrl: string) {
   const consumer = new Redis(redisUrl, { maxRetriesPerRequest: null })
   const queue = new Queue<{ eventId: string }>(queueName, { connection: producer })
   const worker = new Worker<{ eventId: string }>(queueName, async ({ name, data }) => {
-    if (name !== smokeEvent) throw new Error('Unknown bootstrap job')
+    if (name === runQueuedEvent) {
+      await prepareSimulatedRun(db, data.eventId)
+      return
+    }
+    if (name !== smokeEvent) throw new Error('Unknown outbox job')
     await db.outboxEvent.updateMany({
       where: { eventId: data.eventId, type: smokeEvent, processedAt: null },
       data: { processedAt: new Date() },
@@ -30,16 +35,16 @@ export function startOutboxWorker(databaseUrl: string, redisUrl: string) {
         // Re-publish unconsumed events after a restart or Redis data loss.
         const pending = await db.outboxEvent.findMany({
           where: {
-            type: smokeEvent,
+            type: { in: [smokeEvent, runQueuedEvent] },
             processedAt: null,
             OR: [{ enqueuedAt: null }, { enqueuedAt: { lt: new Date(Date.now() - 10_000) } }],
           },
           orderBy: { createdAt: 'asc' },
           take: 25,
         })
-        for (const { eventId } of pending) {
+        for (const { eventId, type } of pending) {
           if (stop.signal.aborted) break
-          await queue.add(smokeEvent, { eventId }, {
+          await queue.add(type, { eventId }, {
             jobId: eventId,
             attempts: 3,
             backoff: { type: 'exponential', delay: 1000 },
