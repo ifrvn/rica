@@ -54,6 +54,7 @@ enum RunState {
 enum RunStateReason {
   ACCOUNT_UNAVAILABLE
   BINDING_CHANGED
+  CONVERSATION_UNAVAILABLE
 }
 
 model Character {
@@ -139,6 +140,8 @@ model PlatformAccount {
   memories        Memory[]
   memorySources   SourceRecord[]
   memoryGrants    MemoryGrant[]
+  contacts        Contact[]
+  conversations   Conversation[]
 
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
@@ -146,16 +149,20 @@ model PlatformAccount {
 }
 
 model InboundEvent {
-  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  characterId String          @map("character_id") @db.Uuid
-  identityId  String          @map("identity_id") @db.Uuid
-  accountId   String          @map("account_id") @db.Uuid
-  sourceKey   String          @map("source_key") @db.VarChar(256)
-  kind        InboundKind
-  occurredAt  DateTime        @map("occurred_at") @db.Timestamptz
-  receivedAt  DateTime        @default(now()) @map("received_at") @db.Timestamptz
-  account     PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
-  runs        AgentRun[]
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String          @map("character_id") @db.Uuid
+  identityId     String          @map("identity_id") @db.Uuid
+  accountId      String          @map("account_id") @db.Uuid
+  sourceKey      String          @map("source_key") @db.VarChar(256)
+  kind           InboundKind
+  occurredAt     DateTime        @map("occurred_at") @db.Timestamptz
+  receivedAt     DateTime        @default(now()) @map("received_at") @db.Timestamptz
+  account        PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  runs           AgentRun[]
+  conversationId String?         @map("conversation_id") @db.Uuid
+  contactId      String?         @map("contact_id") @db.Uuid
+  conversation   Conversation?   @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
+  contact        Contact?        @relation(fields: [characterId, identityId, accountId, contactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([accountId, sourceKey])
   @@unique([characterId, identityId, accountId, id])
@@ -190,6 +197,7 @@ enum MemoryScope {
   CORE
   IDENTITY
   ACCOUNT
+  CONVERSATION
 }
 
 enum MemoryVisibility {
@@ -208,6 +216,7 @@ enum MemoryPurpose {
   INTERNAL_CONTEXT
   DECISION_SUPPORT
   PUBLIC_REFERENCE
+  PRIVATE_REPLY
 }
 
 model Memory {
@@ -230,6 +239,8 @@ model Memory {
   account        PlatformAccount? @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
   sources        MemorySource[]
   grants         MemoryGrant[]
+  conversationId String?          @map("conversation_id") @db.Uuid
+  conversation   Conversation?    @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([characterId, id])
   @@index([characterId, status, scope, identityId, accountId])
@@ -250,6 +261,8 @@ model SourceRecord {
   identity       Identity?        @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   account        PlatformAccount? @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
   memoryLinks    MemorySource[]
+  conversationId String?          @map("conversation_id") @db.Uuid
+  conversation   Conversation?    @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([characterId, id])
   @@unique([characterId, kind, sourceKey])
@@ -270,23 +283,70 @@ model MemorySource {
 }
 
 model MemoryGrant {
-  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  characterId         String           @map("character_id") @db.Uuid
-  memoryId            String           @map("memory_id") @db.Uuid
-  recipientIdentityId String           @map("recipient_identity_id") @db.Uuid
-  recipientAccountId  String?          @map("recipient_account_id") @db.Uuid
-  purpose             MemoryPurpose
-  audience            String?
-  validFrom           DateTime         @map("valid_from") @db.Timestamptz
-  validUntil          DateTime         @map("valid_until") @db.Timestamptz
-  revokedAt           DateTime?        @map("revoked_at") @db.Timestamptz
-  approvedBy          String           @map("approved_by")
-  reason              String
-  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz
-  memory              Memory           @relation(fields: [characterId, memoryId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
-  recipientIdentity   Identity         @relation(fields: [characterId, recipientIdentityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
-  recipientAccount    PlatformAccount? @relation(fields: [characterId, recipientIdentityId, recipientAccountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  id                      String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId             String           @map("character_id") @db.Uuid
+  memoryId                String           @map("memory_id") @db.Uuid
+  recipientIdentityId     String           @map("recipient_identity_id") @db.Uuid
+  recipientAccountId      String?          @map("recipient_account_id") @db.Uuid
+  purpose                 MemoryPurpose
+  audience                String?
+  validFrom               DateTime         @map("valid_from") @db.Timestamptz
+  validUntil              DateTime         @map("valid_until") @db.Timestamptz
+  revokedAt               DateTime?        @map("revoked_at") @db.Timestamptz
+  approvedBy              String           @map("approved_by")
+  reason                  String
+  createdAt               DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  memory                  Memory           @relation(fields: [characterId, memoryId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  recipientIdentity       Identity         @relation(fields: [characterId, recipientIdentityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  recipientAccount        PlatformAccount? @relation(fields: [characterId, recipientIdentityId, recipientAccountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  recipientConversationId String?          @map("recipient_conversation_id") @db.Uuid
+  recipientContactId      String?          @map("recipient_contact_id") @db.Uuid
+  privateConversation     Conversation?    @relation(fields: [characterId, recipientIdentityId, recipientAccountId, recipientConversationId, recipientContactId], references: [characterId, identityId, accountId, id, privateContactId], onDelete: Restrict, onUpdate: NoAction, map: "memory_grants_private_recipient_fkey")
 
   @@index([characterId, recipientIdentityId, purpose, memoryId])
   @@map("memory_grants")
+}
+
+enum ConversationChannel {
+  PUBLIC
+  PRIVATE
+}
+
+model Contact {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId   String          @map("character_id") @db.Uuid
+  identityId    String          @map("identity_id") @db.Uuid
+  accountId     String          @map("account_id") @db.Uuid
+  remoteKey     String          @map("remote_key")
+  displayLabel  String?         @map("display_label")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  account       PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  conversations Conversation[]
+  inboundEvents InboundEvent[]
+
+  @@unique([characterId, identityId, accountId, id])
+  @@unique([accountId, remoteKey])
+  @@map("contacts")
+}
+
+model Conversation {
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId      String              @map("character_id") @db.Uuid
+  identityId       String              @map("identity_id") @db.Uuid
+  accountId        String              @map("account_id") @db.Uuid
+  remoteKey        String              @map("remote_key")
+  channel          ConversationChannel
+  privateContactId String?             @map("private_contact_id") @db.Uuid
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  account          PlatformAccount     @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  privateContact   Contact?            @relation(fields: [characterId, identityId, accountId, privateContactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
+  inboundEvents    InboundEvent[]
+  memories         Memory[]
+  sources          SourceRecord[]
+  privateGrants    MemoryGrant[]
+
+  @@unique([characterId, identityId, accountId, id])
+  @@unique([characterId, identityId, accountId, id, privateContactId], map: "conversations_private_recipient_key")
+  @@unique([accountId, remoteKey])
+  @@map("conversations")
 }

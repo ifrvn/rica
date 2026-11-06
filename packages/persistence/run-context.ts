@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient, RunStateReason } from './generated/client.js'
+import type { ConversationChannel, Prisma, PrismaClient, RunStateReason } from './generated/client.js'
 
 export const runQueuedEvent = 'RunQueued.v1'
 
@@ -29,6 +29,39 @@ export async function lockSimulatedBinding(tx: Prisma.TransactionClient, account
   return binding
 }
 
+type EventScope = Readonly<{
+  conversationId?: string | null
+  contactId?: string | null
+}>
+
+export async function lockEventContext(
+  tx: Prisma.TransactionClient, binding: Binding, { conversationId, contactId }: EventScope,
+) {
+  if (contactId) {
+    const contact = await tx.contact.findFirst({
+      where: {
+        id: contactId,
+        characterId: binding.characterId,
+        identityId: binding.identityId,
+        accountId: binding.accountId,
+      },
+      select: { id: true },
+    })
+    if (!contact) return null
+  }
+  if (!conversationId) return { conversationId: null, contactId: contactId ?? null, channel: null }
+
+  const [conversation] = await tx.$queryRaw<{ channel: ConversationChannel }[]>`
+    SELECT channel FROM conversations
+    WHERE id = ${conversationId}::uuid AND character_id = ${binding.characterId}::uuid
+      AND identity_id = ${binding.identityId}::uuid AND account_id = ${binding.accountId}::uuid
+      AND (channel = 'PUBLIC' OR private_contact_id = ${contactId ?? null}::uuid)
+    FOR SHARE
+  `
+  if (!conversation) return null
+  return { conversationId, contactId: contactId ?? null, channel: conversation.channel }
+}
+
 export function bindingMatches(run: Binding, current: Binding) {
   return run.characterId === current.characterId
     && run.identityId === current.identityId
@@ -49,12 +82,16 @@ export async function prepareSimulatedRun(db: PrismaClient, eventId: string) {
     `
     if (!event) return
 
-    const run = await tx.agentRun.findUniqueOrThrow({ where: { id: event.runId } })
+    const run = await tx.agentRun.findUniqueOrThrow({
+      where: { id: event.runId },
+      include: { inboundEvent: { select: { conversationId: true, contactId: true } } },
+    })
     if (run.state === 'QUEUED' && run.mode === 'SIMULATION') {
       const current = await lockSimulatedBinding(tx, run.accountId)
       let reason: RunStateReason | null = null
       if (!current) reason = 'ACCOUNT_UNAVAILABLE'
       else if (!bindingMatches(run, current)) reason = 'BINDING_CHANGED'
+      else if (!await lockEventContext(tx, current, run.inboundEvent)) reason = 'CONVERSATION_UNAVAILABLE'
 
       const { count } = await tx.agentRun.updateMany({
         where: { id: run.id, state: 'QUEUED', stateVersion: run.stateVersion },

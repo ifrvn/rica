@@ -1,8 +1,10 @@
 import type { InboundKind, PrismaClient } from './generated/client.js'
-import { lockSimulatedBinding, runQueuedEvent } from './run-context.js'
+import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
 
 type SimulatedEvent = Readonly<{
   accountId: string
+  conversationId?: string
+  contactId?: string
   sourceKey: string
   kind: InboundKind
   occurredAt: Date
@@ -18,12 +20,16 @@ export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEve
   return db.$transaction(async (tx) => {
     const binding = await lockSimulatedBinding(tx, accountId)
     if (!binding) return { status: 'ACCOUNT_UNAVAILABLE' } as const
+    const context = await lockEventContext(tx, binding, event)
+    if (!context) return { status: 'CONVERSATION_UNAVAILABLE' } as const
 
     const { count } = await tx.inboundEvent.createMany({
       data: {
         characterId: binding.characterId,
         identityId: binding.identityId,
         accountId: binding.accountId,
+        conversationId: context.conversationId,
+        contactId: context.contactId,
         sourceKey,
         kind,
         occurredAt,

@@ -84,6 +84,8 @@ after(async () => {
         await tx.memorySource.deleteMany({ where: { characterId } })
         await tx.memory.deleteMany({ where: { characterId } })
         await tx.sourceRecord.deleteMany({ where: { characterId } })
+        await tx.conversation.deleteMany({ where: { characterId } })
+        await tx.contact.deleteMany({ where: { characterId } })
         await tx.platformAccount.deleteMany({ where: { characterId } })
         await tx.identity.updateMany({
           where: { characterId },
@@ -213,9 +215,9 @@ test('PostgreSQL rejects an inbound event with a mismatched identity binding', a
   }), { code: 'P2003' })
 })
 
-async function preparedMemoryRun(accountId: string) {
+async function preparedMemoryRun(accountId: string, scope: { conversationId?: string; contactId?: string } = {}) {
   const result = await ingestSimulatedEvent(db, {
-    accountId, sourceKey: randomUUID(), kind: 'MENTION', occurredAt,
+    ...scope, accountId, sourceKey: randomUUID(), kind: 'MENTION', occurredAt,
   })
   assert.equal(result.status, 'ACCEPTED')
   const queued = await db.outboxEvent.findFirstOrThrow({
@@ -228,7 +230,7 @@ async function preparedMemoryRun(accountId: string) {
 async function testMemory(
   scope: MemoryScope,
   visibility: MemoryVisibility,
-  owner: { identityId?: string; accountId?: string } = {},
+  owner: { identityId?: string; accountId?: string; conversationId?: string } = {},
   classification = visibility,
 ) {
   assert.ok(fixture)
@@ -254,11 +256,12 @@ async function testGrant(
   purpose: MemoryPurpose,
   audience: string | null = null,
   expired = false,
+  privateTarget?: { recipientConversationId: string; recipientContactId: string },
 ) {
   assert.ok(fixture)
   return db.memoryGrant.create({
     data: {
-      characterId: fixture.characterId, memoryId, purpose, audience,
+      ...privateTarget, characterId: fixture.characterId, memoryId, purpose, audience,
       recipientIdentityId: recipient.identityId, recipientAccountId: recipient.id,
       validFrom: new Date('2000-01-01T00:00:00Z'),
       validUntil: new Date(expired ? '2001-01-01T00:00:00Z' : '2999-01-01T00:00:00Z'),
@@ -347,4 +350,105 @@ test('grant and source revocation invalidate old runs and remove candidates for 
   const newRun = await preparedMemoryRun(personal.id)
   const remaining = await listAuthorizedMemoryCandidates(db, newRun, purpose)
   assert.ok(!remaining.some(({ id }) => id === shared.id || id === native.id))
+})
+
+async function privateThread(
+  account: { characterId: string; identityId: string; id: string },
+  privateContactId?: string,
+) {
+  const binding = {
+    characterId: account.characterId, identityId: account.identityId, accountId: account.id,
+  }
+  const contactId = privateContactId ?? (await db.contact.create({
+    data: { ...binding, remoteKey: randomUUID() },
+  })).id
+  const conversation = await db.conversation.create({
+    data: { ...binding, channel: 'PRIVATE', privateContactId: contactId, remoteKey: randomUUID() },
+  })
+  return { conversationId: conversation.id, contactId }
+}
+
+test('private ingress rejects a different account or contact without creating a run', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const scope = await privateThread(personal)
+  const another = await privateThread(personal)
+  const event = { sourceKey: 'mismatched-private-ingress', kind: 'REPLY', occurredAt } as const
+  for (const input of [
+    { ...scope, accountId: company.id },
+    { ...scope, accountId: personal.id, contactId: another.contactId },
+    { conversationId: scope.conversationId, accountId: personal.id },
+  ]) {
+    const result = await ingestSimulatedEvent(db, { ...event, ...input })
+    assert.equal(result.status, 'CONVERSATION_UNAVAILABLE')
+  }
+  assert.equal(await db.inboundEvent.count({
+    where: { characterId: fixture.characterId, sourceKey: event.sourceKey },
+  }), 0)
+})
+
+test('private reply requires an exact recipient grant and private provenance never becomes public', async () => {
+  assert.ok(fixture)
+  const account = fixture.accounts[1]
+  const scope = await privateThread(account)
+  const other = await privateThread(account, scope.contactId)
+  const wrongRecipient = await privateThread(account)
+  const run = await preparedMemoryRun(account.id, scope)
+  const otherRun = await preparedMemoryRun(account.id, other)
+  const publicRun = await preparedMemoryRun(account.id)
+  const { memory, source } = await testMemory('CONVERSATION', 'PUBLIC', {
+    identityId: account.identityId, accountId: account.id, conversationId: scope.conversationId,
+  })
+  const derived = await db.memory.create({
+    data: {
+      characterId: account.characterId, identityId: account.identityId,
+      scope: 'IDENTITY', visibility: 'PUBLIC', content: 'Derived from a private conversation',
+    },
+  })
+  await db.memorySource.create({
+    data: { characterId: account.characterId, memoryId: derived.id, sourceId: source.id },
+  })
+  const purpose = { purpose: 'PRIVATE_REPLY' } as const
+  assert.deepEqual(await listAuthorizedMemoryCandidates(db, run, purpose), [])
+  await assert.rejects(testGrant(memory.id, account, 'PRIVATE_REPLY', null, false, {
+    recipientConversationId: scope.conversationId, recipientContactId: wrongRecipient.contactId,
+  }), { code: 'P2003' })
+  await testGrant(memory.id, account, 'PRIVATE_REPLY', null, false, {
+    recipientConversationId: scope.conversationId, recipientContactId: scope.contactId,
+  })
+  await testGrant(memory.id, account, 'PUBLIC_REFERENCE', 'private-provenance')
+  await testGrant(derived.id, account, 'PUBLIC_REFERENCE', 'private-provenance')
+
+  assert.deepEqual((await listAuthorizedMemoryCandidates(db, run, purpose)).map(({ id }) => id), [memory.id])
+  assert.deepEqual(await listAuthorizedMemoryCandidates(db, otherRun, purpose), [])
+  assert.deepEqual(await listAuthorizedMemoryCandidates(db, publicRun, purpose), [])
+  assert.deepEqual(await listAuthorizedMemoryCandidates(db, publicRun, {
+    purpose: 'PUBLIC_REFERENCE', audience: 'private-provenance',
+  }), [])
+  const outside = await listAuthorizedMemoryCandidates(db, otherRun, { purpose: 'INTERNAL_CONTEXT' })
+  assert.ok(!outside.some(({ id }) => id === memory.id || id === derived.id))
+})
+
+test('conversation recipients cannot be rebound and duplicate ingress preserves the original scope', async () => {
+  assert.ok(fixture)
+  const account = fixture.accounts[1]
+  const scope = await privateThread(account)
+  const other = await privateThread(account)
+  const event = { accountId: account.id, sourceKey: 'recipient-stays-bound', kind: 'REPLY', occurredAt } as const
+  const result = await ingestSimulatedEvent(db, { ...event, ...scope })
+  assert.equal(result.status, 'ACCEPTED')
+  await assert.rejects(db.$executeRaw`
+    UPDATE conversations SET private_contact_id = ${other.contactId}::uuid
+    WHERE id = ${scope.conversationId}::uuid
+  `, /Conversation binding cannot change/)
+  const replay = await ingestSimulatedEvent(db, { ...event, ...other })
+  assert.deepEqual(replay, { status: 'DUPLICATE', runId: result.runId })
+  await consumeRuns([result.runId])
+  const run = await db.agentRun.findUniqueOrThrow({
+    where: { id: result.runId },
+    include: { inboundEvent: true },
+  })
+  assert.equal(run.state, 'CONTEXT_READY')
+  assert.equal(run.inboundEvent.conversationId, scope.conversationId)
+  assert.equal(run.inboundEvent.contactId, scope.contactId)
 })
