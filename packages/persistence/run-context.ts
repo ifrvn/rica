@@ -29,7 +29,7 @@ export async function lockSimulatedBinding(tx: Prisma.TransactionClient, account
   return binding
 }
 
-function bindingMatches(run: Binding, current: Binding) {
+export function bindingMatches(run: Binding, current: Binding) {
   return run.characterId === current.characterId
     && run.identityId === current.identityId
     && run.accountId === current.accountId

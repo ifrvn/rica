@@ -4,6 +4,8 @@ import { after, before, test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { createDatabase } from '../packages/persistence/client.js'
+import type { MemoryPurpose, MemoryScope, MemoryVisibility } from '../packages/persistence/generated/client.js'
+import { listAuthorizedMemoryCandidates, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
@@ -78,6 +80,10 @@ after(async () => {
         await tx.outboxEvent.deleteMany({ where: { run: { characterId } } })
         await tx.agentRun.deleteMany({ where: { characterId } })
         await tx.inboundEvent.deleteMany({ where: { characterId } })
+        await tx.memoryGrant.deleteMany({ where: { characterId } })
+        await tx.memorySource.deleteMany({ where: { characterId } })
+        await tx.memory.deleteMany({ where: { characterId } })
+        await tx.sourceRecord.deleteMany({ where: { characterId } })
         await tx.platformAccount.deleteMany({ where: { characterId } })
         await tx.identity.updateMany({
           where: { characterId },
@@ -205,4 +211,140 @@ test('PostgreSQL rejects an inbound event with a mismatched identity binding', a
       occurredAt,
     },
   }), { code: 'P2003' })
+})
+
+async function preparedMemoryRun(accountId: string) {
+  const result = await ingestSimulatedEvent(db, {
+    accountId, sourceKey: randomUUID(), kind: 'MENTION', occurredAt,
+  })
+  assert.equal(result.status, 'ACCEPTED')
+  const queued = await db.outboxEvent.findFirstOrThrow({
+    where: { runId: result.runId, type: runQueuedEvent },
+  })
+  await prepareSimulatedRun(db, queued.eventId)
+  return result.runId
+}
+
+async function testMemory(
+  scope: MemoryScope,
+  visibility: MemoryVisibility,
+  owner: { identityId?: string; accountId?: string } = {},
+  classification = visibility,
+) {
+  assert.ok(fixture)
+  const { characterId } = fixture
+  return db.$transaction(async (tx) => {
+    const source = await tx.sourceRecord.create({
+      data: { ...owner, characterId, kind: 'fixture', sourceKey: randomUUID(), classification },
+    })
+    const memory = await tx.memory.create({
+      data: {
+        ...owner, characterId, scope, visibility, content: 'fixture memory',
+        coreApprovedAt: scope === 'CORE' ? occurredAt : null,
+      },
+    })
+    await tx.memorySource.create({ data: { characterId, memoryId: memory.id, sourceId: source.id } })
+    return { memory, source }
+  })
+}
+
+async function testGrant(
+  memoryId: string,
+  recipient: { id: string; identityId: string },
+  purpose: MemoryPurpose,
+  audience: string | null = null,
+  expired = false,
+) {
+  assert.ok(fixture)
+  return db.memoryGrant.create({
+    data: {
+      characterId: fixture.characterId, memoryId, purpose, audience,
+      recipientIdentityId: recipient.identityId, recipientAccountId: recipient.id,
+      validFrom: new Date('2000-01-01T00:00:00Z'),
+      validUntil: new Date(expired ? '2001-01-01T00:00:00Z' : '2999-01-01T00:00:00Z'),
+      approvedBy: fixtureKey, reason: 'Integration fixture',
+    },
+  })
+}
+
+test('memory retrieval respects native scope and rejects confidential provenance across identities', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const { memory: core } = await testMemory('CORE', 'PUBLIC')
+  const { memory: own } = await testMemory('IDENTITY', 'PERSONAL', { identityId: personal.identityId })
+  const { memory: account } = await testMemory('ACCOUNT', 'PERSONAL', {
+    identityId: personal.identityId, accountId: personal.id,
+  })
+  const { memory: companySecret } = await testMemory('IDENTITY', 'PUBLIC', {
+    identityId: company.identityId,
+  }, 'CONFIDENTIAL')
+  await testGrant(companySecret.id, personal, 'DECISION_SUPPORT')
+
+  const runId = await preparedMemoryRun(personal.id)
+  const candidates = await listAuthorizedMemoryCandidates(db, runId, { purpose: 'DECISION_SUPPORT' })
+  assert.deepEqual(new Set(candidates.map(({ id }) => id)), new Set([core.id, own.id, account.id]))
+  await assert.rejects(db.memory.create({
+    data: {
+      characterId: fixture.characterId, identityId: company.identityId, accountId: personal.id,
+      scope: 'ACCOUNT', visibility: 'PERSONAL', content: 'invalid binding',
+    },
+  }), { code: 'P2003' })
+})
+
+test('cross-identity grants are limited to purpose, recipient account, audience and validity', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const anotherAccount = await db.platformAccount.create({
+    data: {
+      characterId: fixture.characterId, identityId: personal.identityId, platform: 'mock-b',
+      instanceKey: 'integration', remoteAccountId: fixtureKey + '-extra', status: 'ACTIVE',
+    },
+  })
+  const { memory } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  const { memory: expired } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  await testGrant(memory.id, personal, 'DECISION_SUPPORT')
+  await testGrant(memory.id, personal, 'PUBLIC_REFERENCE', 'public-feed')
+  await testGrant(expired.id, personal, 'DECISION_SUPPORT', null, true)
+
+  const personalRun = await preparedMemoryRun(personal.id)
+  const otherRun = await preparedMemoryRun(anotherAccount.id)
+  const decision = await listAuthorizedMemoryCandidates(db, personalRun, { purpose: 'DECISION_SUPPORT' })
+  assert.ok(decision.some(({ id }) => id === memory.id))
+  assert.ok(!decision.some(({ id }) => id === expired.id))
+  assert.ok(!(await listAuthorizedMemoryCandidates(db, personalRun, { purpose: 'INTERNAL_CONTEXT' }))
+    .some(({ id }) => id === memory.id))
+  assert.ok(!(await listAuthorizedMemoryCandidates(db, otherRun, { purpose: 'DECISION_SUPPORT' }))
+    .some(({ id }) => id === memory.id))
+  const publicRead = await listAuthorizedMemoryCandidates(db, personalRun, {
+    purpose: 'PUBLIC_REFERENCE', audience: 'public-feed',
+  })
+  assert.deepEqual(publicRead.map(({ id }) => id), [memory.id])
+  const mismatchedAudience = await listAuthorizedMemoryCandidates(db, personalRun, {
+    purpose: 'PUBLIC_REFERENCE', audience: 'different-feed',
+  })
+  assert.deepEqual(mismatchedAudience, [])
+})
+
+test('grant and source revocation invalidate old runs and remove candidates for new runs', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts: [company, personal] } = fixture
+  const { memory: shared } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  const { memory: native, source } = await testMemory('IDENTITY', 'PERSONAL', { identityId: personal.identityId })
+  const grant = await testGrant(shared.id, personal, 'DECISION_SUPPORT')
+  const runId = await preparedMemoryRun(personal.id)
+  const purpose = { purpose: 'DECISION_SUPPORT' } as const
+  const before = await db.character.findUniqueOrThrow({ where: { id: characterId } })
+  const candidates = await listAuthorizedMemoryCandidates(db, runId, purpose)
+  assert.ok(candidates.some(({ id }) => id === shared.id))
+  assert.ok(candidates.some(({ id }) => id === native.id))
+
+  assert.equal(await revokeMemoryAccess(db, { kind: 'GRANT', characterId, id: grant.id }), true)
+  assert.equal(await revokeMemoryAccess(db, { kind: 'GRANT', characterId, id: grant.id }), false)
+  assert.equal(await revokeMemoryAccess(db, { kind: 'SOURCE', characterId, id: source.id }), true)
+  assert.deepEqual(await listAuthorizedMemoryCandidates(db, runId, purpose), [])
+  const after = await db.character.findUniqueOrThrow({ where: { id: characterId } })
+  assert.equal(after.authEpoch, before.authEpoch + 2)
+  const newRun = await preparedMemoryRun(personal.id)
+  const remaining = await listAuthorizedMemoryCandidates(db, newRun, purpose)
+  assert.ok(!remaining.some(({ id }) => id === shared.id || id === native.id))
 })

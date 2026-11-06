@@ -57,16 +57,18 @@ enum RunStateReason {
 }
 
 model Character {
-  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug              String        @unique
-  status            EntityStatus  @default(PAUSED)
-  timezone          String        @default("UTC")
-  activeCoreVersion Int?          @map("active_core_version")
-  authEpoch         Int           @default(0) @map("auth_epoch")
-  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
-  activeCore        CoreVersion?  @relation("ActiveCore", fields: [id, activeCoreVersion], references: [characterId, version], onDelete: NoAction, onUpdate: NoAction)
-  coreVersions      CoreVersion[] @relation("CharacterCoreVersions")
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug              String         @unique
+  status            EntityStatus   @default(PAUSED)
+  timezone          String         @default("UTC")
+  activeCoreVersion Int?           @map("active_core_version")
+  authEpoch         Int            @default(0) @map("auth_epoch")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  activeCore        CoreVersion?   @relation("ActiveCore", fields: [id, activeCoreVersion], references: [characterId, version], onDelete: NoAction, onUpdate: NoAction)
+  coreVersions      CoreVersion[]  @relation("CharacterCoreVersions")
   identities        Identity[]
+  memories          Memory[]
+  memorySources     SourceRecord[]
 
   @@map("characters")
 }
@@ -97,6 +99,9 @@ model Identity {
   activeProfile IdentityVersion?  @relation("ActiveIdentity", fields: [characterId, id, activeVersion], references: [characterId, identityId, version], onDelete: NoAction, onUpdate: NoAction)
   versions      IdentityVersion[] @relation("IdentityVersions")
   accounts      PlatformAccount[]
+  memories      Memory[]
+  memorySources SourceRecord[]
+  memoryGrants  MemoryGrant[]
 
   @@unique([characterId, id])
   @@unique([characterId, slug])
@@ -131,6 +136,9 @@ model PlatformAccount {
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
   identity        Identity       @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   inboundEvents   InboundEvent[]
+  memories        Memory[]
+  memorySources   SourceRecord[]
+  memoryGrants    MemoryGrant[]
 
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
@@ -176,4 +184,109 @@ model AgentRun {
   outboxEvents OutboxEvent[]
 
   @@map("agent_runs")
+}
+
+enum MemoryScope {
+  CORE
+  IDENTITY
+  ACCOUNT
+}
+
+enum MemoryVisibility {
+  PUBLIC
+  PERSONAL
+  CONFIDENTIAL
+  RESTRICTED
+}
+
+enum MemoryStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum MemoryPurpose {
+  INTERNAL_CONTEXT
+  DECISION_SUPPORT
+  PUBLIC_REFERENCE
+}
+
+model Memory {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String           @map("character_id") @db.Uuid
+  identityId     String?          @map("identity_id") @db.Uuid
+  accountId      String?          @map("account_id") @db.Uuid
+  scope          MemoryScope
+  visibility     MemoryVisibility
+  status         MemoryStatus     @default(ACTIVE)
+  content        String           @db.Text
+  revision       Int              @default(1)
+  importance     Float            @default(0.5)
+  confidence     Float            @default(0.5)
+  expiresAt      DateTime?        @map("expires_at") @db.Timestamptz
+  coreApprovedAt DateTime?        @map("core_approved_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  character      Character        @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  identity       Identity?        @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  account        PlatformAccount? @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  sources        MemorySource[]
+  grants         MemoryGrant[]
+
+  @@unique([characterId, id])
+  @@index([characterId, status, scope, identityId, accountId])
+  @@map("memories")
+}
+
+model SourceRecord {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String           @map("character_id") @db.Uuid
+  identityId     String?          @map("identity_id") @db.Uuid
+  accountId      String?          @map("account_id") @db.Uuid
+  kind           String
+  sourceKey      String           @map("source_key")
+  classification MemoryVisibility
+  revokedAt      DateTime?        @map("revoked_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  character      Character        @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  identity       Identity?        @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  account        PlatformAccount? @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  memoryLinks    MemorySource[]
+
+  @@unique([characterId, id])
+  @@unique([characterId, kind, sourceKey])
+  @@map("sources_registry")
+}
+
+model MemorySource {
+  characterId String       @map("character_id") @db.Uuid
+  memoryId    String       @map("memory_id") @db.Uuid
+  sourceId    String       @map("source_id") @db.Uuid
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  memory      Memory       @relation(fields: [characterId, memoryId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  source      SourceRecord @relation(fields: [characterId, sourceId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, memoryId, sourceId])
+  @@index([characterId, sourceId])
+  @@map("memory_sources")
+}
+
+model MemoryGrant {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId         String           @map("character_id") @db.Uuid
+  memoryId            String           @map("memory_id") @db.Uuid
+  recipientIdentityId String           @map("recipient_identity_id") @db.Uuid
+  recipientAccountId  String?          @map("recipient_account_id") @db.Uuid
+  purpose             MemoryPurpose
+  audience            String?
+  validFrom           DateTime         @map("valid_from") @db.Timestamptz
+  validUntil          DateTime         @map("valid_until") @db.Timestamptz
+  revokedAt           DateTime?        @map("revoked_at") @db.Timestamptz
+  approvedBy          String           @map("approved_by")
+  reason              String
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  memory              Memory           @relation(fields: [characterId, memoryId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  recipientIdentity   Identity         @relation(fields: [characterId, recipientIdentityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  recipientAccount    PlatformAccount? @relation(fields: [characterId, recipientIdentityId, recipientAccountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([characterId, recipientIdentityId, purpose, memoryId])
+  @@map("memory_grants")
 }
