@@ -1,6 +1,7 @@
 import type { ConversationChannel, Prisma, PrismaClient, RunStateReason } from './generated/client.js'
 
 export const runQueuedEvent = 'RunQueued.v1'
+export const draftQueuedEvent = 'SimulatedDraftQueued.v1'
 
 type Binding = {
   characterId: string
@@ -74,7 +75,7 @@ export async function prepareSimulatedRun(db: PrismaClient, eventId: string) {
 
     const run = await tx.agentRun.findUniqueOrThrow({
       where: { id: event.runId },
-      include: { inboundEvent: { select: { conversationId: true, contactId: true } } },
+      include: { inboundEvent: { select: { conversationId: true, contactId: true, messageText: true } } },
     })
     if (run.state === 'QUEUED' && run.mode === 'SIMULATION') {
       const current = await lockSimulatedBinding(tx, run.accountId)
@@ -92,6 +93,9 @@ export async function prepareSimulatedRun(db: PrismaClient, eventId: string) {
         },
       })
       if (count !== 1) throw new Error('Simulated run changed during preparation')
+      if (!reason && run.inboundEvent.messageText !== null) {
+        await tx.outboxEvent.create({ data: { type: draftQueuedEvent, runId: run.id } })
+      }
     }
     await tx.outboxEvent.update({
       where: { eventId },

@@ -2,7 +2,8 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue, Worker } from 'bullmq'
 import { Redis } from 'ioredis'
 import { createDatabase } from '../../packages/persistence/client.js'
-import { prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
+import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
+import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 const queueName = 'character-bootstrap'
@@ -15,6 +16,10 @@ export function startOutboxWorker(databaseUrl: string, redisUrl: string) {
   const worker = new Worker<{ eventId: string }>(queueName, async ({ name, data }) => {
     if (name === runQueuedEvent) {
       await prepareSimulatedRun(db, data.eventId)
+      return
+    }
+    if (name === draftQueuedEvent) {
+      await processSimulatedDraft(db, data.eventId)
       return
     }
     if (name !== smokeEvent) throw new Error('Unknown outbox job')
@@ -35,7 +40,7 @@ export function startOutboxWorker(databaseUrl: string, redisUrl: string) {
         // Re-publish unconsumed events after a restart or Redis data loss.
         const pending = await db.outboxEvent.findMany({
           where: {
-            type: { in: [smokeEvent, runQueuedEvent] },
+            type: { in: [smokeEvent, runQueuedEvent, draftQueuedEvent] },
             processedAt: null,
             OR: [{ enqueuedAt: null }, { enqueuedAt: { lt: new Date(Date.now() - 10_000) } }],
           },

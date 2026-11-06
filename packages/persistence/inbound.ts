@@ -1,3 +1,4 @@
+import { maxSimulatedTextLength } from '../runtime/model-provider.js'
 import type { InboundKind, PrismaClient } from './generated/client.js'
 import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
 
@@ -6,13 +7,18 @@ type SimulatedEvent = Readonly<{
   conversationId?: string
   contactId?: string
   sourceKey: string
+  messageText?: string
   kind: InboundKind
   occurredAt: Date
 }>
 
 // Internal entry point for trusted simulation fixtures. Public ingress must authenticate its source.
 export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEvent) {
-  const { accountId, sourceKey, kind, occurredAt } = event
+  const { accountId, sourceKey, kind, occurredAt, messageText } = event
+  if (messageText !== undefined && (!event.conversationId || !messageText.trim()
+    || messageText.length > maxSimulatedTextLength || messageText.includes('\0'))) {
+    throw new Error('Invalid simulated message')
+  }
   if (sourceKey.trim().length === 0 || sourceKey.length > 256 || !Number.isFinite(occurredAt.getTime())) {
     throw new Error('Invalid simulated event')
   }
@@ -31,6 +37,7 @@ export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEve
         conversationId: context.conversationId,
         contactId: context.contactId,
         sourceKey,
+        messageText,
         kind,
         occurredAt,
       },

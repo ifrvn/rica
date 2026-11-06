@@ -9,10 +9,10 @@ import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories,
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
 import { simulatedModel } from '../packages/runtime/model-provider.js'
-import { generateSimulatedDraft } from '../packages/persistence/simulated-draft.js'
+import { generateSimulatedDraft, processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'
-import { prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
+import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 
 const config = loadConfig()
 const db = createDatabase(config.databaseUrl)
@@ -83,6 +83,7 @@ after(async () => {
         await tx.outboxEvent.deleteMany({ where: { run: { characterId } } })
         await tx.contextSnapshotEvidence.deleteMany({ where: { characterId } })
         await tx.contextSnapshot.deleteMany({ where: { characterId } })
+        await tx.simulatedDraft.deleteMany({ where: { characterId } })
         await tx.agentRun.deleteMany({ where: { characterId } })
         await tx.inboundEvent.deleteMany({ where: { characterId } })
         await tx.memoryGrant.deleteMany({ where: { characterId } })
@@ -111,13 +112,13 @@ after(async () => {
   }
 })
 
-async function consumeRuns(runIds: string[]) {
-  const worker = startOutboxWorker(config.databaseUrl, config.redisUrl)
+async function consumeRuns(runIds: string[], type = runQueuedEvent) {
+  const worker = startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl)
   try {
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
       const processed = await db.outboxEvent.findMany({
-        where: { runId: { in: runIds }, type: runQueuedEvent, processedAt: { not: null } },
+        where: { runId: { in: runIds }, type, processedAt: { not: null } },
         select: { eventId: true },
       })
       if (processed.length === runIds.length) return processed
@@ -460,11 +461,17 @@ test('conversation recipients cannot be rebound and duplicate ingress preserves 
   assert.equal(run.inboundEvent.contactId, scope.contactId)
 })
 
-function testDatabaseRole(role: 'rica_runtime' | 'rica_memory_reader' | 'rica_memory_admin') {
+type DatabaseRole = 'rica_runtime' | 'rica_memory_reader' | 'rica_memory_admin'
+
+function testDatabaseRole(role: DatabaseRole) {
+  return createDatabase(testDatabaseRoleUrl(role))
+}
+
+function testDatabaseRoleUrl(role: DatabaseRole) {
   const url = new URL(config.databaseUrl)
   const options = url.searchParams.get('options')
   url.searchParams.set('options', [options, '-c role=' + role].filter(Boolean).join(' '))
-  return createDatabase(url.toString())
+  return url.toString()
 }
 
 test('runtime role can prepare and read a run through policy but cannot read raw memory', async () => {
@@ -813,4 +820,143 @@ test('simulated writing discards output when a grant expires during the call', a
     },
   })
   assert.equal(result, null)
+})
+
+test('the worker saves one draft per run and only uses the bound public audience', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const { memory, source } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  const messageText = 'worker audience frostgate'
+  const reference = messageText + ' public evidence'
+  await db.memory.update({ where: { id: memory.id }, data: { content: reference } })
+  const conversations = await Promise.all([1, 2].map(() => db.conversation.create({
+    data: {
+      characterId: personal.characterId, identityId: personal.identityId, accountId: personal.id,
+      channel: 'PUBLIC', remoteKey: randomUUID(),
+    },
+  })))
+  const [allowed, other] = conversations
+  await testGrant(memory.id, personal, 'PUBLIC_REFERENCE', allowed.id)
+  const event = { accountId: personal.id, kind: 'REPLY', occurredAt, messageText } as const
+  const accepted = await ingestSimulatedEvent(db, {
+    ...event, conversationId: allowed.id, sourceKey: randomUUID(),
+  })
+  assert.equal(accepted.status, 'ACCEPTED')
+  const inbound = await db.agentRun.findUniqueOrThrow({
+    where: { id: accepted.runId }, include: { inboundEvent: true },
+  })
+  const retries = await Promise.all(Array.from({ length: 12 }, () => ingestSimulatedEvent(db, {
+    ...event, conversationId: other.id, sourceKey: inbound.inboundEvent.sourceKey, messageText: 'replace payload',
+  })))
+  assert.ok(retries.every((result) => result.status === 'DUPLICATE' && result.runId === accepted.runId))
+  const outside = await ingestSimulatedEvent(db, { ...event, conversationId: other.id, sourceKey: randomUUID() })
+  assert.equal(outside.status, 'ACCEPTED')
+
+  const runIds = [accepted.runId, outside.runId]
+  const jobs = await consumeRuns(runIds, draftQueuedEvent)
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    await Promise.all(jobs.map(({ eventId }) => processSimulatedDraft(runtime, eventId)))
+    await assert.rejects(runtime.simulatedDraft.count())
+  } finally {
+    await runtime.$disconnect()
+  }
+
+  const drafts = await db.simulatedDraft.findMany({ where: { runId: { in: runIds } } })
+  assert.equal(drafts.length, 2)
+  assert.deepEqual(drafts.find(({ runId }) => runId === accepted.runId)?.citationIds, [memory.id])
+  assert.equal(drafts.find(({ runId }) => runId === accepted.runId)?.content, reference)
+  assert.deepEqual(drafts.find(({ runId }) => runId === outside.runId)?.citationIds, [])
+  const runs = await db.agentRun.findMany({
+    where: { id: { in: runIds } }, include: { inboundEvent: true },
+  })
+  assert.ok(runs.every(({ state, stateVersion, accountId }) =>
+    state === 'DRAFTED' && stateVersion === 3 && accountId === personal.id,
+  ))
+  assert.equal(runs.find(({ id }) => id === accepted.runId)?.inboundEvent.conversationId, allowed.id)
+  assert.equal(runs.find(({ id }) => id === accepted.runId)?.inboundEvent.messageText, messageText)
+
+  const admin = testDatabaseRole('rica_memory_admin')
+  try {
+    assert.equal(await revokeMemoryAccess(admin, {
+      kind: 'SOURCE', characterId: personal.characterId, id: source.id,
+    }), true)
+  } finally {
+    await admin.$disconnect()
+  }
+  const cleared = await db.simulatedDraft.findMany({ where: { runId: { in: runIds } } })
+  assert.equal(cleared.length, 2)
+  assert.ok(cleared.every(({ content }) => content === null))
+})
+
+test('revocation during private writing prevents the draft from committing', async () => {
+  assert.ok(fixture)
+  const personal = fixture.accounts[1]
+  const scope = await privateThread(personal)
+  const { memory, source } = await testMemory('CONVERSATION', 'PERSONAL', {
+    identityId: personal.identityId, accountId: personal.id, conversationId: scope.conversationId,
+  })
+  const messageText = 'private worker revoke citation'
+  await db.memory.update({ where: { id: memory.id }, data: { content: messageText } })
+  await testGrant(memory.id, personal, 'PRIVATE_REPLY', null, false, {
+    recipientConversationId: scope.conversationId, recipientContactId: scope.contactId,
+  })
+  const result = await ingestSimulatedEvent(db, {
+    ...scope, accountId: personal.id, sourceKey: randomUUID(), kind: 'REPLY', occurredAt, messageText,
+  })
+  assert.equal(result.status, 'ACCEPTED')
+  const prepare = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
+  const runtime = testDatabaseRole('rica_runtime')
+  const admin = testDatabaseRole('rica_memory_admin')
+  try {
+    await prepareSimulatedRun(runtime, prepare.eventId)
+    const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, job.eventId, {
+      ...simulatedModel,
+      async write(input, signal) {
+        assert.deepEqual(input.evidence.map(({ id }) => id), [memory.id])
+        assert.equal(await revokeMemoryAccess(admin, {
+          kind: 'SOURCE', characterId: personal.characterId, id: source.id,
+        }), true)
+        return simulatedModel.write(input, signal)
+      },
+    })
+    assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 0)
+    const run = await db.agentRun.findUniqueOrThrow({ where: { id: result.runId } })
+    assert.equal(run.state, 'CANCELED')
+    assert.equal(run.stateReason, 'DRAFT_UNAVAILABLE')
+    assert.ok((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt)
+  } finally {
+    await Promise.all([runtime.$disconnect(), admin.$disconnect()])
+  }
+})
+
+test('a failed drafting job stays pending and concurrent retries commit it once', async () => {
+  assert.ok(fixture)
+  const account = fixture.accounts[1]
+  const scope = await privateThread(account)
+  const result = await ingestSimulatedEvent(db, {
+    ...scope, accountId: account.id, sourceKey: randomUUID(),
+    kind: 'REPLY', occurredAt, messageText: 'retry the same draft',
+  })
+  assert.equal(result.status, 'ACCEPTED')
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const queued = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, queued.eventId)
+    const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
+    await assert.rejects(processSimulatedDraft(runtime, job.eventId, {
+      ...simulatedModel,
+      async write() { throw new Error('transient provider failure') },
+    }), /transient provider failure/)
+    assert.equal((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt, null)
+    assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 0)
+
+    await Promise.all([processSimulatedDraft(runtime, job.eventId), processSimulatedDraft(runtime, job.eventId)])
+    assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 1)
+    assert.equal((await db.agentRun.findUniqueOrThrow({ where: { id: result.runId } })).stateVersion, 3)
+    assert.ok((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt)
+  } finally {
+    await runtime.$disconnect()
+  }
 })

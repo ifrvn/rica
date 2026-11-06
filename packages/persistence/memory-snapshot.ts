@@ -64,23 +64,28 @@ export async function captureMemorySnapshot(
 }
 
 export async function replayMemorySnapshot(db: PrismaClient, runId: string, request: MemoryRequest) {
-  return db.$transaction(async (tx) => {
-    const scope = await loadMemoryReadScope(tx, runId, request)
-    if (!scope) return null
-    await bindSnapshotRun(tx, runId)
+  return db.$transaction((tx) => replayMemorySnapshotInTransaction(tx, runId, request),
+    { isolationLevel: 'ReadCommitted' })
+}
 
-    const snapshot = await findSnapshot(tx, snapshotKey(runId, request))
-    if (!snapshot) return null
-    if (snapshot.evidence.length === 0) return []
+export async function replayMemorySnapshotInTransaction(
+  tx: Prisma.TransactionClient, runId: string, request: MemoryRequest,
+) {
+  const scope = await loadMemoryReadScope(tx, runId, request)
+  if (!scope) return null
+  await bindSnapshotRun(tx, runId)
 
-    const candidates = await readMemoryCandidates(tx, scope)
-    const allowed = new Map(candidates.map((candidate) => [candidate.id, candidate]))
-    return snapshot.evidence.map((evidence) => {
-      const candidate = allowed.get(evidence.memoryId)
-      return {
-        rank: evidence.rank,
-        candidate: candidate?.revision === evidence.memoryRevision ? candidate : null,
-      }
-    })
-  }, { isolationLevel: 'ReadCommitted' })
+  const snapshot = await findSnapshot(tx, snapshotKey(runId, request))
+  if (!snapshot) return null
+  if (snapshot.evidence.length === 0) return []
+
+  const candidates = await readMemoryCandidates(tx, scope)
+  const allowed = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+  return snapshot.evidence.map((evidence) => {
+    const candidate = allowed.get(evidence.memoryId)
+    return {
+      rank: evidence.rank,
+      candidate: candidate?.revision === evidence.memoryRevision ? candidate : null,
+    }
+  })
 }

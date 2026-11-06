@@ -1,3 +1,5 @@
+export const maxSimulatedTextLength = 4_000
+
 export type ModelEvidence = Readonly<{ id: string; revision: number; content: string }>
 
 type ModelInput = Readonly<{

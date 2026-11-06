@@ -1,19 +1,19 @@
 import type { ModelEvidence, ModelProvider } from '../runtime/model-provider.js'
-import { simulatedModel } from '../runtime/model-provider.js'
-import type { PrismaClient } from './generated/client.js'
-import { captureMemorySnapshot, replayMemorySnapshot } from './memory-snapshot.js'
-import type { MemoryRequest } from './memory.js'
+import { maxSimulatedTextLength, simulatedModel } from '../runtime/model-provider.js'
+import type { Prisma, PrismaClient } from './generated/client.js'
+import { captureMemorySnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
+import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
+import { draftQueuedEvent } from './run-context.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
   | { purpose: 'PRIVATE_REPLY' }
 
 const decisionRequest = { purpose: 'DECISION_SUPPORT' } as const
-const maxTextLength = 4_000
 
 async function readEvidence(
-  db: PrismaClient, runId: string, request: MemoryRequest,
+  tx: Prisma.TransactionClient, runId: string, request: MemoryRequest,
 ): Promise<ModelEvidence[] | null> {
-  const replay = await replayMemorySnapshot(db, runId, request)
+  const replay = await replayMemorySnapshotInTransaction(tx, runId, request)
   return replay?.flatMap(({ candidate }) => candidate
     ? [{ id: candidate.id, revision: candidate.revision, content: candidate.content }]
     : []) ?? null
@@ -25,7 +25,7 @@ function validateDraft(output: unknown, allowedIds: ReadonlyMap<string, number>)
   }
 
   const { text, evidenceIds } = output
-  if (typeof text !== 'string' || !text.trim() || text.length > maxTextLength
+  if (typeof text !== 'string' || !text.trim() || text.length > maxSimulatedTextLength
     || !Array.isArray(evidenceIds) || evidenceIds.length > allowedIds.size
     || !Array.from(evidenceIds).every((id): id is string => typeof id === 'string' && allowedIds.has(id))
     || new Set(evidenceIds).size !== evidenceIds.length) {
@@ -41,17 +41,17 @@ function evidenceMatches(current: ModelEvidence[] | null, previous: ReadonlyMap<
 }
 
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
-export async function generateSimulatedDraft(
+async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
-  provider: ModelProvider = simulatedModel, signal: AbortSignal = AbortSignal.timeout(5_000),
+  provider: ModelProvider, signal: AbortSignal,
 ) {
-  if (text.length > maxTextLength) throw new Error('Simulated message is too long')
+  if (text.length > maxSimulatedTextLength) throw new Error('Simulated message is too long')
   signal.throwIfAborted()
 
   if (!await captureMemorySnapshot(db, runId, writingRequest, text)
     || !await captureMemorySnapshot(db, runId, decisionRequest, text)) return null
 
-  const decisionEvidence = await readEvidence(db, runId, decisionRequest)
+  const decisionEvidence = await db.$transaction((tx) => readEvidence(tx, runId, decisionRequest))
   if (!decisionEvidence) return null
 
   signal.throwIfAborted()
@@ -61,7 +61,7 @@ export async function generateSimulatedDraft(
   if (decision === 'NO_OP') return null
   if (decision !== 'REPLY') throw new Error('Invalid simulated decision output')
 
-  const writingEvidence = await readEvidence(db, runId, writingRequest)
+  const writingEvidence = await db.$transaction((tx) => readEvidence(tx, runId, writingRequest))
   if (!writingEvidence) return null
 
   // Preserve the authorized revisions independently of the objects passed to the provider.
@@ -71,9 +71,85 @@ export async function generateSimulatedDraft(
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
 
-  if (!evidenceMatches(await readEvidence(db, runId, decisionRequest), decisionRevisions)
-    || !evidenceMatches(await readEvidence(db, runId, writingRequest), allowedRevisions)) return null
+  return { draft, decisionRevisions, writingRevisions: allowedRevisions }
+}
 
+type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
+
+async function recheckDraft(
+  tx: Prisma.TransactionClient, runId: string, request: WritingRequest, candidate: DraftCandidate,
+) {
+  return evidenceMatches(await readEvidence(tx, runId, decisionRequest), candidate.decisionRevisions)
+    && evidenceMatches(await readEvidence(tx, runId, request), candidate.writingRevisions)
+}
+
+export async function generateSimulatedDraft(
+  db: PrismaClient, runId: string, text: string, request: WritingRequest,
+  provider: ModelProvider = simulatedModel, signal: AbortSignal = AbortSignal.timeout(5_000),
+) {
+  const candidate = await buildSimulatedDraft(db, runId, text, request, provider, signal)
+  if (!candidate || !await db.$transaction((tx) => recheckDraft(tx, runId, request, candidate))) return null
   signal.throwIfAborted()
-  return draft
+  return candidate.draft
+}
+
+export async function processSimulatedDraft(
+  db: PrismaClient, eventId: string, provider: ModelProvider = simulatedModel,
+) {
+  const event = await db.outboxEvent.findFirst({
+    where: { eventId, type: draftQueuedEvent, processedAt: null },
+    include: { run: { include: { inboundEvent: { select: { messageText: true } } } } },
+  })
+  const run = event?.run
+  if (!run) return
+
+  const scope = await db.$transaction((tx) => loadMemoryReadScope(tx, run.id, decisionRequest))
+  const request: WritingRequest | null = scope?.channel === 'PRIVATE'
+    ? { purpose: 'PRIVATE_REPLY' }
+    : scope?.channel === 'PUBLIC' && scope.conversation_id
+      ? { purpose: 'PUBLIC_REFERENCE', audience: scope.conversation_id }
+      : null
+
+  // Model calls stay outside the write transaction. A retry can rebuild from the same snapshots.
+  const signal = AbortSignal.timeout(5_000)
+  const text = run.inboundEvent.messageText
+  const candidate = request && text !== null
+    ? await buildSimulatedDraft(db, run.id, text, request, provider, signal)
+    : null
+
+  await db.$transaction(async (tx) => {
+    const [pending] = await tx.$queryRaw<{ eventId: string }[]>`
+      SELECT event_id AS "eventId" FROM public.outbox
+      WHERE event_id = ${eventId}::uuid AND type = ${draftQueuedEvent} AND processed_at IS NULL
+      FOR UPDATE
+    `
+    if (!pending) return
+
+    if (run.state === 'CONTEXT_READY') {
+      const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
+      if (accepted) {
+        signal.throwIfAborted()
+        await tx.simulatedDraft.createMany({
+          data: {
+            runId: run.id,
+            characterId: run.characterId,
+            content: candidate.draft.text,
+            decisionEvidenceIds: [...candidate.decisionRevisions.keys()],
+            writingEvidenceIds: [...candidate.writingRevisions.keys()],
+            citationIds: candidate.draft.evidenceIds,
+          },
+        })
+      }
+      const { count } = await tx.agentRun.updateMany({
+        where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
+        data: {
+          state: accepted ? 'DRAFTED' : 'CANCELED',
+          stateReason: accepted ? null : 'DRAFT_UNAVAILABLE',
+          stateVersion: { increment: 1 },
+        },
+      })
+      if (count !== 1) throw new Error('Simulated run changed during drafting')
+    }
+    await tx.outboxEvent.update({ where: { eventId }, data: { processedAt: new Date() } })
+  }, { isolationLevel: 'ReadCommitted' })
 }
