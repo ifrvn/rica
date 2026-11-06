@@ -1,18 +1,11 @@
+import type { MemoryCandidate } from '../contracts/memory.js'
+import { rankMemoryCandidates } from '../runtime/memory-ranking.js'
 import type { PrismaClient } from './generated/client.js'
 import { bindingMatches, lockEventContext, lockSimulatedBinding } from './run-context.js'
 
 type MemoryRequest =
   | { purpose: 'INTERNAL_CONTEXT' | 'DECISION_SUPPORT' | 'PRIVATE_REPLY'; audience?: never }
   | { purpose: 'PUBLIC_REFERENCE'; audience: string }
-
-type MemoryCandidate = {
-  id: string
-  content: string
-  revision: number
-  importance: number
-  confidence: number
-  createdAt: Date
-}
 
 // Internal retrieval boundary. A caller may choose a purpose, while the database supplies the identity and account.
 export async function listAuthorizedMemoryCandidates(db: PrismaClient, runId: string, request: MemoryRequest) {
@@ -45,11 +38,27 @@ export async function listAuthorizedMemoryCandidates(db: PrismaClient, runId: st
     await tx.$queryRaw`SELECT set_config('rica.memory_scope', ${scope}, true)`
     await tx.$executeRaw`SET LOCAL ROLE rica_memory_reader`
     return tx.$queryRaw<MemoryCandidate[]>`
-      SELECT id, content, revision, importance, confidence, created_at AS "createdAt"
-      FROM public.memories
-      ORDER BY created_at, id
+      SELECT m.id, m.content, m.revision, m.importance, m.confidence, m.scope, m.created_at AS "createdAt",
+        (
+          (m.conversation_id = ${conversationId}::uuid) IS TRUE
+          OR EXISTS (
+            SELECT 1 FROM public.memory_sources ms
+            JOIN public.sources_registry source ON (source.character_id, source.id) = (ms.character_id, ms.source_id)
+            WHERE (ms.character_id, ms.memory_id) = (m.character_id, m.id)
+              AND source.conversation_id = ${conversationId}::uuid
+          )
+        ) AS "sameConversation"
+      FROM public.memories m
+      ORDER BY m.created_at, m.id
     `
   }, { isolationLevel: 'ReadCommitted' })
+}
+
+export async function recallAuthorizedMemories(
+  db: PrismaClient, runId: string, request: MemoryRequest, query: string, now = new Date(),
+) {
+  const candidates = await listAuthorizedMemoryCandidates(db, runId, request)
+  return rankMemoryCandidates(candidates, query, now)
 }
 
 type Derivation = { characterId: string; parentMemoryId: string; content: string }

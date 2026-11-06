@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import type { MemoryPurpose, MemoryScope, MemoryVisibility } from '../packages/persistence/generated/client.js'
-import { deriveMemory, listAuthorizedMemoryCandidates, revokeMemoryAccess } from '../packages/persistence/memory.js'
+import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
@@ -286,6 +286,8 @@ test('memory retrieval respects native scope and rejects confidential provenance
   const runId = await preparedMemoryRun(personal.id)
   const candidates = await listAuthorizedMemoryCandidates(db, runId, { purpose: 'DECISION_SUPPORT' })
   assert.deepEqual(new Set(candidates.map(({ id }) => id)), new Set([core.id, own.id, account.id]))
+  const ranked = await recallAuthorizedMemories(db, runId, { purpose: 'DECISION_SUPPORT' }, 'fixture memory')
+  assert.deepEqual(new Set(ranked.map(({ id }) => id)), new Set([core.id, own.id, account.id]))
   await assert.rejects(db.memory.create({
     data: {
       characterId: fixture.characterId, identityId: company.identityId, accountId: personal.id,
