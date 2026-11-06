@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer'
 import type { MemoryCandidate, RankedMemory } from '../contracts/memory.js'
 
+export const memoryRankingVersion = 1
+
 const wordSegmenter = new Intl.Segmenter('zh', { granularity: 'word' })
 const halfLifeDays: Record<MemoryCandidate['scope'], number> = {
   CORE: 365,

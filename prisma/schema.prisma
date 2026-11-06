@@ -190,6 +190,9 @@ model AgentRun {
   stateReason  RunStateReason? @map("state_reason")
   outboxEvents OutboxEvent[]
 
+  snapshots ContextSnapshot[]
+
+  @@unique([characterId, id])
   @@map("agent_runs")
 }
 
@@ -245,6 +248,8 @@ model Memory {
   parentMemoryId  String?  @map("parent_memory_id") @db.Uuid
   parentMemory    Memory?  @relation("MemoryDerivation", fields: [characterId, parentMemoryId], references: [characterId, id], onDelete: NoAction, onUpdate: NoAction)
   derivedMemories Memory[] @relation("MemoryDerivation")
+
+  snapshotEvidence ContextSnapshotEvidence[]
 
   @@unique([characterId, id])
   @@index([characterId, parentMemoryId])
@@ -354,4 +359,37 @@ model Conversation {
   @@unique([characterId, identityId, accountId, id, privateContactId], map: "conversations_private_recipient_key")
   @@unique([accountId, remoteKey])
   @@map("conversations")
+}
+
+model ContextSnapshot {
+  id             String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String                    @map("character_id") @db.Uuid
+  runId          String                    @map("run_id") @db.Uuid
+  purpose        MemoryPurpose
+  audienceKey    String                    @map("audience_key")
+  queryDigest    String                    @map("query_digest") @db.VarChar(64)
+  rankingVersion Int                       @map("ranking_version")
+  createdAt      DateTime                  @default(now()) @map("created_at") @db.Timestamptz
+  run            AgentRun                  @relation(fields: [characterId, runId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  evidence       ContextSnapshotEvidence[]
+
+  @@unique([characterId, id])
+  @@unique([runId, purpose, audienceKey])
+  @@map("context_snapshots")
+}
+
+model ContextSnapshotEvidence {
+  characterId     String          @map("character_id") @db.Uuid
+  snapshotId      String          @map("snapshot_id") @db.Uuid
+  memoryId        String          @map("memory_id") @db.Uuid
+  memoryRevision  Int             @map("memory_revision")
+  rank            Int
+  score           Float
+  estimatedTokens Int             @map("estimated_tokens")
+  snapshot        ContextSnapshot @relation(fields: [characterId, snapshotId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  memory          Memory          @relation(fields: [characterId, memoryId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, snapshotId, rank])
+  @@unique([characterId, snapshotId, memoryId])
+  @@map("context_snapshot_evidence")
 }

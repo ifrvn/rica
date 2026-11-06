@@ -9,6 +9,7 @@ import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories,
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
+import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'
 import { prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 
 const config = loadConfig()
@@ -78,6 +79,8 @@ after(async () => {
       const { characterId } = fixture
       await db.$transaction(async (tx) => {
         await tx.outboxEvent.deleteMany({ where: { run: { characterId } } })
+        await tx.contextSnapshotEvidence.deleteMany({ where: { characterId } })
+        await tx.contextSnapshot.deleteMany({ where: { characterId } })
         await tx.agentRun.deleteMany({ where: { characterId } })
         await tx.inboundEvent.deleteMany({ where: { characterId } })
         await tx.memoryGrant.deleteMany({ where: { characterId } })
@@ -678,4 +681,67 @@ test('a recall queued behind source revocation observes the new authorization ep
     await Promise.allSettled([blocker, revoke, recall])
     await Promise.all(clients.map(({ client }) => client.$disconnect()))
   }
+})
+
+test('snapshot capture is idempotent and replay keeps only ordered evidence references', async () => {
+  assert.ok(fixture)
+  const account = fixture.accounts[1]
+  const { memory } = await testMemory('ACCOUNT', 'PERSONAL', {
+    identityId: account.identityId, accountId: account.id,
+  })
+  const query = 'unique-snapshot-evidence'
+  await db.memory.update({ where: { id: memory.id }, data: { content: query } })
+  const runId = await preparedMemoryRun(account.id)
+  const request = { purpose: 'INTERNAL_CONTEXT' } as const
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const [first, second] = await Promise.all([
+      captureMemorySnapshot(runtime, runId, request, query),
+      captureMemorySnapshot(runtime, runId, request, query),
+    ])
+    assert.ok(first && second)
+    assert.equal(first.id, second.id)
+    assert.match(first.queryDigest, /^[0-9a-f]{64}$/)
+    assert.deepEqual(first.evidence.map(({ memoryId, memoryRevision, rank }) =>
+      ({ memoryId, memoryRevision, rank })), [{ memoryId: memory.id, memoryRevision: memory.revision, rank: 1 }])
+    assert.ok(first.evidence.every((item) => !('content' in item)))
+    await assert.rejects(captureMemorySnapshot(runtime, runId, request, 'a different query'),
+      /Memory snapshot already exists for a different query/)
+    const replay = await replayMemorySnapshot(runtime, runId, request)
+    assert.deepEqual(replay?.map(({ rank, candidate }) => [rank, candidate?.id]), [[1, memory.id]])
+    assert.equal(await runtime.contextSnapshot.count(), 0)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('replay replaces evidence with a placeholder when its grant has expired', async () => {
+  assert.ok(fixture)
+  const [company, personal] = fixture.accounts
+  const { memory } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  await db.memory.update({ where: { id: memory.id }, data: { content: 'public snapshot expiry' } })
+  const grant = await testGrant(memory.id, personal, 'PUBLIC_REFERENCE', 'snapshot-feed')
+  const runId = await preparedMemoryRun(personal.id)
+  const request = { purpose: 'PUBLIC_REFERENCE', audience: 'snapshot-feed' } as const
+  const snapshot = await captureMemorySnapshot(db, runId, request, 'public snapshot expiry')
+  assert.deepEqual(snapshot?.evidence.map(({ memoryId }) => memoryId), [memory.id])
+  await db.memoryGrant.update({
+    where: { id: grant.id }, data: { validUntil: new Date('2001-01-01T00:00:00Z') },
+  })
+  assert.deepEqual(await replayMemorySnapshot(db, runId, request), [{ rank: 1, candidate: null }])
+})
+
+test('source revocation prevents snapshot replay for the old run', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts: [, account] } = fixture
+  const { memory, source } = await testMemory('ACCOUNT', 'PERSONAL', {
+    identityId: account.identityId, accountId: account.id,
+  })
+  await db.memory.update({ where: { id: memory.id }, data: { content: 'revoked snapshot evidence' } })
+  const runId = await preparedMemoryRun(account.id)
+  const request = { purpose: 'INTERNAL_CONTEXT' } as const
+  const snapshot = await captureMemorySnapshot(db, runId, request, 'revoked snapshot evidence')
+  assert.ok(snapshot?.evidence.some(({ memoryId }) => memoryId === memory.id))
+  assert.equal(await revokeMemoryAccess(db, { kind: 'SOURCE', characterId, id: source.id }), true)
+  assert.equal(await replayMemorySnapshot(db, runId, request), null)
 })
