@@ -60,18 +60,20 @@ enum RunStateReason {
 }
 
 model Character {
-  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug              String         @unique
-  status            EntityStatus   @default(PAUSED)
-  timezone          String         @default("UTC")
-  activeCoreVersion Int?           @map("active_core_version")
-  authEpoch         Int            @default(0) @map("auth_epoch")
-  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz
-  activeCore        CoreVersion?   @relation("ActiveCore", fields: [id, activeCoreVersion], references: [characterId, version], onDelete: NoAction, onUpdate: NoAction)
-  coreVersions      CoreVersion[]  @relation("CharacterCoreVersions")
-  identities        Identity[]
-  memories          Memory[]
-  memorySources     SourceRecord[]
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                  String                 @unique
+  status                EntityStatus           @default(PAUSED)
+  timezone              String                 @default("UTC")
+  activeCoreVersion     Int?                   @map("active_core_version")
+  authEpoch             Int                    @default(0) @map("auth_epoch")
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  activeCore            CoreVersion?           @relation("ActiveCore", fields: [id, activeCoreVersion], references: [characterId, version], onDelete: NoAction, onUpdate: NoAction)
+  coreVersions          CoreVersion[]          @relation("CharacterCoreVersions")
+  identities            Identity[]
+  memories              Memory[]
+  memorySources         SourceRecord[]
+  managementMemberships ManagementMembership[]
+  managementAudit       ManagementAudit[]
 
   @@map("characters")
 }
@@ -414,4 +416,51 @@ model SimulatedDraft {
 
   @@id([characterId, runId])
   @@map("simulated_drafts")
+}
+
+enum ManagementRole {
+  ADMIN
+  OPERATOR
+  REVIEWER
+  AUDITOR
+}
+
+model ManagementMembership {
+  characterId String         @map("character_id") @db.Uuid
+  issuer      String
+  subject     String
+  role        ManagementRole
+  character   Character      @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, issuer, subject, role])
+  @@index([issuer, subject, characterId])
+  @@map("management_memberships")
+}
+
+model ManagementAudit {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId String    @map("character_id") @db.Uuid
+  actorId     String    @map("actor_id")
+  operation   String
+  targetId    String    @map("target_id") @db.Uuid
+  requestId   String    @map("request_id") @db.Uuid
+  digest      String    @db.VarChar(64)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([characterId, createdAt, id])
+  @@map("audit_log")
+}
+
+model ManagementIdempotency {
+  principalId String   @map("principal_id")
+  routeScope  String   @map("route_scope")
+  key         String
+  requestHash String   @map("request_hash") @db.VarChar(64)
+  response    Json
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz
+
+  @@id([principalId, routeScope, key])
+  @@index([expiresAt])
+  @@map("api_idempotency")
 }
