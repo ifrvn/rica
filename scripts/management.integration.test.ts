@@ -23,7 +23,7 @@ adminUrl.searchParams.set('options', '-c role=rica_admin_api')
 const management = createDatabase(adminUrl.toString())
 const issuer = 'https://identity.example.test'
 const audience = 'rica-management'
-const subjects = new Set(['admin-a', 'admin-b', 'reviewer'])
+const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
 const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
   db: management,
   creatorSubjects: ['admin-a', 'admin-b'],
@@ -808,6 +808,10 @@ test('a commitment reminder catches up once, and defer or cancel invalidates its
     const [first] = await owner.scheduleOccurrence.findMany({ where: { scheduleId } })
     assert.equal(first.scheduledAt.toISOString(), due.toISOString())
     assert.equal(await owner.outboxEvent.count({ where: { runId: first.runId, type: runQueuedEvent } }), 1)
+    const replay = await request('GET', characterPath(a) + '/runs/' + first.runId + '/replay')
+    assert.equal(replay.status, 200)
+    assert.equal(replay.body.schedule.commitmentId, id)
+    assert.equal(new Date(replay.body.schedule.scheduledAt).toISOString(), due.toISOString())
 
     const newDue = new Date(morning.getTime() + 86_400_000 + 3_600_000)
     const deferred = await request('PUT', path + '/' + id, {
@@ -837,6 +841,100 @@ test('a commitment reminder catches up once, and defer or cancel invalidates its
   }
 })
 
+
+test('run replay masks expired and revoked evidence and keeps the original trace scoped', async () => {
+  const { action, grant, proposalText } = await proposeReview(await newSimulationAccount())
+  const root = characterPath(a)
+  const path = root + '/runs/' + action.runId + '/replay'
+  const membership = await request('POST', root + '/memberships', {
+    key: 'observability-auditor', data: { subject: 'auditor', role: 'AUDITOR', action: 'GRANT', reason: 'Audit fixture' },
+  })
+  assert.equal(membership.status, 200)
+  assert.equal((await request('GET', path, { actor: null })).status, 401)
+  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+  assert.equal((await request('GET', characterPath(b) + '/runs/' + action.runId + '/replay', { actor: 'admin-b' })).status, 404)
+
+  const replay = await request('GET', path, { actor: 'auditor' })
+  assert.equal(replay.status, 200, JSON.stringify(replay.body))
+  assert.equal(replay.body.proposal.id, action.id)
+  assert.equal(replay.body.state, 'WAITING_APPROVAL')
+  assert.equal(replay.body.mode, 'SIMULATION')
+  const evidence = (response: typeof replay) => response.body.snapshots.find(
+    ({ purpose }: { purpose: string }) => purpose === 'PUBLIC_REFERENCE',
+  ).evidence
+  assert.deepEqual(evidence(replay), [{ rank: 1, available: true, memoryId: grant.memoryId, revision: 1 }])
+  assert.equal(JSON.stringify(replay.body).includes(proposalText), false)
+
+  await owner.memoryGrant.update({
+    where: { id: grant.id },
+    data: { validFrom: new Date(Date.now() - 120_000), validUntil: new Date(Date.now() - 1000) },
+  })
+  const expired = await request('GET', path, { actor: 'auditor' })
+  assert.deepEqual(evidence(expired), [{ rank: 1, available: false }])
+  assert.equal(expired.body.stateVersion, replay.body.stateVersion)
+  assert.equal(expired.body.proposal.id, action.id)
+
+  const revoked = await request('POST', root + '/memory-grants/' + grant.id + '/revoke', {
+    key: 'replay-revocation', data: { reason: 'Remove replay access' },
+  })
+  assert.equal(revoked.status, 200)
+  const after = await request('GET', path)
+  assert.deepEqual(evidence(after), [{ rank: 1, available: false }])
+  assert.equal(after.body.state, 'CANCELED')
+  assert.equal(JSON.stringify(after.body).includes(grant.memoryId), false)
+})
+
+test('monitoring reports only the current character’s backlog without triggering work', async () => {
+  const path = characterPath(a) + '/monitoring'
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  const before = await request('GET', path, { actor: 'auditor' })
+  assert.equal(before.status, 200, JSON.stringify(before.body))
+  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+  const otherBefore = await request('GET', characterPath(b) + '/monitoring', { actor: 'admin-b' })
+  assert.equal(otherBefore.status, 200)
+
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    const { action } = await approveSimulation(await newSimulationAccount())
+    await assert.rejects(executeSimulation(executor, action.id, async () => {
+      throw new Error('Outcome unknown')
+    }), /Outcome unknown/)
+    await proposeReview(await newSimulationAccount())
+    const run = await ingestSimulatedEvent(runtime, {
+      accountId: accountA, sourceKey: randomUUID(), kind: 'MENTION', occurredAt: new Date(),
+    })
+    assert.equal(run.status, 'ACCEPTED')
+    await owner.outboxEvent.updateMany({ where: { runId: run.runId }, data: { enqueuedAt: new Date() } })
+    const conversation = await scheduleConversation()
+    const created = await request('POST', characterPath(a) + '/schedules', {
+      key: 'monitoring-schedule',
+      data: {
+        scheduleKey: 'monitoring-schedule', accountId: accountA, conversationId: conversation.id,
+        zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt: new Date(Date.now() - 1000).toISOString() },
+      },
+    })
+    assert.equal(created.status, 201)
+
+    const after = await request('GET', path, { actor: 'auditor' })
+    assert.equal(after.status, 200, JSON.stringify(after.body))
+    for (const category of ['outbox', 'approvals', 'reconciliation', 'schedules']) {
+      assert.equal(after.body[category].count, before.body[category].count + 1, category)
+      assert.ok(after.body[category].oldestAt)
+    }
+    assert.equal(after.body.outbox.enqueued, before.body.outbox.enqueued + 1)
+    const otherAfter = await request('GET', characterPath(b) + '/monitoring', { actor: 'admin-b' })
+    const counts = ({ observedAt: _, ...rest }: Record<string, unknown>) => rest
+    assert.deepEqual(counts(otherAfter.body), counts(otherBefore.body))
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: run.runId } })).state, 'QUEUED')
+    assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId: created.body.id } }), 0)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
+  }
+})
+
 test('grant and account management enforce bound references and revoke access with an epoch change', async () => {
   const path = characterPath(a)
   const memory = await owner.memory.create({
@@ -862,11 +960,11 @@ test('grant and account management enforce bound references and revoke access wi
   })
   assert.equal(revoke.status, 200)
   assert.equal(revoke.body.authEpoch, grant.body.authEpoch + 1)
-  const grants = await request('GET', path + '/memory-grants')
+  const grants = await request('GET', path + '/memory-grants?limit=100')
   const savedGrant = grants.body.items.find(({ id }: { id: string }) => id === grant.body.id)
   assert.ok(savedGrant)
   assert.ok(savedGrant.revokedAt)
-  const memories = await request('GET', path + '/memories')
+  const memories = await request('GET', path + '/memories?limit=100')
   assert.equal(memories.status, 200)
   const savedMemory = memories.body.items.find(({ id }: { id: string }) => id === memory.id)
   assert.ok(savedMemory)

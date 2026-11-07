@@ -34,6 +34,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `POST /c/memberships` | ADMIN 授予或撤销当前发行者下的角色权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
+| `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
 | `GET /c/audit` | ADMIN 和 AUDITOR 读取操作元数据、摘要哈希和请求 ID。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | REVIEWER 读取模拟待办和经复核的提案预览。列表不含正文。 |
 | `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
@@ -48,3 +49,10 @@ POST 带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同
 使用 Vue 管理台的人工审批区，填入身份提供方签发的访问令牌，再选择角色。令牌仅保留在当前页面内存。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
 
 预览和决定都会复核绑定、正文摘要和授权证据。撤权或配置版本更新时，待审和已批准提案会随授权纪元变化失效。适配器或策略版本不匹配、证据过期以及正文变化时，预览会隐藏正文。提交决定时会记录失效或过期状态和审计。后台过期扫描随调度接入。迁移前生成的草稿没有审批摘要，保留为 DRAFTED。真实平台 OAuth、执行许可和回执按后续工作包交付。
+
+
+## 回放与积压
+
+运行回放返回固定的身份、账号与配置版本、时间、快照、审批和回执状态，以及存在时的计划和承诺引用。证据按快照保存时的用途和受众复核当前权限与修订。失效时只返回排名与不可用标记。回放响应采用元数据，证据正文、入站正文和草稿正文保留在各自的受控存储。
+
+监控返回 `observedAt` 和四类积压的数量及最早时间。出箱统计关联到当前角色的未消费事件，另给出其中已入队的数量。审批统计尚未过期的待审记录。对账统计未知尝试，最早时间取许可截止时间。计划统计已启用且到期的计划。没有积压时最早时间为空。两类查询均使用角色级授权，且保持运行状态。

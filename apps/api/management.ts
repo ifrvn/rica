@@ -4,6 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
+import { runReplayView, simulationBacklogView } from '../../packages/contracts/simulation-observability.js'
+import { readSimulationBacklog, replaySimulationRun } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
@@ -451,6 +453,23 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     }, (tx) => management.updateCommitment(tx, scope, commitmentId, expected, input))
     return c.json({ ...result, requestId }, 200)
   })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/runs/{runId}/replay`, security,
+    request: { params: characterParams.extend({ runId: schema.resourceId }) },
+    responses: { ...errors, 200: success(runReplayView) },
+  }), async (c) => {
+    const { characterId, runId } = c.req.valid('param')
+    return c.json(await replaySimulationRun(db, { characterId, actor: c.get('actor') }, runId), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/monitoring`, security,
+    request: { params: characterParams },
+    responses: { ...errors, 200: success(simulationBacklogView) },
+  }), async (c) => c.json(await readSimulationBacklog(
+    db, { ...c.req.valid('param'), actor: c.get('actor') },
+  ), 200))
 
   app.doc31('/openapi.json', {
     openapi: '3.1.0', info: { title: 'Rica Management API', version: '1.0.0' }, servers: [{ url: '/v1' }],
