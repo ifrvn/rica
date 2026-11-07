@@ -112,8 +112,8 @@ after(async () => {
   }
 })
 
-async function consumeRuns(runIds: string[], type = runQueuedEvent) {
-  const worker = startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl)
+async function consumeRuns(runIds: string[], type = runQueuedEvent, model = simulatedModelPlugin) {
+  const worker = startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl, model)
   try {
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
@@ -822,13 +822,20 @@ test('simulated writing discards output when a grant expires during the call', a
   assert.equal(result, null)
 })
 
-test('the worker saves one draft per run and only uses the bound public audience', async () => {
+test('platform-to-draft processing keeps decision and confidential evidence out of public writing', async () => {
   assert.ok(fixture)
   const [company, personal] = fixture.accounts
-  const { memory, source } = await testMemory('IDENTITY', 'PUBLIC', { identityId: company.identityId })
+  const owner = { identityId: company.identityId }
+  const { memory, source } = await testMemory('IDENTITY', 'PUBLIC', owner)
+  const { memory: decision } = await testMemory('IDENTITY', 'PUBLIC', owner)
+  const { memory: secret } = await testMemory('IDENTITY', 'PUBLIC', owner, 'CONFIDENTIAL')
   const messageText = 'worker audience frostgate'
   const reference = messageText + ' public evidence'
-  await db.memory.update({ where: { id: memory.id }, data: { content: reference } })
+  const decisionText = messageText + ' decision-only marker'
+  const secretText = messageText + ' confidential marker'
+  for (const [id, content] of [[memory.id, reference], [decision.id, decisionText], [secret.id, secretText]]) {
+    await db.memory.update({ where: { id }, data: { content } })
+  }
   const conversations = await Promise.all([1, 2].map(() => db.conversation.create({
     data: {
       characterId: personal.characterId, identityId: personal.identityId, accountId: personal.id,
@@ -837,23 +844,58 @@ test('the worker saves one draft per run and only uses the bound public audience
   })))
   const [allowed, other] = conversations
   await testGrant(memory.id, personal, 'PUBLIC_REFERENCE', allowed.id)
-  const event = { accountId: personal.id, kind: 'REPLY', occurredAt, messageText } as const
-  const accepted = await ingestSimulatedEvent(db, {
-    ...event, conversationId: allowed.id, sourceKey: randomUUID(),
-  })
+  await testGrant(decision.id, personal, 'DECISION_SUPPORT')
+  await testGrant(secret.id, personal, 'DECISION_SUPPORT')
+  await testGrant(secret.id, personal, 'PUBLIC_REFERENCE', allowed.id)
+
+  const ingest = createSimulatedPlatformIngress(db, ['mock-b'])
+  const platformSource = { accountId: personal.id, platform: personal.platform, instanceKey: personal.instanceKey }
+  const payload = {
+    delivery: randomUUID(), recipient: personal.remoteAccountId,
+    action: 'reply', timeMs: occurredAt.getTime(),
+    message: { conversation: allowed.remoteKey, body: messageText },
+  }
+  const accepted = await ingest(platformSource, payload)
   assert.equal(accepted.status, 'ACCEPTED')
-  const inbound = await db.agentRun.findUniqueOrThrow({
-    where: { id: accepted.runId }, include: { inboundEvent: true },
-  })
-  const retries = await Promise.all(Array.from({ length: 12 }, () => ingestSimulatedEvent(db, {
-    ...event, conversationId: other.id, sourceKey: inbound.inboundEvent.sourceKey, messageText: 'replace payload',
+  const retries = await Promise.all(Array.from({ length: 12 }, () => ingest(platformSource, {
+    ...payload, message: { conversation: other.remoteKey, body: 'replace payload' },
   })))
   assert.ok(retries.every((result) => result.status === 'DUPLICATE' && result.runId === accepted.runId))
-  const outside = await ingestSimulatedEvent(db, { ...event, conversationId: other.id, sourceKey: randomUUID() })
+  const outside = await ingest(platformSource, {
+    ...payload, delivery: randomUUID(), message: { ...payload.message, conversation: other.remoteKey },
+  })
   assert.equal(outside.status, 'ACCEPTED')
 
   const runIds = [accepted.runId, outside.runId]
-  const jobs = await consumeRuns(runIds, draftQueuedEvent)
+  const decisionInputs: string[][] = []
+  const writingInputs: string[][] = []
+  const jobs = await consumeRuns(runIds, draftQueuedEvent, {
+    ...simulatedModelPlugin,
+    implementation: {
+      async decide(input, signal) {
+        decisionInputs.push(input.evidence.map(({ content }) => content))
+        return simulatedModel.decide(input, signal)
+      },
+      async write(input, signal) {
+        writingInputs.push(input.evidence.map(({ content }) => content))
+        return simulatedModel.write(input, signal)
+      },
+    },
+  })
+  assert.deepEqual(decisionInputs, [[decisionText], [decisionText]])
+  assert.deepEqual(writingInputs.sort((a, b) => a.length - b.length), [[], [reference]])
+
+  const snapshots = await db.contextSnapshot.findMany({
+    where: { runId: { in: runIds } }, include: { evidence: true },
+  })
+  assert.equal(snapshots.length, 4)
+  for (const snapshot of snapshots) {
+    const expected: string[] = snapshot.purpose === 'DECISION_SUPPORT'
+      ? [decision.id]
+      : snapshot.runId === accepted.runId ? [memory.id] : []
+    assert.deepEqual(snapshot.evidence.map(({ memoryId }) => memoryId), expected)
+  }
+  assert.ok(!JSON.stringify(snapshots).includes(secretText))
   const runtime = testDatabaseRole('rica_runtime')
   try {
     await Promise.all(jobs.map(({ eventId }) => processSimulatedDraft(runtime, eventId)))
@@ -867,6 +909,7 @@ test('the worker saves one draft per run and only uses the bound public audience
   assert.deepEqual(drafts.find(({ runId }) => runId === accepted.runId)?.citationIds, [memory.id])
   assert.equal(drafts.find(({ runId }) => runId === accepted.runId)?.content, reference)
   assert.deepEqual(drafts.find(({ runId }) => runId === outside.runId)?.citationIds, [])
+  assert.equal(drafts.find(({ runId }) => runId === outside.runId)?.content, '收到，我会考虑这条消息。')
   const runs = await db.agentRun.findMany({
     where: { id: { in: runIds } }, include: { inboundEvent: true },
   })
@@ -971,8 +1014,23 @@ test('registered platform payloads produce separate drafts for three identities 
   const runtime = testDatabaseRole('rica_runtime')
   try {
     const ingest = createSimulatedPlatformIngress(runtime)
-    const runIds = []
-    for (const account of accounts) {
+    const expectedDrafts = new Map<string, string>()
+    const styles = [
+      { account: accounts[0], style: 'formal', expected: '感谢您的来信，我会认真考虑。' },
+      { account: accounts[1], style: 'casual', expected: '收到啦，我会看看。' },
+      { account: accounts[2], style: 'concise', expected: '收到。' },
+    ]
+    for (const { account, style, expected } of styles) {
+      await db.$transaction(async (tx) => {
+        await tx.identityVersion.create({
+          data: {
+            characterId, identityId: account.identityId, version: 2,
+            roleProfile: { writingStyle: style, privateNotes: 'host-only style fixture' },
+            actorId: fixtureKey, reason: 'Configure simulation writing style',
+          },
+        })
+        await tx.identity.update({ where: { id: account.identityId }, data: { activeVersion: 2 } })
+      })
       const conversation = await db.conversation.create({
         data: {
           characterId, identityId: account.identityId, accountId: account.id,
@@ -997,18 +1055,24 @@ test('registered platform payloads produce separate drafts for three identities 
       assert.equal(run.accountId, account.id)
       assert.equal(run.identityId, account.identityId)
       assert.equal(run.coreVersion, 1)
+      assert.equal(run.identityVersion, 2)
       assert.equal(run.inboundEvent.conversationId, conversation.id)
       assert.equal(run.inboundEvent.kind, 'MENTION')
       assert.equal(run.inboundEvent.messageText, text)
       assert.equal(run.inboundEvent.occurredAt.toISOString(), occurredAt.toISOString())
       assert.equal(run.inboundEvent.adapterId, account.platform)
       assert.equal(run.inboundEvent.adapterVersion, '1.0.0')
-      runIds.push(result.runId)
+      expectedDrafts.set(result.runId, expected)
     }
+    const runIds = [...expectedDrafts.keys()]
     await consumeRuns(runIds, draftQueuedEvent)
     const drafts = await db.simulatedDraft.findMany({ where: { runId: { in: runIds } } })
     assert.equal(drafts.length, 3)
-    assert.ok(drafts.every(({ modelId, modelVersion }) => modelId === 'simulated' && modelVersion === '1.0.0'))
+    for (const { runId, content, modelId, modelVersion } of drafts) {
+      assert.equal(content, expectedDrafts.get(runId))
+      assert.equal(modelId, 'simulated')
+      assert.equal(modelVersion, '1.1.0')
+    }
   } finally {
     await runtime.$disconnect()
   }

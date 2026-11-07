@@ -9,9 +9,18 @@ type ModelInput = Readonly<{
   evidence: readonly ModelEvidence[]
 }>
 
+const replies = {
+  neutral: { noEvidence: '收到，我会考虑这条消息。', prefix: '' },
+  formal: { noEvidence: '感谢您的来信，我会认真考虑。', prefix: '供您参考：' },
+  casual: { noEvidence: '收到啦，我会看看。', prefix: '这条或许有用：' },
+  concise: { noEvidence: '收到。', prefix: '参考：' },
+}
+
+export type WritingStyle = keyof typeof replies
+
 export type ModelProvider = Readonly<{
   decide(input: ModelInput, signal: AbortSignal): Promise<unknown>
-  write(input: ModelInput, signal: AbortSignal): Promise<unknown>
+  write(input: ModelInput & Readonly<{ style: WritingStyle }>, signal: AbortSignal): Promise<unknown>
 }>
 
 export const simulatedModel: ModelProvider = {
@@ -19,18 +28,19 @@ export const simulatedModel: ModelProvider = {
     signal.throwIfAborted()
     return text.trim() ? 'REPLY' : 'NO_OP'
   },
-  async write({ evidence }, signal) {
+  async write({ evidence, style }, signal) {
     signal.throwIfAborted()
     const [first] = evidence
+    const reply = replies[style]
     return first
-      ? { text: first.content, evidenceIds: [first.id] }
-      : { text: '收到，我会考虑这条消息。', evidenceIds: [] }
+      ? { text: reply.prefix + first.content, evidenceIds: [first.id] }
+      : { text: reply.noEvidence, evidenceIds: [] }
   },
 }
 
 export const simulatedModelPlugin: Plugin<ModelProvider> = {
   id: 'simulated',
-  version: '1.0.0',
+  version: '1.1.0',
   contractVersion: 1,
   implementation: simulatedModel,
 }

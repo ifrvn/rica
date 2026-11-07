@@ -1,4 +1,4 @@
-import type { ModelEvidence, ModelProvider } from '../runtime/model-provider.js'
+import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
 import { maxSimulatedTextLength, simulatedModel, simulatedModelPlugin } from '../runtime/model-provider.js'
 import type { Plugin } from '../runtime/plugin-registry.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
@@ -62,13 +62,20 @@ async function buildSimulatedDraft(
   if (decision === 'NO_OP') return null
   if (decision !== 'REPLY') throw new Error('Invalid simulated decision output')
 
-  const writingEvidence = await db.$transaction((tx) => readEvidence(tx, runId, writingRequest))
-  if (!writingEvidence) return null
+  const writing = await db.$transaction(async (tx) => {
+    const evidence = await readEvidence(tx, runId, writingRequest)
+    if (!evidence) return null
+    const [profile] = await tx.$queryRaw<{ style: WritingStyle | null }[]>`
+      SELECT public.rica_simulated_writing_style(${runId}::uuid) AS style
+    `
+    return profile?.style ? { evidence, style: profile.style } : null
+  })
+  if (!writing) return null
 
   // Preserve the authorized revisions independently of the objects passed to the provider.
-  const allowedRevisions = new Map(writingEvidence.map(({ id, revision }) => [id, revision]))
+  const allowedRevisions = new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
   signal.throwIfAborted()
-  const output = await provider.write({ text, evidence: writingEvidence }, signal)
+  const output = await provider.write({ text, ...writing }, signal)
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
 
