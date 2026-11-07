@@ -15,7 +15,7 @@
     "dev:worker": "tsx watch apps/worker/main.ts",
     "dev:admin": "vite --config apps/admin/vite.config.ts",
     "typecheck": "tsc -p tsconfig.server.json && vue-tsc --noEmit",
-    "test": "tsx --test apps/api/app.test.ts packages/runtime/memory-ranking.test.ts",
+    "test": "tsx --test apps/api/app.test.ts packages/runtime/memory-ranking.test.ts packages/runtime/plugin-registry.test.ts",
     "test:integration": "tsx --test scripts/inbound.integration.test.ts && tsx scripts/outbox-smoke.ts",
     "build": "vite build --config apps/admin/vite.config.ts"
   },

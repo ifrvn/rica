@@ -1,4 +1,6 @@
 import { maxSimulatedTextLength } from '../runtime/model-provider.js'
+import { registerPlugins } from '../runtime/plugin-registry.js'
+import { resolveSimulatedPlatform, type NormalizedPlatformEvent } from '../runtime/simulated-platforms.js'
 import type { InboundKind, PrismaClient } from './generated/client.js'
 import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
 
@@ -13,9 +15,36 @@ type SimulatedEvent = Readonly<{
 }>
 
 // Internal entry point for trusted simulation fixtures. Public ingress must authenticate its source.
-export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEvent) {
+export function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEvent) {
+  return storeSimulatedEvent(db, event)
+}
+
+type PlatformSource = Readonly<{ accountId: string; platform: string; instanceKey: string }>
+
+// Only trusted simulation ingress calls this entry. Platform and instance come from the host.
+export function createSimulatedPlatformIngress(db: PrismaClient, enabled = ['mock-a', 'mock-b']) {
+  const resolveAdapter = registerPlugins('enabled platform', enabled.map(resolveSimulatedPlatform))
+
+  return (source: PlatformSource, payload: unknown) => {
+    const adapter = resolveAdapter(source.platform)
+    const normalized = adapter.implementation.normalize(payload)
+    return storeSimulatedEvent(db, {
+      accountId: source.accountId, sourceKey: normalized.sourceKey, messageText: normalized.messageText,
+      kind: normalized.kind, occurredAt: normalized.occurredAt,
+    }, { platform: adapter.id, adapterVersion: adapter.version, instanceKey: source.instanceKey, normalized })
+  }
+}
+
+type RemoteScope = {
+  platform: string
+  adapterVersion: string
+  instanceKey: string
+  normalized: NormalizedPlatformEvent
+}
+
+async function storeSimulatedEvent(db: PrismaClient, event: SimulatedEvent, remote?: RemoteScope) {
   const { accountId, sourceKey, kind, occurredAt, messageText } = event
-  if (messageText !== undefined && (!event.conversationId || !messageText.trim()
+  if (messageText !== undefined && ((!remote && !event.conversationId) || !messageText.trim()
     || messageText.length > maxSimulatedTextLength || messageText.includes('\0'))) {
     throw new Error('Invalid simulated message')
   }
@@ -26,7 +55,22 @@ export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEve
   return db.$transaction(async (tx) => {
     const binding = await lockSimulatedBinding(tx, accountId)
     if (!binding) return { status: 'ACCOUNT_UNAVAILABLE' } as const
-    const context = await lockEventContext(tx, binding, event)
+    let target: { conversationId?: string | null; contactId?: string | null } = event
+    if (remote) {
+      const { remoteAccountId, remoteConversationKey, remoteContactKey } = remote.normalized
+      const [resolved] = await tx.$queryRaw<{ conversationId: string | null; contactId: string | null }[]>`
+        SELECT * FROM public.rica_resolve_simulated_event_scope(
+          ${accountId}::uuid, ${remote.platform}, ${remote.instanceKey}, ${remoteAccountId},
+          ${remoteConversationKey}, ${remoteContactKey ?? null}
+        )
+      `
+      if (!resolved) return { status: 'ACCOUNT_UNAVAILABLE' } as const
+      if (!resolved.conversationId || (remoteContactKey && !resolved.contactId)) {
+        return { status: 'CONVERSATION_UNAVAILABLE' } as const
+      }
+      target = resolved
+    }
+    const context = await lockEventContext(tx, binding, target)
     if (!context) return { status: 'CONVERSATION_UNAVAILABLE' } as const
 
     const { count } = await tx.inboundEvent.createMany({
@@ -38,6 +82,8 @@ export async function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEve
         contactId: context.contactId,
         sourceKey,
         messageText,
+        adapterId: remote?.platform,
+        adapterVersion: remote?.adapterVersion,
         kind,
         occurredAt,
       },

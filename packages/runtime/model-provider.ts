@@ -1,3 +1,5 @@
+import { registerPlugins, type Plugin } from './plugin-registry.js'
+
 export const maxSimulatedTextLength = 4_000
 
 export type ModelEvidence = Readonly<{ id: string; revision: number; content: string }>
@@ -25,3 +27,12 @@ export const simulatedModel: ModelProvider = {
       : { text: '收到，我会考虑这条消息。', evidenceIds: [] }
   },
 }
+
+export const simulatedModelPlugin: Plugin<ModelProvider> = {
+  id: 'simulated',
+  version: '1.0.0',
+  contractVersion: 1,
+  implementation: simulatedModel,
+}
+
+export const resolveModelProvider = registerPlugins('model', [simulatedModelPlugin])

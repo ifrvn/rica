@@ -157,6 +157,8 @@ model InboundEvent {
   accountId      String          @map("account_id") @db.Uuid
   sourceKey      String          @map("source_key") @db.VarChar(256)
   messageText    String?         @map("message_text")
+  adapterId      String?         @map("adapter_id")
+  adapterVersion String?         @map("adapter_version")
   kind           InboundKind
   occurredAt     DateTime        @map("occurred_at") @db.Timestamptz
   receivedAt     DateTime        @default(now()) @map("received_at") @db.Timestamptz
@@ -405,6 +407,8 @@ model SimulatedDraft {
   decisionEvidenceIds String[] @map("decision_evidence_ids") @db.Uuid
   writingEvidenceIds  String[] @map("writing_evidence_ids") @db.Uuid
   citationIds         String[] @map("citation_ids") @db.Uuid
+  modelId             String?  @map("model_id")
+  modelVersion        String?  @map("model_version")
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
   run                 AgentRun @relation(fields: [characterId, runId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
 

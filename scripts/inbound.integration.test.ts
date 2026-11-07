@@ -6,9 +6,9 @@ import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import type { MemoryPurpose, MemoryScope, MemoryVisibility } from '../packages/persistence/generated/client.js'
 import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '../packages/persistence/memory.js'
-import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
+import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
-import { simulatedModel } from '../packages/runtime/model-provider.js'
+import { simulatedModel, simulatedModelPlugin } from '../packages/runtime/model-provider.js'
 import { generateSimulatedDraft, processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'
@@ -912,13 +912,16 @@ test('revocation during private writing prevents the draft from committing', asy
     await prepareSimulatedRun(runtime, prepare.eventId)
     const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
     await processSimulatedDraft(runtime, job.eventId, {
-      ...simulatedModel,
-      async write(input, signal) {
-        assert.deepEqual(input.evidence.map(({ id }) => id), [memory.id])
-        assert.equal(await revokeMemoryAccess(admin, {
-          kind: 'SOURCE', characterId: personal.characterId, id: source.id,
-        }), true)
-        return simulatedModel.write(input, signal)
+      ...simulatedModelPlugin,
+      implementation: {
+        ...simulatedModel,
+        async write(input, signal) {
+          assert.deepEqual(input.evidence.map(({ id }) => id), [memory.id])
+          assert.equal(await revokeMemoryAccess(admin, {
+            kind: 'SOURCE', characterId: personal.characterId, id: source.id,
+          }), true)
+          return simulatedModel.write(input, signal)
+        },
       },
     })
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 0)
@@ -946,8 +949,8 @@ test('a failed drafting job stays pending and concurrent retries commit it once'
     await prepareSimulatedRun(runtime, queued.eventId)
     const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
     await assert.rejects(processSimulatedDraft(runtime, job.eventId, {
-      ...simulatedModel,
-      async write() { throw new Error('transient provider failure') },
+      ...simulatedModelPlugin,
+      implementation: { ...simulatedModel, async write() { throw new Error('transient provider failure') } },
     }), /transient provider failure/)
     assert.equal((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt, null)
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 0)
@@ -956,6 +959,85 @@ test('a failed drafting job stays pending and concurrent retries commit it once'
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 1)
     assert.equal((await db.agentRun.findUniqueOrThrow({ where: { id: result.runId } })).stateVersion, 3)
     assert.ok((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('registered platform payloads produce separate drafts for three identities on two platforms', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts } = fixture
+  await db.platformAccount.update({ where: { id: accounts[2].id }, data: { status: 'ACTIVE' } })
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const ingest = createSimulatedPlatformIngress(runtime)
+    const runIds = []
+    for (const account of accounts) {
+      const conversation = await db.conversation.create({
+        data: {
+          characterId, identityId: account.identityId, accountId: account.id,
+          channel: 'PUBLIC', remoteKey: randomUUID(),
+        },
+      })
+      const text = 'platform alpine signal'
+      const payload = account.platform === 'mock-a' ? {
+        id: 'same-delivery', account: account.remoteAccountId, thread: conversation.remoteKey,
+        kind: 'MENTION', occurredAt: occurredAt.toISOString(), text,
+      } : {
+        delivery: 'same-delivery', recipient: account.remoteAccountId, action: 'mention',
+        timeMs: occurredAt.getTime(), message: { conversation: conversation.remoteKey, body: text },
+      }
+      const source = { accountId: account.id, platform: account.platform, instanceKey: account.instanceKey }
+      const result = await ingest(source, { ...payload, accountId: accounts[0].id })
+      assert.equal(result.status, 'ACCEPTED')
+      assert.deepEqual(await ingest(source, payload), { status: 'DUPLICATE', runId: result.runId })
+      const run = await db.agentRun.findUniqueOrThrow({
+        where: { id: result.runId }, include: { inboundEvent: true },
+      })
+      assert.equal(run.accountId, account.id)
+      assert.equal(run.identityId, account.identityId)
+      assert.equal(run.coreVersion, 1)
+      assert.equal(run.inboundEvent.conversationId, conversation.id)
+      assert.equal(run.inboundEvent.kind, 'MENTION')
+      assert.equal(run.inboundEvent.messageText, text)
+      assert.equal(run.inboundEvent.occurredAt.toISOString(), occurredAt.toISOString())
+      assert.equal(run.inboundEvent.adapterId, account.platform)
+      assert.equal(run.inboundEvent.adapterVersion, '1.0.0')
+      runIds.push(result.runId)
+    }
+    await consumeRuns(runIds, draftQueuedEvent)
+    const drafts = await db.simulatedDraft.findMany({ where: { runId: { in: runIds } } })
+    assert.equal(drafts.length, 3)
+    assert.ok(drafts.every(({ modelId, modelVersion }) => modelId === 'simulated' && modelVersion === '1.0.0'))
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('platform ingress rejects mismatched source and private recipient before creating an event', async () => {
+  assert.ok(fixture)
+  const [account, otherAccount] = fixture.accounts
+  const thread = await privateThread(account)
+  const otherThread = await privateThread(account)
+  const conversation = await db.conversation.findUniqueOrThrow({ where: { id: thread.conversationId } })
+  const contact = await db.contact.findUniqueOrThrow({ where: { id: otherThread.contactId } })
+  const source = { accountId: account.id, platform: account.platform, instanceKey: account.instanceKey }
+  const payload = {
+    id: 'platform-binding-rejected', account: account.remoteAccountId, thread: conversation.remoteKey,
+    sender: contact.remoteKey, kind: 'REPLY', occurredAt: occurredAt.toISOString(), text: 'private reply',
+  }
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const ingest = createSimulatedPlatformIngress(runtime, ['mock-a'])
+    assert.throws(() => ingest({ ...source, platform: 'mock-b' }, payload), /Unknown enabled platform/)
+    assert.throws(() => ingest(source, { ...payload, occurredAt: '2026-02-31T00:00:00.000Z' }),
+      /Invalid mock-a event timestamp/)
+    assert.deepEqual(await ingest({ ...source, instanceKey: 'wrong-instance' }, payload),
+      { status: 'ACCOUNT_UNAVAILABLE' })
+    assert.deepEqual(await ingest(source, { ...payload, account: otherAccount.remoteAccountId }),
+      { status: 'ACCOUNT_UNAVAILABLE' })
+    assert.deepEqual(await ingest(source, payload), { status: 'CONVERSATION_UNAVAILABLE' })
+    assert.equal(await db.inboundEvent.count({ where: { accountId: account.id, sourceKey: payload.id } }), 0)
   } finally {
     await runtime.$disconnect()
   }

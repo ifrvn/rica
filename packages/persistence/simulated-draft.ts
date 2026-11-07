@@ -1,5 +1,6 @@
 import type { ModelEvidence, ModelProvider } from '../runtime/model-provider.js'
-import { maxSimulatedTextLength, simulatedModel } from '../runtime/model-provider.js'
+import { maxSimulatedTextLength, simulatedModel, simulatedModelPlugin } from '../runtime/model-provider.js'
+import type { Plugin } from '../runtime/plugin-registry.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { captureMemorySnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
 import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
@@ -94,7 +95,7 @@ export async function generateSimulatedDraft(
 }
 
 export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, provider: ModelProvider = simulatedModel,
+  db: PrismaClient, eventId: string, model: Plugin<ModelProvider> = simulatedModelPlugin,
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null },
@@ -114,7 +115,7 @@ export async function processSimulatedDraft(
   const signal = AbortSignal.timeout(5_000)
   const text = run.inboundEvent.messageText
   const candidate = request && text !== null
-    ? await buildSimulatedDraft(db, run.id, text, request, provider, signal)
+    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal)
     : null
 
   await db.$transaction(async (tx) => {
@@ -137,6 +138,8 @@ export async function processSimulatedDraft(
             decisionEvidenceIds: [...candidate.decisionRevisions.keys()],
             writingEvidenceIds: [...candidate.writingRevisions.keys()],
             citationIds: candidate.draft.evidenceIds,
+            modelId: model.id,
+            modelVersion: model.version,
           },
         })
       }

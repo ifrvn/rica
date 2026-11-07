@@ -4,11 +4,15 @@ import { Redis } from 'ioredis'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
+import { simulatedModelPlugin, type ModelProvider } from '../../packages/runtime/model-provider.js'
+import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 const queueName = 'character-bootstrap'
 
-export function startOutboxWorker(databaseUrl: string, redisUrl: string) {
+export function startOutboxWorker(
+  databaseUrl: string, redisUrl: string, model: Plugin<ModelProvider> = simulatedModelPlugin,
+) {
   const db = createDatabase(databaseUrl)
   const producer = new Redis(redisUrl, { maxRetriesPerRequest: 1 })
   const consumer = new Redis(redisUrl, { maxRetriesPerRequest: null })
@@ -19,7 +23,7 @@ export function startOutboxWorker(databaseUrl: string, redisUrl: string) {
       return
     }
     if (name === draftQueuedEvent) {
-      await processSimulatedDraft(db, data.eventId)
+      await processSimulatedDraft(db, data.eventId, model)
       return
     }
     if (name !== smokeEvent) throw new Error('Unknown outbox job')
