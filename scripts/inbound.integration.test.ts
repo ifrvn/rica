@@ -1110,6 +1110,45 @@ test('platform ingress rejects mismatched source and private recipient before cr
   }
 })
 
+test('ranked reads preserve normalized words and current-conversation evidence', async () => {
+  assert.ok(fixture)
+  const { characterId } = fixture
+  const [account] = fixture.accounts
+  const { id: conversationId } = await db.conversation.create({
+    data: { characterId, identityId: account.identityId, accountId: account.id, channel: 'PUBLIC', remoteKey: randomUUID() },
+  })
+  const { memory: word } = await testMemory('IDENTITY', 'PUBLIC', { identityId: account.identityId })
+  const { memory: thread } = await testMemory('IDENTITY', 'PUBLIC', { identityId: account.identityId })
+  await db.memory.update({ where: { id: word.id }, data: { content: '猫咪 ＲＩＣＡ' } })
+  await db.memory.update({ where: { id: thread.id }, data: { content: 'earlier reply', importance: 1 } })
+  const source = await db.sourceRecord.create({
+    data: {
+      characterId, identityId: account.identityId, accountId: account.id, conversationId,
+      kind: 'fixture', sourceKey: randomUUID(), classification: 'PUBLIC',
+    },
+  })
+  await db.memorySource.create({ data: { characterId, memoryId: thread.id, sourceId: source.id } })
+
+  const { memory: mixedSources } = await testMemory('IDENTITY', 'PUBLIC', { identityId: account.identityId })
+  await db.memory.update({ where: { id: mixedSources.id }, data: { content: 'Rica restricted marker', importance: 1 } })
+  const restricted = await db.sourceRecord.create({
+    data: { characterId, identityId: account.identityId, kind: 'fixture', sourceKey: randomUUID(), classification: 'RESTRICTED' },
+  })
+  await db.memorySource.create({ data: { characterId, memoryId: mixedSources.id, sourceId: restricted.id } })
+
+  const runId = await preparedMemoryRun(account.id, { conversationId })
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const request = { purpose: 'DECISION_SUPPORT' } as const
+    const ranked = await recallAuthorizedMemories(runtime, runId, request, '猫咪 Rica')
+    assert.deepEqual(new Set(ranked.map(({ id }) => id)), new Set([word.id, thread.id]))
+    const contextOnly = await recallAuthorizedMemories(runtime, runId, request, '')
+    assert.deepEqual(contextOnly.map(({ id }) => id), [thread.id])
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 test('measures authorized recall with 100000 memories and 10 concurrent runs', {
   skip: process.env.RICA_RECALL_BENCHMARK !== '1',
 }, async (t) => {

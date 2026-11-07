@@ -31,7 +31,7 @@ export async function captureMemorySnapshot(
 
     let snapshot = await findSnapshot(tx, key)
     if (!snapshot) {
-      const candidates = await readMemoryCandidates(tx, scope)
+      const candidates = await readMemoryCandidates(tx, scope, { query })
       const ranked = rankMemoryCandidates(candidates, query, new Date())
       const { count } = await tx.contextSnapshot.createMany({
         data: {
@@ -79,7 +79,9 @@ export async function replayMemorySnapshotInTransaction(
   if (!snapshot) return null
   if (snapshot.evidence.length === 0) return []
 
-  const candidates = await readMemoryCandidates(tx, scope)
+  const candidates = await readMemoryCandidates(tx, scope, {
+    memoryIds: snapshot.evidence.map(({ memoryId }) => memoryId),
+  })
   const allowed = new Map(candidates.map((candidate) => [candidate.id, candidate]))
   return snapshot.evidence.map((evidence) => {
     const candidate = allowed.get(evidence.memoryId)

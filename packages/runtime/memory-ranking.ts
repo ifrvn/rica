@@ -19,8 +19,12 @@ function words(text: string) {
     .map(({ segment }) => segment)
 }
 
+export function memoryKeywords(query: string) {
+  return [...new Set(words(query))]
+}
+
 export function rankMemoryCandidates(candidates: readonly MemoryCandidate[], query: string, now: Date): RankedMemory[] {
-  const keywords = [...new Set(words(query))]
+  const keywords = memoryKeywords(query)
   const ranked: RankedMemory[] = []
 
   for (const candidate of candidates) {

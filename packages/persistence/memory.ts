@@ -1,6 +1,6 @@
 import type { MemoryCandidate } from '../contracts/memory.js'
-import { rankMemoryCandidates } from '../runtime/memory-ranking.js'
-import type { Prisma, PrismaClient } from './generated/client.js'
+import { memoryKeywords, rankMemoryCandidates } from '../runtime/memory-ranking.js'
+import { Prisma, type PrismaClient } from './generated/client.js'
 import { bindingMatches, lockEventContext, lockSimulatedBinding } from './run-context.js'
 
 export type MemoryRequest =
@@ -47,9 +47,15 @@ export async function loadMemoryReadScope(
   }
 }
 
-export async function readMemoryCandidates(tx: Prisma.TransactionClient, scope: MemoryReadScope) {
+export async function readMemoryCandidates(
+  tx: Prisma.TransactionClient, scope: MemoryReadScope, options: { query?: string; memoryIds?: string[] } = {},
+) {
+  const keywordPatterns = options.query === undefined ? undefined : memoryKeywords(options.query)
+    .filter((word) => /^[\x00-\x7f]+$/u.test(word))
+    .map((word) => '%' + word.replace(/[\\%_]/g, '\\$&') + '%')
+  const readScope = { ...scope, keyword_patterns: keywordPatterns }
   const [original] = await tx.$queryRaw<{ role: string }[]>`SELECT current_user AS role`
-  await tx.$queryRaw`SELECT set_config('rica.memory_scope', ${JSON.stringify(scope)}, true)`
+  await tx.$queryRaw`SELECT set_config('rica.memory_scope', ${JSON.stringify(readScope)}, true)`
   await tx.$executeRaw`SET LOCAL ROLE rica_memory_reader`
   const candidates = await tx.$queryRaw<MemoryCandidate[]>`
     SELECT m.id, m.content, m.revision, m.importance, m.confidence, m.scope, m.created_at AS "createdAt",
@@ -63,6 +69,8 @@ export async function readMemoryCandidates(tx: Prisma.TransactionClient, scope: 
         )
       ) AS "sameConversation"
     FROM public.memories m
+    WHERE m.character_id = ${scope.character_id}::uuid
+    ${options.memoryIds ? Prisma.sql`AND m.id = ANY(${options.memoryIds}::uuid[])` : Prisma.empty}
     ORDER BY m.created_at, m.id
   `
   // Snapshot writes use the original runtime role. Clear the temporary memory scope first.
@@ -70,17 +78,19 @@ export async function readMemoryCandidates(tx: Prisma.TransactionClient, scope: 
   return candidates
 }
 
-export async function listAuthorizedMemoryCandidates(db: PrismaClient, runId: string, request: MemoryRequest) {
+export async function listAuthorizedMemoryCandidates(
+  db: PrismaClient, runId: string, request: MemoryRequest, query?: string,
+) {
   return db.$transaction(async (tx) => {
     const scope = await loadMemoryReadScope(tx, runId, request)
-    return scope ? readMemoryCandidates(tx, scope) : []
+    return scope ? readMemoryCandidates(tx, scope, { query }) : []
   }, { isolationLevel: 'ReadCommitted' })
 }
 
 export async function recallAuthorizedMemories(
   db: PrismaClient, runId: string, request: MemoryRequest, query: string, now = new Date(),
 ) {
-  const candidates = await listAuthorizedMemoryCandidates(db, runId, request)
+  const candidates = await listAuthorizedMemoryCandidates(db, runId, request, query)
   return rankMemoryCandidates(candidates, query, now)
 }
 
