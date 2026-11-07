@@ -340,8 +340,10 @@ SIMULATION 与 LIVE 使用不同部署凭据、队列命名空间和运行标识
 | GET /c/actions · POST /c/actions/{id}/decisions | 待办列表与审批。REVIEWER 提交 APPROVE 或 REJECT、reviewDigest、reason 及 If-Match 对应运行版本，返回新状态。 |
 | POST /c/actions/{id}/reconciliation | 有相应权限的 ADMIN 提交已送达或确认未送达的证据引用及原因。系统核验并推进对账。 |
 | GET /c/audit · GET /c/events | 对象级授权的审计列表与运行事件流。事件流用 SSE，断线后按 Last-Event-ID 续读。 |
-| GET /c/goals · POST /c/goals | 后续阶段。列出范围内目标，或创建管理员目标及预算。 |
-| POST /c/cognition/{id}/rollback | 后续阶段。ADMIN 输入 targetVersion、reason 及 If-Match，生成复核后的新版本。 |
+| GET /c/identities/{i}/reflections/{day} | ADMIN 或 AUDITOR 查看指定身份与 UTC 日的反思摘要和偏好候选引用。 |
+| GET /c/identities/{i}/goals · POST /c/identities/{i}/goals | 列出该身份的手工和自主目标。ADMIN 可配置手工目标，或在身份版本中授权自主目标的主题、期限和预算。 |
+| GET /c/accounts/{a}/automation-eligibility | ADMIN 或 AUDITOR 查看指定账号的低风险外部自动执行资格。M3 模拟阶段关闭外部 AUTO。 |
+| POST /c/identities/{i}/beliefs/{id}/restore | ADMIN 输入 restoreVersion、reason 及 If-Match，证据复核通过后追加新版本。 |
 | POST /v1/webhooks/{platform}/{routeKey} | 原始负载、平台签名和时间字段。验签后持久化。重复已接收事件返回相同语义的 2xx。 |
 
 ### HTTP 契约

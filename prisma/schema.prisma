@@ -140,6 +140,8 @@ model IdentityReflection {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
   identity         Identity @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
 
+  goals            GoalVersion[]
+
   @@id([characterId, identityId, utcDay])
   @@map("identity_reflections")
 }
@@ -198,7 +200,13 @@ model GoalVersion {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   identity    Identity @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
 
+  origin       String   @default("ADMIN")
+  topic        String?
+  reflectionDay DateTime? @map("reflection_day") @db.Date
+  reflection   IdentityReflection? @relation(fields: [characterId, identityId, reflectionDay], references: [characterId, identityId, utcDay], onDelete: Restrict, onUpdate: NoAction)
+
   @@id([characterId, identityId, goalId, version])
+  @@index([characterId, identityId, reflectionDay])
   @@map("goal_versions")
 }
 

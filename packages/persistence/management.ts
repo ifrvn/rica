@@ -354,13 +354,13 @@ export async function getCharacter(db: PrismaClient, scope: Scope) {
   })
 }
 
-const identityProfileWithoutRule = identityProfile.omit({ stateRule: true }).strip()
+const publicIdentityProfile = identityProfile.omit({ stateRule: true, autonomousGoal: true }).strip()
 
 export async function listIdentities(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
     const members = await authorize(tx, scope)
     const profile = members.some(({ role }) => role === 'ADMIN' || role === 'AUDITOR')
-      ? identityProfile.strip() : identityProfileWithoutRule
+      ? identityProfile.strip() : publicIdentityProfile
     const where = { characterId: scope.characterId }
     const args = await pageArgs(page, (id) => tx.identity.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.identity.findMany({
@@ -385,6 +385,31 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
       select: { id: true, identityId: true, platform: true, instanceKey: true, status: true, bindingVersion: true, createdAt: true },
     })
     return makePage(rows, page, ({ bindingVersion, createdAt: _, ...view }) => ({ ...view, version: bindingVersion }))
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readAutomationEligibility(db: PrismaClient, scope: Scope, accountId: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const account = await tx.platformAccount.findFirst({
+      where: { id: accountId, characterId: scope.characterId },
+      select: { id: true, identityId: true, bindingVersion: true, platform: true, status: true, identity: {
+        select: { status: true, activeVersion: true, character: { select: { status: true, activeCoreVersion: true } } },
+      } },
+    })
+    if (!account) unavailable()
+    const { identity } = account
+    const active = account.status === 'ACTIVE' && identity.status === 'ACTIVE' && identity.activeVersion !== null
+      && identity.character.status === 'ACTIVE' && identity.character.activeCoreVersion !== null
+    const simulated = account.platform === 'mock-a' || account.platform === 'mock-b'
+    return {
+      accountId: account.id, identityId: account.identityId, bindingVersion: account.bindingVersion, eligible: false,
+      reasons: [
+        ...(active ? [] : ['BINDING_INACTIVE']),
+        simulated ? 'SIMULATION_ONLY' : 'UNSUPPORTED_ADAPTER',
+        'EXTERNAL_AUTO_DISABLED',
+      ],
+    }
   }, { isolationLevel: 'RepeatableRead' })
 }
 
@@ -470,6 +495,9 @@ export async function writeManualGoal(tx: Tx, scope: Scope, identityId: string, 
   `
   if (row.status === 'MISSING') unavailable()
   if (row.status === 'STALE') throw new ManagementError(412, 'STALE_VERSION', 'Resource version has changed')
+  if (row.status === 'SELF_MANAGED') {
+    throw new ManagementError(409, 'GOAL_SELF_MANAGED', 'An autonomous goal can only be canceled')
+  }
   if (row.status === 'LIMIT') throw new ManagementError(409, 'GOAL_LIMIT', 'An identity can have at most three active goals')
   if (row.status !== 'UPDATED') throw new ManagementError(409, 'GOAL_CLOSED', 'Goal is closed or past its deadline')
   return { id: goalId, version: expected + 1 }

@@ -197,6 +197,16 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
   ), 200))
 
   app.openapi(createRoute({
+    method: 'get', path: `${character}/accounts/{accountId}/automation-eligibility`, security,
+    request: { params: characterParams.extend({ accountId: schema.resourceId }) },
+    responses: { ...errors, 200: success(schema.automationEligibilityView) },
+  }), async (c) => {
+    const { characterId, accountId } = c.req.valid('param')
+    const view = await management.readAutomationEligibility(db, { characterId, actor: c.get('actor') }, accountId)
+    return c.json(schema.automationEligibilityView.parse(view), 200)
+  })
+
+  app.openapi(createRoute({
     method: 'post', path: `${character}/accounts`, security,
     request: { params: characterParams, headers: schema.idempotencyHeader, body: body(schema.accountInput) },
     responses: { ...errors, 201: success(schema.commandResponse) },

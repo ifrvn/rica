@@ -124,6 +124,7 @@ after(async () => {
       await tx.managementAudit.deleteMany({ where })
       await tx.managementMembership.deleteMany({ where })
       await tx.memoryGrant.deleteMany({ where })
+      await tx.goalVersion.deleteMany({ where })
       await tx.identityReflection.deleteMany({ where })
       await tx.beliefEvidence.deleteMany({ where })
       await tx.beliefVersion.deleteMany({ where })
@@ -136,7 +137,6 @@ after(async () => {
       await tx.platformAccount.deleteMany({ where })
       await tx.identity.updateMany({ where, data: { status: 'PAUSED', activeVersion: null } })
       await tx.identityVersion.deleteMany({ where })
-      await tx.goalVersion.deleteMany({ where })
       await tx.identity.deleteMany({ where })
       await tx.character.updateMany({ where: { id: { in: characterIds } }, data: { status: 'PAUSED', activeCoreVersion: null } })
       await tx.coreVersion.deleteMany({ where })
@@ -226,28 +226,28 @@ async function databaseNow() {
   return clock.now.getTime()
 }
 
-async function proposeReview(accountId = accountA, contactId?: string, model = simulatedModelPlugin) {
+async function proposeReview(accountId = accountA, contactId?: string, model = simulatedModelPlugin, identityId = identityA) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(runtimeUrl.toString())
   try {
     const audience = await owner.conversation.create({
       data: {
-        characterId: a, identityId: identityA, accountId, remoteKey: randomUUID(),
+        characterId: a, identityId, accountId, remoteKey: randomUUID(),
         channel: contactId ? 'PRIVATE' : 'PUBLIC', privateContactId: contactId,
       },
     })
     const proposalText = 'unique review ' + randomUUID()
     const memory = await owner.memory.create({
-      data: { characterId: a, identityId: identityA, scope: 'IDENTITY', visibility: 'PUBLIC', content: proposalText },
+      data: { characterId: a, identityId, scope: 'IDENTITY', visibility: 'PUBLIC', content: proposalText },
     })
     const source = await owner.sourceRecord.create({
-      data: { characterId: a, identityId: identityA, kind: 'fixture', sourceKey: randomUUID(), classification: 'PUBLIC' },
+      data: { characterId: a, identityId, kind: 'fixture', sourceKey: randomUUID(), classification: 'PUBLIC' },
     })
     await owner.memorySource.create({ data: { characterId: a, memoryId: memory.id, sourceId: source.id } })
     const grant = await owner.memoryGrant.create({
       data: {
-        characterId: a, memoryId: memory.id, recipientIdentityId: identityA, recipientAccountId: accountId,
+        characterId: a, memoryId: memory.id, recipientIdentityId: identityId, recipientAccountId: accountId,
         ...(contactId
           ? { purpose: 'PRIVATE_REPLY', recipientConversationId: audience.id, recipientContactId: contactId }
           : { purpose: 'PUBLIC_REFERENCE', audience: audience.id }),
@@ -368,8 +368,8 @@ function simulationDatabase() {
   return createDatabase(simulationConnectionString())
 }
 
-async function approveSimulation(accountId = accountA, contactId?: string) {
-  const proposal = await proposeReview(accountId, contactId)
+async function approveSimulation(accountId = accountA, contactId?: string, identityId = identityA) {
+  const proposal = await proposeReview(accountId, contactId, simulatedModelPlugin, identityId)
   const response = await request('POST', actionPath(proposal.action.id) + '/decisions', {
     actor: 'reviewer', key: 'approve-' + proposal.action.id, ifMatch: '"run-v3"',
     data: { reviewDigest: proposal.action.reviewDigest, decision: 'APPROVE', reason: 'Approved simulation fixture' },
@@ -378,10 +378,10 @@ async function approveSimulation(accountId = accountA, contactId?: string) {
   return proposal
 }
 
-async function newSimulationAccount() {
+async function newSimulationAccount(identityId = identityA) {
   const account = await owner.platformAccount.create({
     data: {
-      characterId: a, identityId: identityA, status: 'ACTIVE',
+      characterId: a, identityId, status: 'ACTIVE',
       platform: 'mock-a', instanceKey: 'integration', remoteAccountId: randomUUID(),
     },
   })
@@ -1226,9 +1226,9 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
   assert.equal((await request('GET', path)).body.version, 4)
 })
 
-async function reflectionIdentity() {
+async function reflectionIdentity(roleProfile: Record<string, unknown> = {}) {
   const created = await request('POST', characterPath(a) + '/identities', {
-    key: randomUUID(), data: { slug: 'reflection-' + randomUUID(), roleProfile: {} },
+    key: randomUUID(), data: { slug: 'reflection-' + randomUUID(), roleProfile },
   })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const id: string = created.body.id
@@ -1299,6 +1299,98 @@ test('daily reflection deduplicates runs and creates only an identity-local pend
   } finally {
     await runtime.$disconnect()
   }
+})
+
+test('daily reflection plans a bounded autonomous goal only with identity permission', async () => {
+  const policy = { topic: 'REVIEW_INTERACTIONS', maxDays: 2, budget: 4 }
+  const identityId = await reflectionIdentity({ autonomousGoal: policy })
+  const disabled = await reflectionIdentity()
+  const { date, utcDay } = await reflectionDay()
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  const account = await newSimulationAccount(identityId)
+  const otherAccount = await newSimulationAccount(disabled)
+  const executor = simulationDatabase()
+  try {
+    for (const [accountId, id] of [[account, identityId], [otherAccount, disabled]]) {
+      const { action } = await approveSimulation(accountId, undefined, id)
+      await executeSimulation(executor, action.id)
+      assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: action.runId } })).state, 'SIMULATED')
+      await owner.simulationReceipt.update({ where: { actionId: action.id }, data: { createdAt: date } })
+    }
+  } finally {
+    await executor.$disconnect()
+  }
+
+  const base = characterPath(a) + '/identities/' + identityId
+  const goals = base + '/goals'
+  const manual = {
+    title: 'Manual fixture', status: 'ACTIVE', priority: 50, budget: 5, reason: 'Existing plan',
+    dueAt: new Date((await databaseNow()) + 86_400_000).toISOString(),
+  }
+  for (const key of ['existing-plan-1', 'existing-plan-2']) {
+    assert.equal((await request('POST', goals, { key, data: manual })).status, 201)
+  }
+
+  const runtimeUrl = new URL(config.databaseUrl)
+  runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
+  const runtime = createDatabase(runtimeUrl.toString())
+  try {
+    let cursor: string | null = null
+    do { cursor = await scanIdentityReflections(runtime, cursor) } while (cursor)
+  } finally {
+    await runtime.$disconnect()
+  }
+  for (const id of [identityId, disabled]) {
+    const reflection = await request('GET', reflectionPath(id, utcDay))
+    assert.equal(reflection.status, 200, JSON.stringify(reflection.body))
+    assert.equal(reflection.body.observedActivity.simulatedReceipts, 1)
+  }
+  const list = await request('GET', goals)
+  assert.equal(list.status, 200, JSON.stringify(list.body))
+  const [self] = list.body.filter(({ origin }: { origin: string }) => origin === 'SELF')
+  assert.equal(list.body.length, 3)
+  assert.equal(self.status, 'ACTIVE')
+  assert.equal(self.reflectionDay, utcDay)
+  assert.equal(self.topic, policy.topic)
+  assert.equal(self.budget, policy.budget)
+  assert.equal(Date.parse(self.dueAt) - Date.parse(self.createdAt), 2 * 86_400_000)
+  assert.ok(self.nextStep)
+  assert.deepEqual((await request('GET', characterPath(a) + '/identities/' + disabled + '/goals')).body, [])
+  assert.equal((await request('POST', goals, { key: 'fourth-goal', data: manual })).body.error.code, 'GOAL_LIMIT')
+
+  const { action } = await proposeReview(account, undefined, simulatedModelPlugin, identityId)
+  const replay = await request('GET', characterPath(a) + '/runs/' + action.runId + '/replay')
+  assert.ok(replay.body.goalRefs.some(({ id, version }: { id: string; version: number }) => id === self.id && version === 1))
+  const path = goals + '/' + self.id
+  assert.equal((await request('PUT', path, { ifMatch: '"1"', data: manual })).body.error.code, 'GOAL_SELF_MANAGED')
+
+  const revoked = await request('PUT', base, {
+    ifMatch: '"1"', data: { roleProfile: {}, reason: 'Withdraw autonomous goal permission' },
+  })
+  assert.equal(revoked.status, 200, JSON.stringify(revoked.body))
+  const canceled = await request('GET', path)
+  assert.equal(canceled.body.status, 'CANCELED')
+  assert.equal(canceled.body.version, 2)
+  assert.equal((await request('GET', path + '?revision=1')).body.status, 'ACTIVE')
+})
+
+test('external low-risk automation is assessed per account without enabling a simulator', async () => {
+  const identityId = await reflectionIdentity()
+  const active = await newSimulationAccount(identityId)
+  const paused = await newSimulationAccount(identityId)
+  await owner.platformAccount.update({ where: { id: paused }, data: { status: 'PAUSED' } })
+  const path = (id: string) => characterPath(a) + '/accounts/' + id + '/automation-eligibility'
+  assert.equal((await request('GET', path(active), { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path(active), { actor: 'admin-b' })).status, 404)
+  const activeView = await request('GET', path(active))
+  const pausedView = await request('GET', path(paused))
+  assert.equal(activeView.status, 200, JSON.stringify(activeView.body))
+  assert.deepEqual(activeView.body, {
+    accountId: active, identityId, bindingVersion: 1, eligible: false, reasons: ['SIMULATION_ONLY', 'EXTERNAL_AUTO_DISABLED'],
+  })
+  assert.equal(pausedView.status, 200, JSON.stringify(pausedView.body))
+  assert.equal(pausedView.body.eligible, false)
+  assert.deepEqual(pausedView.body.reasons, ['BINDING_INACTIVE', 'SIMULATION_ONLY', 'EXTERNAL_AUTO_DISABLED'])
 })
 
 async function beliefReviewAccount() {

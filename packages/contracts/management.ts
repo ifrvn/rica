@@ -37,6 +37,11 @@ export const identityProfile = z.strictObject({
   displayName: shortText.optional(),
   timezone: timezone.optional(),
   stateRule: stateRule.optional(),
+  autonomousGoal: z.strictObject({
+    topic: z.literal('REVIEW_INTERACTIONS'),
+    maxDays: z.number().int().min(1).max(7),
+    budget: z.number().int().min(1).max(100),
+  }).optional(),
   writingStyle: z.enum(['neutral', 'formal', 'casual', 'concise']).optional(),
 })
 export const characterInput = z.strictObject({
@@ -53,6 +58,12 @@ export const accountInput = z.strictObject({
   instanceKey: shortText,
   remoteAccountId: text,
 })
+export const automationEligibilityView = z.object({
+  accountId: resourceId, identityId: resourceId, bindingVersion: z.number().int(),
+  eligible: z.literal(false),
+  reasons: z.array(z.enum(['BINDING_INACTIVE', 'SIMULATION_ONLY', 'UNSUPPORTED_ADAPTER', 'EXTERNAL_AUTO_DISABLED'])),
+})
+
 export const controlInput = reasonInput.extend({
   scope: z.enum(['CHARACTER', 'IDENTITY', 'ACCOUNT']),
   scopeId: resourceId,
@@ -95,7 +106,8 @@ export const manualGoalInput = reasonInput.extend({
   dueAt: z.iso.datetime(), nextStep: text.optional(),
 })
 export const manualGoalView = z.object({
-  id: resourceId, identityId: resourceId, version: z.number().int(), origin: z.literal('ADMIN'),
+  id: resourceId, identityId: resourceId, version: z.number().int(), origin: z.enum(['ADMIN', 'SELF']),
+  topic: z.literal('REVIEW_INTERACTIONS').nullable(), reflectionDay: z.iso.date().nullable(),
   title: z.string(), status: goalStatus, priority: z.number().int(), budget: z.number().int(),
   dueAt: z.iso.datetime({ offset: true }), nextStep: z.string().nullable(), createdAt: z.iso.datetime({ offset: true }),
 })

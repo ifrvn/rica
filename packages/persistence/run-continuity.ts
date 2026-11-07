@@ -46,7 +46,7 @@ type Continuity = {
   nextCommitmentAt: string | null
   nextScheduleAt: string | null
   relationship: { confirmedInteractions: number; lastConfirmedAt: string | null } | null
-  goals: readonly { id: string; version: number; title: string; budget: number; priority: number; dueAt: string; nextStep: string | null }[]
+  goals: readonly { id: string; version: number; origin: 'ADMIN' | 'SELF'; title: string; budget: number; priority: number; dueAt: string; nextStep: string | null }[]
   self: {
     coreVersion: number
     name: string | null

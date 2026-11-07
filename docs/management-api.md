@@ -29,13 +29,14 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本。 |
 | `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取脱敏列表。ADMIN 登记初始暂停的模拟账号。 |
+| `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。 |
 | `GET /c/memories`、`GET /c/memory-grants` | ADMIN 读取记忆元数据和共享授权。 |
 | `GET /c/memories/{memoryId}/provenance`、`PUT /c/memories/{memoryId}/correction` | ADMIN 或 AUDITOR 读取来源与修订元数据。ADMIN 用修订号作为 If-Match 提交纠错。原授权和派生正文失效。 |
 | `POST /c/memory-grants`、`POST /c/memory-grants/{grantId}/revoke` | ADMIN 创建或撤销用途授权。公开引用绑定指定会话，私聊回复绑定确切的会话与联系人。 |
 | `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 或 AUDITOR 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
 | `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 或 AUDITOR 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
-| `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 更新状态和配置。 |
+| `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 修改手工目标或取消自主目标。 |
 | `GET /c/identities/{identityId}/reflections/{utcDay}` | ADMIN 或 AUDITOR 查看该身份指定 UTC 日的反思和候选引用。 |
 | `POST /c/identities/{identityId}/beliefs` | ADMIN 使用幂等键提交身份观点或偏好及其证据。 |
 | `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 或 AUDITOR 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
@@ -74,6 +75,14 @@ ADMIN 可在身份档案的 `roleProfile.stateRule` 配置动机和模拟情绪�
 Worker 为启用的角色和身份汇总上一完整 UTC 日。同一身份同一天只记录一次，重启或多个 Worker 同时扫描可重试。反思分别保存虚构背景存在标记、已确认模拟回执计数及未核实入站计数，并记录生成时的核心和身份版本。汇总使用计数和引用，原始消息及档案正文保留在源存储中。
 
 若该日有合格的身份级记忆，反思最多生成一条待复核的偏好，并返回其 `candidateBeliefId`。已用于自动候选的同一登记来源不会再次生成候选。来源失效时，候选按观点接口的规则隐藏内容。管理员复核时可引用其他独立来源，再按正式观点规则提交更新。
+
+## 自主目标与账号资格
+
+ADMIN 在版本化的 `roleProfile.autonomousGoal` 中配置 `topic`、`maxDays` 和 `budget`。M3 的许可主题为 `REVIEW_INTERACTIONS`，期限为 1 至 7 天，计划预算为 1 至 100 单位。省略配置时关闭自主目标生成。
+
+每日反思发现至少一条已确认的模拟互动后，可以在当前身份下生成一个 `SELF` 目标，记录反思日期和有截止时间的内部下一步。同一主题同时最多一个生效的自主目标，手工与自主目标共享每身份三个活跃名额。管理员可取消自主目标。撤回许可或收紧期限、预算时，系统会追加取消版本。运行只读取仍有效且版本相符的目标。对外动作仍经过原有提案、审批和执行流程。
+
+资格接口逐账号检查当前角色、身份和账号绑定状态、绑定版本及适配器类型。模拟账号返回 `SIMULATION_ONLY`，绑定暂停另返回 `BINDING_INACTIVE`。M3 所有账号都返回 `eligible: false` 和 `EXTERNAL_AUTO_DISABLED`。
 
 ## 模拟审批
 
