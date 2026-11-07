@@ -18,6 +18,7 @@ type Proposal = {
   state: ReviewState
   reviewDigest: string
   policyVersion: number
+  crossPlatformDuplicate: boolean
   adapterVersion: string
   proposerId: string | null
   expiresAt: Date
@@ -33,6 +34,7 @@ async function proposalRows(
   return tx.$queryRaw<Proposal[]>`
     SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest",
       a.policy_version AS "policyVersion", a.adapter_version AS "adapterVersion",
+      a.cross_platform_duplicate AS "crossPlatformDuplicate",
       a.proposer_id AS "proposerId", a.expires_at AS "expiresAt",
       r.state, r.state_version AS version
     FROM public.action_proposals a
@@ -82,7 +84,9 @@ export async function listReviewActions(
       actions.push({
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
-        reviewDigest: row.reviewDigest, riskCodes: ['HUMAN_REVIEW_REQUIRED'],
+        reviewDigest: row.reviewDigest,
+        riskCodes: row.crossPlatformDuplicate
+          ? ['HUMAN_REVIEW_REQUIRED', 'CROSS_PLATFORM_NEAR_DUPLICATE'] : ['HUMAN_REVIEW_REQUIRED'],
         content: actionId && row.proposerId !== scope.actor.id ? content : null,
       })
     }

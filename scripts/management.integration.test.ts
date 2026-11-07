@@ -1653,6 +1653,88 @@ test('approved energy is immutable and visible only within its character and UTC
   }
 })
 
+async function topicAccount(identityId: string, platform: 'mock-a' | 'mock-b', privateChannel = false) {
+  const account = await owner.platformAccount.create({
+    data: { characterId: a, identityId, status: 'ACTIVE', platform, instanceKey: 'integration', remoteAccountId: randomUUID() },
+  })
+  const contact = privateChannel ? await owner.contact.create({
+    data: { characterId: a, identityId, accountId: account.id, remoteKey: randomUUID() },
+  }) : null
+  const conversation = await owner.conversation.create({
+    data: {
+      characterId: a, identityId, accountId: account.id, remoteKey: randomUUID(),
+      channel: privateChannel ? 'PRIVATE' : 'PUBLIC', privateContactId: contact?.id,
+    },
+  })
+  return { account, conversation, contact }
+}
+
+async function prepareTopic(runtime: ReturnType<typeof createDatabase>, target: Awaited<ReturnType<typeof topicAccount>>,
+  text: string, sourceKey = randomUUID(), occurredAt = new Date(),
+) {
+  const { account, conversation, contact } = target
+  const source = {
+    accountId: account.id, platform: account.platform, instanceKey: account.instanceKey, verifiedRemoteAccountId: account.remoteAccountId,
+  }
+  const payload = account.platform === 'mock-a' ? {
+    id: sourceKey, account: account.remoteAccountId, thread: conversation.remoteKey, sender: contact?.remoteKey,
+    kind: 'POST', occurredAt: occurredAt.toISOString(), text,
+  } : {
+    delivery: sourceKey, recipient: account.remoteAccountId, action: 'post', timeMs: occurredAt.getTime(),
+    message: { conversation: conversation.remoteKey, author: contact?.remoteKey, body: text },
+  }
+  const result = await createSimulatedPlatformIngress(runtime)(source, payload)
+  assert.equal(result.status, 'ACCEPTED')
+  const runJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
+  await prepareSimulatedRun(runtime, runJob.eventId)
+  const job = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
+  return { runId: result.runId, eventId: job.eventId }
+}
+
+async function topicProposal(runtime: ReturnType<typeof createDatabase>, target: Awaited<ReturnType<typeof topicAccount>>,
+  text: string, model = simulatedModelPlugin,
+) {
+  const { runId, eventId } = await prepareTopic(runtime, target, text)
+  await processSimulatedDraft(runtime, eventId, model)
+  return owner.actionProposal.findUniqueOrThrow({ where: { runId } })
+}
+
+const duplicateReview = { similarityPercent: 75, windowHours: 2 }
+
+test('cross-platform near duplicates only flag opted-in public topics in the same identity', async () => {
+  const identityId = await reflectionIdentity({ duplicateReview })
+  const separate = await reflectionIdentity({ duplicateReview })
+  const disabled = await reflectionIdentity()
+  const first = await topicAccount(identityId, 'mock-a')
+  const second = await topicAccount(identityId, 'mock-b')
+  const privateTopic = await topicAccount(identityId, 'mock-a', true)
+  const other = await topicAccount(separate, 'mock-b')
+  const offA = await topicAccount(disabled, 'mock-a')
+  const offB = await topicAccount(disabled, 'mock-b')
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    const text = 'Regional railway maintenance begins this Friday evening.'
+    const original = await topicProposal(runtime, first, text)
+    assert.equal(original.crossPlatformDuplicate, false)
+    const near = await topicProposal(runtime, second, 'Regional railway maintenance begins this Friday evening, soon.')
+    assert.equal(near.crossPlatformDuplicate, true)
+    const preview = await request('GET', actionPath(near.id), { actor: 'reviewer' })
+    assert.equal(preview.status, 200, JSON.stringify(preview.body))
+    assert.ok(preview.body.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE'))
+    assert.equal(preview.body.target.accountId, second.account.id)
+    assert.equal(JSON.stringify(preview.body).includes(first.account.id), false)
+    assert.equal((await topicProposal(runtime, other, text)).crossPlatformDuplicate, false)
+    assert.equal((await topicProposal(runtime, offA, text)).crossPlatformDuplicate, false)
+    assert.equal((await topicProposal(runtime, offB, text)).crossPlatformDuplicate, false)
+
+    const secret = 'Private autumn gardening notes for the community workshop.'
+    assert.equal((await topicProposal(runtime, privateTopic, secret)).crossPlatformDuplicate, false)
+    assert.equal((await topicProposal(runtime, second, secret)).crossPlatformDuplicate, false)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 test('three identities on two platforms reach separate approved simulation receipts', async () => {
   const runtimeUrl = scheduleRuntimeUrl()
   const runtime = createDatabase(runtimeUrl)

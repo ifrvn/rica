@@ -354,7 +354,7 @@ export async function getCharacter(db: PrismaClient, scope: Scope) {
   })
 }
 
-const publicIdentityProfile = identityProfile.omit({ stateRule: true, autonomousGoal: true }).strip()
+const publicIdentityProfile = identityProfile.omit({ stateRule: true, autonomousGoal: true, duplicateReview: true }).strip()
 
 export async function listIdentities(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {

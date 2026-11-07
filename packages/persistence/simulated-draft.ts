@@ -160,9 +160,10 @@ export async function processSimulatedDraft(
 
     if (run.state === 'CONTEXT_READY') {
       const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
-      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; disclosure: string | null }[]>`
+      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; disclosure: string | null; crossPlatformDuplicate: boolean }[]>`
         SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
-          public.rica_simulation_disclosure(${run.id}::uuid) AS disclosure
+          public.rica_simulation_disclosure(${run.id}::uuid) AS disclosure,
+          public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
       ` : []
       const target = bound?.target ? reviewTarget.parse(bound.target) : null
       const adapterVersion = target ? resolveSimulatedPlatform(target.platform).version : null
@@ -176,8 +177,9 @@ export async function processSimulatedDraft(
       if (proposed) {
         const expiresAt = new Date(Date.now() + 86_400_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
+        const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
         const reviewDigest = createHash('sha256').update(JSON.stringify({
-          payloadHash, target, adapterVersion, expiresAt: expiresAt.toISOString(),
+          payloadHash, target, adapterVersion, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
           characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
@@ -202,7 +204,7 @@ export async function processSimulatedDraft(
         await tx.actionProposal.create({
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
-            policyVersion: simulationReviewPolicyVersion, adapterVersion, expiresAt,
+            policyVersion: simulationReviewPolicyVersion, adapterVersion, expiresAt, crossPlatformDuplicate,
           },
         })
       }

@@ -271,6 +271,7 @@ model InboundEvent {
   @@unique([accountId, sourceKey])
   @@unique([characterId, identityId, accountId, id])
   @@index([characterId, identityId, accountId, conversationId, contactId, occurredAt, id], map: "inbound_context_history_idx")
+  @@index([characterId, identityId, receivedAt, id], map: "inbound_duplicate_window_idx")
   @@map("inbound_events")
 }
 
@@ -641,6 +642,7 @@ model ActionProposal {
   payloadHash       String             @map("payload_hash") @db.VarChar(64)
   reviewDigest      String             @map("review_digest") @db.VarChar(64)
   policyVersion     Int                @map("policy_version")
+  crossPlatformDuplicate Boolean      @default(false) @map("cross_platform_duplicate")
   adapterVersion    String             @map("adapter_version")
   proposerId        String?            @map("proposer_id")
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz

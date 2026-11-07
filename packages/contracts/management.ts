@@ -37,6 +37,10 @@ export const identityProfile = z.strictObject({
   displayName: shortText.optional(),
   timezone: timezone.optional(),
   stateRule: stateRule.optional(),
+  duplicateReview: z.strictObject({
+    similarityPercent: z.number().int().min(65).max(100),
+    windowHours: z.number().int().min(1).max(168),
+  }).optional(),
   autonomousGoal: z.strictObject({
     topic: z.literal('REVIEW_INTERACTIONS'),
     maxDays: z.number().int().min(1).max(7),

@@ -84,6 +84,12 @@ ADMIN 在版本化的 `roleProfile.autonomousGoal` 中配置 `topic`、`maxDays`
 
 资格接口逐账号检查当前角色、身份和账号绑定状态、绑定版本及适配器类型。模拟账号返回 `SIMULATION_ONLY`，绑定暂停另返回 `BINDING_INACTIVE`。M3 所有账号都返回 `eligible: false` 和 `EXTERNAL_AUTO_DISABLED`。
 
+## 跨平台重复审查
+
+ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置项 `similarityPercent` 为 65 至 100，`windowHours` 为 1 至 168。省略配置时关闭。系统在该身份活跃账号的已验证公开入站之间比较不同平台的主题，最多比较 64 条。短于 12 字符的规范化文本跳过比较。算法用前 480 字符的三元字符集合计算 Jaccard 相似度。
+
+命中时审批风险码包含 `CROSS_PLATFORM_NEAR_DUPLICATE`。提示绑定当前提案，审批员只收到风险码与该提案原本获准查看的内容。比较不读取私聊，不建立账号、联系人或身份关联。
+
 ## 模拟审批
 
 使用 Vue 管理台的人工审批区，填入身份提供方签发的访问令牌，再选择角色。令牌仅保留在当前页面内存。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
