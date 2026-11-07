@@ -32,6 +32,10 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /c/memories`、`GET /c/memory-grants` | ADMIN 读取记忆元数据和共享授权。 |
 | `GET /c/memories/{memoryId}/provenance`、`PUT /c/memories/{memoryId}/correction` | ADMIN 或 AUDITOR 读取来源与修订元数据。ADMIN 用修订号作为 If-Match 提交纠错。原授权和派生正文失效。 |
 | `POST /c/memory-grants`、`POST /c/memory-grants/{grantId}/revoke` | ADMIN 创建或撤销用途授权。公开引用绑定指定会话，私聊回复绑定确切的会话与联系人。 |
+| `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 或 AUDITOR 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
+| `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 或 AUDITOR 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
+| `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 更新状态和配置。 |
+
 | `POST /c/memberships` | ADMIN 授予或撤销当前发行者下的角色权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
@@ -43,7 +47,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 
 POST 带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无令牌或令牌无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
 
-列表默认 25 条，最多 100 条。后续请求把响应的 `nextCursor` 作为 `cursor` 传回。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
+分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求把响应的 `nextCursor` 作为 `cursor` 传回。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
 
 ## 模拟审批
 

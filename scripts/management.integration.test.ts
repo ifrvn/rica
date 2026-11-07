@@ -10,6 +10,7 @@ import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory } from '../packages/persistence/memory.js'
+import { reviewTarget } from '../packages/contracts/action-review.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
@@ -128,6 +129,7 @@ after(async () => {
       await tx.platformAccount.deleteMany({ where })
       await tx.identity.updateMany({ where, data: { status: 'PAUSED', activeVersion: null } })
       await tx.identityVersion.deleteMany({ where })
+      await tx.goalVersion.deleteMany({ where })
       await tx.identity.deleteMany({ where })
       await tx.character.updateMany({ where: { id: { in: characterIds } }, data: { status: 'PAUSED', activeCoreVersion: null } })
       await tx.coreVersion.deleteMany({ where })
@@ -1044,6 +1046,104 @@ test('memory correction revokes old citations and descendants and keeps a metada
   const replay = await request('GET', characterPath(a) + '/runs/' + action.runId + '/replay')
   const evidence = replay.body.snapshots.flatMap((snapshot: { evidence: { available: boolean }[] }) => snapshot.evidence)
   assert.ok(evidence.length > 0 && evidence.every(({ available }: { available: boolean }) => !available))
+})
+
+test('explicit contact opt-out blocks an in-flight send and old approval stays blocked after release', async () => {
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  const accountId = await newSimulationAccount()
+  const otherAccountId = await newSimulationAccount()
+  const remoteKey = randomUUID()
+  const contact = await owner.contact.create({ data: { characterId: a, identityId: identityA, accountId, remoteKey } })
+  const otherContact = await owner.contact.create({
+    data: { characterId: a, identityId: identityA, accountId: otherAccountId, remoteKey },
+  })
+  const inFlight = (await approveSimulation(accountId, contact.id)).action
+  const old = (await approveSimulation(accountId, contact.id)).action
+  const independent = (await approveSimulation(otherAccountId, otherContact.id)).action
+  const target = reviewTarget.parse(inFlight.target)
+  const account = await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    const ingest = createSimulatedPlatformIngress(runtime)
+    let stopRunId: string | undefined
+    await executeSimulation(executor, inFlight.id, async (database, id) => {
+      const result = await ingest({
+        accountId, platform: account.platform, instanceKey: account.instanceKey, verifiedRemoteAccountId: account.remoteAccountId,
+      }, {
+        id: randomUUID(), account: account.remoteAccountId, thread: target.conversation, sender: remoteKey,
+        kind: 'REPLY', occurredAt: new Date().toISOString(), text: '不要联系我。',
+      })
+      assert.equal(result.status, 'ACCEPTED')
+      stopRunId = result.runId
+      return recordSimulationReceipt(database, id)
+    })
+    assert.ok(stopRunId)
+    const stopEvent = await owner.outboxEvent.findFirstOrThrow({ where: { runId: stopRunId, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, stopEvent.eventId)
+    const stopDraft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: stopRunId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, stopDraft.eventId)
+    assert.equal(await owner.actionProposal.count({ where: { runId: stopRunId } }), 0)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: inFlight.id } }), 0)
+    assert.equal((await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: inFlight.id } })).status, 'NOT_SENT')
+    const path = characterPath(a) + '/contacts/' + contact.id + '/boundary'
+    const boundary = await request('GET', path)
+    assert.equal(boundary.status, 200)
+    assert.equal(boundary.body.blocked, true)
+    assert.equal(boundary.body.version, 1)
+    assert.equal((await owner.contact.findUniqueOrThrow({ where: { id: otherContact.id } })).noContactAt, null)
+    assert.equal(await owner.managementAudit.count({ where: { targetId: contact.id, operation: 'contact.opt_out' } }), 1)
+
+    const options = { ifMatch: '"1"', data: { blocked: false, reason: 'Verified renewed consent' } }
+    assert.equal((await request('PUT', path, { ...options, actor: 'reviewer' })).status, 403)
+    assert.equal((await request('PUT', path, { ...options, ifMatch: '"0"' })).status, 412)
+    assert.equal((await request('PUT', path, options)).status, 200)
+    await executeSimulation(executor, old.id, async () => assert.fail('Old approval was revived'))
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: old.id } }), 0)
+    await executeSimulation(executor, independent.id)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: independent.id } }), 1)
+    const fresh = (await approveSimulation(accountId, contact.id)).action
+    await executeSimulation(executor, fresh.id)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: fresh.id } }), 1)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
+  }
+})
+
+test('manual goal cap is atomic and replay pins the identity version of active goals', async () => {
+  const path = characterPath(a) + '/identities/' + identityA + '/goals'
+  const data = {
+    title: 'Preserve a local activity plan', status: 'ACTIVE', budget: 2, priority: 60,
+    dueAt: new Date(Date.now() + 86_400_000).toISOString(), reason: 'Configure local simulation',
+  }
+  const results = await Promise.all(Array.from({ length: 4 }, (_, i) =>
+    request('POST', path, { key: 'm2-goal-' + i, data })))
+  assert.deepEqual(results.map(({ status }) => status).sort(), [201, 201, 201, 409])
+  const initial = await request('GET', path)
+  assert.equal(initial.status, 200)
+  assert.equal(initial.body.length, 3)
+  const id: string = initial.body[0].id
+  const goalPath = path + '/' + id
+  const foreign = characterPath(b) + '/identities/' + identityA + '/goals/' + id
+  assert.equal((await request('GET', foreign, { actor: 'admin-b' })).status, 404)
+  const otherIdentity = await owner.identity.findFirstOrThrow({ where: { characterId: a, id: { not: identityA } } })
+  assert.equal((await request('GET', characterPath(a) + '/identities/' + otherIdentity.id + '/goals/' + id)).status, 404)
+  assert.equal((await request('PUT', goalPath, { ifMatch: '"1"', data, actor: 'reviewer' })).status, 403)
+
+  const { action } = await proposeReview(await newSimulationAccount())
+  const replayPath = characterPath(a) + '/runs/' + action.runId + '/replay'
+  const replay = await request('GET', replayPath)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.body.goalRefs.length, 3)
+  assert.ok(replay.body.goalRefs.some((ref: { id: string; version: number }) => ref.id === id && ref.version === 1))
+  assert.ok(!JSON.stringify(replay.body).includes(data.title))
+  assert.equal((await request('PUT', goalPath, { ifMatch: '"1"', data: { ...data, status: 'PAUSED' } })).status, 200)
+  assert.equal((await request('GET', goalPath + '?revision=1')).body.status, 'ACTIVE')
+  assert.equal((await request('GET', goalPath)).body.status, 'PAUSED')
+  const current = await proposeReview(await newSimulationAccount())
+  const newer = await request('GET', characterPath(a) + '/runs/' + current.action.runId + '/replay')
+  assert.equal(newer.body.goalRefs.length, 2)
+  assert.deepEqual((await request('GET', replayPath)).body.goalRefs, replay.body.goalRefs)
 })
 
 test('three identities on two platforms reach separate approved simulation receipts', async () => {

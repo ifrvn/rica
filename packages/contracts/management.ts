@@ -49,6 +49,24 @@ export const membershipInput = reasonInput.extend({
   role: z.enum(['ADMIN', 'OPERATOR', 'REVIEWER', 'AUDITOR']),
   action: z.enum(['GRANT', 'REVOKE']),
 })
+const goalStatus = z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'DONE', 'CANCELED', 'EXPIRED'])
+export const manualGoalInput = reasonInput.extend({
+  title: text, status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'DONE', 'CANCELED']),
+  priority: z.number().int().min(0).max(100), budget: z.number().int().min(1).max(100),
+  dueAt: z.iso.datetime(), nextStep: text.optional(),
+})
+export const manualGoalView = z.object({
+  id: resourceId, identityId: resourceId, version: z.number().int(), origin: z.literal('ADMIN'),
+  title: z.string(), status: goalStatus, priority: z.number().int(), budget: z.number().int(),
+  dueAt: z.iso.datetime({ offset: true }), nextStep: z.string().nullable(), createdAt: z.iso.datetime({ offset: true }),
+})
+
+export const contactBoundaryInput = reasonInput.extend({ blocked: z.boolean() })
+export const contactBoundaryView = z.object({
+  id: resourceId, accountId: resourceId, version: z.number().int(), blocked: z.boolean(),
+  changedAt: z.iso.datetime({ offset: true }).nullable(), reason: z.string().nullable(),
+})
+
 export const memoryCorrectionInput = reasonInput.extend({
   content: z.string().trim().min(1).max(1500).refine((content) => !content.includes('\0')),
 })

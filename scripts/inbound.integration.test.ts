@@ -892,7 +892,7 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   assert.deepEqual(writingInputs.sort((a, b) => a.length - b.length), [[], [reference]])
 
   const snapshots = await db.contextSnapshot.findMany({
-    where: { runId: { in: runIds } }, include: { evidence: true },
+    where: { runId: { in: runIds }, purpose: { not: 'INTERNAL_CONTEXT' } }, include: { evidence: true },
   })
   assert.equal(snapshots.length, 4)
   for (const snapshot of snapshots) {
@@ -1249,7 +1249,7 @@ test('private and public prompt injection cannot switch account or leak evidence
       const draft = await db.simulatedDraft.findUniqueOrThrow({ where: { characterId_runId: { characterId, runId: id } } })
       assert.ok(draft.content?.includes(topic))
       assert.ok(!draft.content?.includes(secret) && !draft.content?.includes(credential))
-      const snapshots = await db.contextSnapshot.findMany({ where: { runId: id }, include: { evidence: true } })
+      const snapshots = await db.contextSnapshot.findMany({ where: { runId: id, purpose: { not: 'INTERNAL_CONTEXT' } }, include: { evidence: true } })
       assert.equal(snapshots.length, 2)
       assert.ok(snapshots.every(({ evidence }) => evidence.length === 1 && evidence[0].memoryId === allowed.id))
       assert.ok(!JSON.stringify(snapshots).includes(secret))
@@ -1266,13 +1266,21 @@ test('run continuity pins local time and shares only approved core facts', async
   const { characterId, accounts } = fixture
   const { memory: approved } = await testMemory('CORE', 'PUBLIC')
   const { memory: privateFact } = await testMemory('IDENTITY', 'CONFIDENTIAL', { identityId: accounts[0].identityId })
+  const identityId = accounts[0].identityId
+  const identity = await db.identity.findUniqueOrThrow({ where: { id: identityId } })
+  const version = (identity.activeVersion ?? 0) + 1
+  await db.identityVersion.create({ data: {
+    characterId, identityId, version, roleProfile: { timezone: 'America/Los_Angeles' },
+    actorId: fixtureKey, reason: 'Continuity timezone fixture',
+  } })
+  await db.identity.update({ where: { id: identityId }, data: { activeVersion: version } })
   const marker = randomUUID()
   await db.memory.update({ where: { id: privateFact.id }, data: { content: marker } })
   const runtime = testDatabaseRole('rica_runtime')
   try {
     for (const [index, account] of accounts.entries()) {
       const timezone = index === 0 ? 'America/Los_Angeles' : 'Asia/Hong_Kong'
-      await db.character.update({ where: { id: characterId }, data: { timezone } })
+      await db.character.update({ where: { id: characterId }, data: { timezone: index === 0 ? 'UTC' : timezone } })
       const runId = await preparedMemoryRun(account.id)
       await db.character.update({ where: { id: characterId }, data: { timezone: 'UTC' } })
       const draft = await generateSimulatedDraft(runtime, runId, 'continuity probe', {
@@ -1296,6 +1304,10 @@ test('run continuity pins local time and shares only approved core facts', async
         },
       })
       assert.ok(draft)
+      const selfTrace = await db.contextSnapshot.findFirstOrThrow({
+        where: { runId, purpose: 'INTERNAL_CONTEXT', audienceKey: 'self-model.v1' }, include: { evidence: true },
+      })
+      assert.ok(selfTrace.evidence.some(({ memoryId }) => memoryId === approved.id))
     }
   } finally {
     await runtime.$disconnect()

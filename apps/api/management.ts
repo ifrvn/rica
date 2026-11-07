@@ -234,6 +234,91 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
   ), 200))
 
+  const goals = `${character}/identities/{identityId}/goals` as const
+  const goalParams = identityParams.extend({ goalId: schema.resourceId })
+  const goalQuery = z.object({ revision: z.string().regex(/^[1-9][0-9]{0,8}$/).optional() })
+  const goalList = z.array(schema.manualGoalView)
+  app.openapi(createRoute({
+    method: 'get', path: goals, security, request: { params: identityParams },
+    responses: { ...errors, 200: success(goalList) },
+  }), async (c) => {
+    const { characterId, identityId } = c.req.valid('param')
+    return c.json(goalList.parse(await management.readManualGoals(db, { characterId, actor: c.get('actor') }, identityId)), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${goals}/{goalId}`, security, request: { params: goalParams, query: goalQuery },
+    responses: { ...errors, 200: success(schema.manualGoalView) },
+  }), async (c) => {
+    const { characterId, identityId, goalId } = c.req.valid('param')
+    const revision = c.req.valid('query').revision
+    const view = schema.manualGoalView.parse(await management.readManualGoals(
+      db, { characterId, actor: c.get('actor') }, identityId, goalId, revision ? Number(revision) : undefined,
+    ))
+    c.header('ETag', '"' + view.version + '"')
+    return c.json(view, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: goals, security,
+    request: { params: identityParams, headers: schema.idempotencyHeader, body: body(schema.manualGoalInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, identityId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'goal.create', targetScope: characterId + '/' + identityId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.writeManualGoal(tx, scope, identityId, randomUUID(), 0, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${goals}/{goalId}`, security,
+    request: { params: goalParams, headers: schema.versionHeader, body: body(schema.manualGoalInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, identityId, goalId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'goal.update', targetScope: characterId + '/' + identityId + '/' + goalId,
+      input: { input, expected }, requestId,
+    }, (tx) => management.writeManualGoal(tx, scope, identityId, goalId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  const contactParams = characterParams.extend({ contactId: schema.resourceId })
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/contacts/{contactId}/boundary`, security,
+    request: { params: contactParams }, responses: { ...errors, 200: success(schema.contactBoundaryView) },
+  }), async (c) => {
+    const { characterId, contactId } = c.req.valid('param')
+    const view = await management.readContactBoundary(db, { characterId, actor: c.get('actor') }, contactId)
+    c.header('ETag', '"' + view.version + '"')
+    return c.json(view, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${character}/contacts/{contactId}/boundary`, security,
+    request: { params: contactParams, headers: schema.versionHeader, body: body(schema.contactBoundaryInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, contactId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const expected = version(c.req.valid('header'))
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'contact.boundary', targetScope: characterId + '/' + contactId, input: { input, expected }, requestId,
+    }, (tx) => management.changeContactBoundary(tx, scope, contactId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
   const memoryParams = characterParams.extend({ memoryId: schema.resourceId })
   app.openapi(createRoute({
     method: 'get', path: `${character}/memories/{memoryId}/provenance`, security,

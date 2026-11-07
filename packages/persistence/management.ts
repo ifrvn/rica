@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
-import { coreProfile, identityProfile, memoryProvenanceView } from '../contracts/management.js'
+import { contactBoundaryView, coreProfile, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
@@ -381,6 +381,54 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
     })
     return makePage(rows, page, ({ bindingVersion, createdAt: _, ...view }) => ({ ...view, version: bindingVersion }))
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readManualGoals(db: PrismaClient, scope: Scope, identityId: string,
+  goalId?: string, revision?: number) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+      SELECT public.rica_read_manual_goals(${scope.characterId}::uuid, ${identityId}::uuid,
+        ${goalId ?? null}::uuid, ${revision ?? null}::int) AS view
+    `
+    if (!row?.view) unavailable()
+    return row.view
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function writeManualGoal(tx: Tx, scope: Scope, identityId: string, goalId: string, expected: number,
+  input: Input<typeof contracts.manualGoalInput>) {
+  const [row] = await tx.$queryRaw<{ status: string }[]>`
+    SELECT public.rica_write_manual_goal(${scope.characterId}::uuid, ${identityId}::uuid,
+      ${goalId}::uuid, ${expected}::int, ${JSON.stringify(input)}::jsonb, ${scope.actor.id}) AS status
+  `
+  if (row.status === 'MISSING') unavailable()
+  if (row.status === 'STALE') throw new ManagementError(412, 'STALE_VERSION', 'Resource version has changed')
+  if (row.status === 'LIMIT') throw new ManagementError(409, 'GOAL_LIMIT', 'An identity can have at most three active goals')
+  if (row.status !== 'UPDATED') throw new ManagementError(409, 'GOAL_CLOSED', 'Goal is closed or past its deadline')
+  return { id: goalId, version: expected + 1 }
+}
+
+export async function readContactBoundary(db: PrismaClient, scope: Scope, contactId: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+      SELECT public.rica_read_contact_boundary(${scope.characterId}::uuid, ${contactId}::uuid) AS view
+    `
+    if (!row?.view) unavailable()
+    return contactBoundaryView.parse(row.view)
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function changeContactBoundary(tx: Tx, scope: Scope, contactId: string, expected: number,
+  input: Input<typeof contracts.contactBoundaryInput>) {
+  const [row] = await tx.$queryRaw<{ status: string }[]>`
+    SELECT public.rica_change_contact_boundary(${scope.characterId}::uuid, ${contactId}::uuid,
+      ${expected}::int, ${input.blocked}, ${input.reason}) AS status
+  `
+  if (row.status === 'MISSING') unavailable()
+  if (row.status === 'STALE') throw new ManagementError(412, 'STALE_VERSION', 'Resource version has changed')
+  return { id: contactId, version: expected + Number(row.status === 'UPDATED') }
 }
 
 export async function readMemoryProvenance(db: PrismaClient, scope: Scope, memoryId: string) {

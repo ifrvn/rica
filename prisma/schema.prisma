@@ -119,7 +119,29 @@ model Identity {
 
   @@unique([characterId, id])
   @@unique([characterId, slug])
+  goals GoalVersion[]
+
   @@map("identities")
+}
+
+model GoalVersion {
+  characterId String   @map("character_id") @db.Uuid
+  identityId  String   @map("identity_id") @db.Uuid
+  goalId      String   @map("goal_id") @db.Uuid
+  version     Int
+  title       String
+  status      String
+  priority    Int
+  budget      Int
+  dueAt       DateTime @map("due_at") @db.Timestamptz
+  nextStep    String?  @map("next_step")
+  reason      String
+  actorId     String   @map("actor_id")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  identity    Identity @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, identityId, goalId, version])
+  @@map("goal_versions")
 }
 
 model IdentityVersion {
@@ -199,6 +221,7 @@ model AgentRun {
   mode            RunMode         @default(SIMULATION)
   state           RunState        @default(QUEUED)
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  goalRefs Json @default("[]") @map("goal_refs")
   contextTimezone String?         @map("context_timezone")
   inboundEvent    InboundEvent    @relation(fields: [characterId, identityId, accountId, inboundEventId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
   core            CoreVersion     @relation(fields: [characterId, coreVersion], references: [characterId, version], onDelete: Restrict, onUpdate: NoAction)
@@ -365,6 +388,10 @@ model Contact {
   displayLabel  String?              @map("display_label")
   createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz
   account       PlatformAccount      @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  noContactAt DateTime? @map("no_contact_at") @db.Timestamptz
+  boundaryChangedAt DateTime? @map("boundary_changed_at") @db.Timestamptz
+  boundaryVersion Int @default(0) @map("boundary_version")
+  boundaryReason String? @map("boundary_reason")
   conversations Conversation[]
   inboundEvents InboundEvent[]
   schedules     SimulationSchedule[]

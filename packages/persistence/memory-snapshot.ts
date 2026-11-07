@@ -18,6 +18,46 @@ async function findSnapshot(tx: Prisma.TransactionClient, key: ReturnType<typeof
   })
 }
 
+async function persistSnapshot(
+  tx: Prisma.TransactionClient, key: ReturnType<typeof snapshotKey>, characterId: string,
+  queryDigest: string, ranked: readonly {
+    id: string; revision: number; score: number; estimatedTokens: number
+  }[],
+) {
+  const { count } = await tx.contextSnapshot.createMany({
+    data: { ...key, characterId, queryDigest, rankingVersion: memoryRankingVersion },
+    skipDuplicates: true,
+  })
+  const snapshot = await findSnapshot(tx, key)
+  if (!snapshot) throw new Error('Memory snapshot was not persisted')
+  if (!count || !ranked.length) return snapshot
+  await tx.contextSnapshotEvidence.createMany({
+    data: ranked.map((candidate, index) => ({
+      characterId, snapshotId: snapshot.id, memoryId: candidate.id, memoryRevision: candidate.revision,
+      rank: index + 1, score: candidate.score, estimatedTokens: candidate.estimatedTokens,
+    })),
+  })
+  return findSnapshot(tx, key)
+}
+
+const selfModelSnapshot = 'self-model.v1'
+const selfModelDigest = createHash('sha256').update(selfModelSnapshot).digest('hex')
+
+export async function captureSelfModelSnapshot(tx: Prisma.TransactionClient, runId: string, characterId: string,
+  facts: readonly { id: string; revision: number; content: string }[]) {
+  await bindSnapshotRun(tx, runId)
+  const key = { runId, purpose: 'INTERNAL_CONTEXT', audienceKey: selfModelSnapshot } as const
+  let snapshot = await findSnapshot(tx, key)
+  if (!snapshot && facts.length) {
+    snapshot = await persistSnapshot(tx, key, characterId, selfModelDigest, facts.map((fact) => ({
+      ...fact, score: 1, estimatedTokens: Buffer.byteLength(fact.content, 'utf8'),
+    })))
+  }
+  const evidence = snapshot?.evidence ?? []
+  return facts.length === evidence.length && facts.every(({ id, revision }, index) =>
+    evidence[index].memoryId === id && evidence[index].memoryRevision === revision)
+}
+
 export async function captureMemorySnapshot(
   db: PrismaClient, runId: string, request: MemoryRequest, query: string,
 ) {
@@ -33,30 +73,8 @@ export async function captureMemorySnapshot(
     if (!snapshot) {
       const candidates = await readMemoryCandidates(tx, scope, { query })
       const ranked = rankMemoryCandidates(candidates, query, new Date())
-      const { count } = await tx.contextSnapshot.createMany({
-        data: {
-          ...key, characterId: scope.character_id, queryDigest, rankingVersion: memoryRankingVersion,
-        },
-        skipDuplicates: true,
-      })
-      snapshot = await findSnapshot(tx, key)
+      snapshot = await persistSnapshot(tx, key, scope.character_id, queryDigest, ranked)
       if (!snapshot) throw new Error('Memory snapshot was not persisted')
-      if (count === 1 && ranked.length > 0) {
-        const snapshotId = snapshot.id
-        await tx.contextSnapshotEvidence.createMany({
-          data: ranked.map((candidate, index) => ({
-            characterId: scope.character_id,
-            snapshotId,
-            memoryId: candidate.id,
-            memoryRevision: candidate.revision,
-            rank: index + 1,
-            score: candidate.score,
-            estimatedTokens: candidate.estimatedTokens,
-          })),
-        })
-        snapshot = await findSnapshot(tx, key)
-        if (!snapshot) throw new Error('Memory snapshot was not persisted')
-      }
     }
     if (snapshot.queryDigest !== queryDigest) throw new Error('Memory snapshot already exists for a different query')
     return snapshot
