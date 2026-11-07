@@ -27,4 +27,15 @@ export const actionDecision = reasonInput.extend({
   reviewDigest: z.string().regex(/^[0-9a-f]{64}$/),
 })
 
+const reconciliationOutcome = z.enum(['CONFIRMED', 'DEFINITELY_NOT_SENT'])
+const reconciliationEvidence = z.string().regex(/^[0-9a-f]{64}$/)
+export const reconciliationView = z.object({
+  version: z.number().int(), state: actionView.shape.state,
+  outcome: reconciliationOutcome.nullable(), evidenceRef: reconciliationEvidence.nullable(),
+})
+export const reconciliationInput = reasonInput.extend({
+  outcome: reconciliationOutcome, evidenceRef: reconciliationEvidence,
+})
+
+export type ReconciliationView = z.infer<typeof reconciliationView>
 export type ActionView = z.infer<typeof actionView>

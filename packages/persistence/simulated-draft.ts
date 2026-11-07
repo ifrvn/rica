@@ -141,18 +141,22 @@ export async function processSimulatedDraft(
 
     if (run.state === 'CONTEXT_READY') {
       const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
-      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown }[]>`
-        SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target
+      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; disclosure: string | null }[]>`
+        SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
+          public.rica_simulation_disclosure(${run.id}::uuid) AS disclosure
       ` : []
       const target = bound?.target ? reviewTarget.parse(bound.target) : null
       const adapterVersion = target ? resolveSimulatedPlatform(target.platform).version : null
       const inbound = run.inboundEvent
       const currentAdapter = inbound.adapterId === null
         || (inbound.adapterId === target?.platform && inbound.adapterVersion === adapterVersion)
-      const proposed = Boolean(accepted && target && adapterVersion && currentAdapter)
-      if (accepted && target && adapterVersion && currentAdapter) {
+      const content = accepted && bound?.disclosure
+        ? candidate.draft.text + '\n\nAI 披露：' + bound.disclosure : null
+      const proposed = accepted && target && adapterVersion && currentAdapter && content
+        && content.length <= maxSimulatedTextLength
+      if (proposed) {
         const expiresAt = new Date(Date.now() + 86_400_000)
-        const payloadHash = createHash('sha256').update(candidate.draft.text).digest('hex')
+        const payloadHash = createHash('sha256').update(content).digest('hex')
         const reviewDigest = createHash('sha256').update(JSON.stringify({
           payloadHash, target, adapterVersion, expiresAt: expiresAt.toISOString(),
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
@@ -166,7 +170,7 @@ export async function processSimulatedDraft(
           data: {
             runId: run.id,
             characterId: run.characterId,
-            content: candidate.draft.text,
+            content,
             decisionEvidenceIds: [...candidate.decisionRevisions.keys()],
             writingEvidenceIds: [...candidate.writingRevisions.keys()],
             citationIds: candidate.draft.evidenceIds,

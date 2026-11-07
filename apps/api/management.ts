@@ -3,9 +3,10 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import * as schema from '../../packages/contracts/management.js'
-import { actionDecision, actionView } from '../../packages/contracts/action-review.js'
+import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
+import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
 import { AuthenticationUnavailable, type Authenticate, type Principal } from './admin-auth.js'
 
@@ -39,12 +40,20 @@ function version(headers: z.infer<typeof schema.versionHeader>) {
   return value
 }
 
+function runVersion(header: string) {
+  const value = Number(/^"run-v([1-9][0-9]{0,9})"$/.exec(header)?.[1])
+  if (!Number.isInteger(value) || value >= 2_147_483_647) {
+    throw new management.ManagementError(422, 'INVALID_VERSION', 'Expected a quoted run version')
+  }
+  return value
+}
+
 export function createManagementApp({ db, authenticate, creatorSubjects }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
         const requestId = c.get('requestId')
-        if (result.target === 'header' && (c.req.method === 'PUT' || c.req.path.endsWith('/decisions'))
+        if (result.target === 'header' && (c.req.method === 'PUT' || /\/(decisions|reconciliation)$/.test(c.req.path))
           && c.req.header('If-Match') === undefined) {
           return c.json(error(requestId, 'VERSION_REQUIRED', 'If-Match is required'), 428)
         }
@@ -314,10 +323,7 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     const scope = { characterId, actor: c.get('actor') }
     const input = c.req.valid('json')
     const headers = c.req.valid('header')
-    const expected = Number(/^"run-v([1-9][0-9]{0,9})"$/.exec(headers['if-match'])?.[1])
-    if (!Number.isInteger(expected) || expected >= 2_147_483_647) {
-      throw new management.ManagementError(422, 'INVALID_VERSION', 'Expected a quoted run version')
-    }
+    const expected = runVersion(headers['if-match'])
     const requestId = c.get('requestId')
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'action.review', targetScope: characterId + '/' + actionId,
@@ -326,6 +332,35 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     if (result.status === 'CANCELED' || result.status === 'EXPIRED') {
       return c.json(error(requestId, 'STALE_REVIEW', 'Proposal is no longer eligible for review'), 409)
     }
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/actions/{actionId}/reconciliation`, security,
+    request: { params: actionParams },
+    responses: { ...errors, 200: success(reconciliationView) },
+  }), async (c) => {
+    const { characterId, actionId } = c.req.valid('param')
+    const result = await readSimulationReconciliation(db, { characterId, actor: c.get('actor') }, actionId)
+    c.header('ETag', `"run-v${result.version}"`)
+    return c.json(result, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/actions/{actionId}/reconciliation`, security,
+    request: { params: actionParams, headers: schema.idempotencyHeader.merge(schema.versionHeader), body: body(reconciliationInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, actionId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const headers = c.req.valid('header')
+    const expected = runVersion(headers['if-match'])
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'simulation.resolve', targetScope: characterId + '/' + actionId,
+      input: { input, expected }, requestId, key: headers['idempotency-key'],
+    }, (tx) => resolveSimulationReconciliation(tx, scope, actionId, expected, input))
     return c.json({ ...result, requestId }, 200)
   })
 

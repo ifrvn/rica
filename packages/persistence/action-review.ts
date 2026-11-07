@@ -4,7 +4,7 @@ import { resolveSimulatedPlatform } from '../runtime/simulated-platforms.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
 
-export const simulationReviewPolicyVersion = 1
+export const simulationReviewPolicyVersion = 2
 
 const reviewStates = [
   'WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED',

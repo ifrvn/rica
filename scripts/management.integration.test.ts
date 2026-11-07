@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { after, before, test } from 'node:test'
 import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
@@ -113,6 +115,7 @@ after(async () => {
       await tx.memory.deleteMany({ where })
       await tx.sourceRecord.deleteMany({ where })
       await tx.conversation.deleteMany({ where })
+      await tx.contact.deleteMany({ where })
       await tx.platformAccount.deleteMany({ where })
       await tx.identity.updateMany({ where, data: { status: 'PAUSED', activeVersion: null } })
       await tx.identityVersion.deleteMany({ where })
@@ -199,13 +202,16 @@ test('management commands reject stale updates and commit idempotency and audit 
 })
 
 
-async function proposeReview(accountId = accountA) {
+async function proposeReview(accountId = accountA, contactId?: string) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(runtimeUrl.toString())
   try {
     const audience = await owner.conversation.create({
-      data: { characterId: a, identityId: identityA, accountId, remoteKey: randomUUID(), channel: 'PUBLIC' },
+      data: {
+        characterId: a, identityId: identityA, accountId, remoteKey: randomUUID(),
+        channel: contactId ? 'PRIVATE' : 'PUBLIC', privateContactId: contactId,
+      },
     })
     const proposalText = 'unique review ' + randomUUID()
     const memory = await owner.memory.create({
@@ -218,12 +224,15 @@ async function proposeReview(accountId = accountA) {
     const grant = await owner.memoryGrant.create({
       data: {
         characterId: a, memoryId: memory.id, recipientIdentityId: identityA, recipientAccountId: accountId,
-        audience: audience.id, purpose: 'PUBLIC_REFERENCE', validFrom: new Date(Date.now() - 1000),
+        ...(contactId
+          ? { purpose: 'PRIVATE_REPLY', recipientConversationId: audience.id, recipientContactId: contactId }
+          : { purpose: 'PUBLIC_REFERENCE', audience: audience.id }),
+        validFrom: new Date(Date.now() - 1000),
         validUntil: new Date(Date.now() + 120_000), approvedBy: 'fixture', reason: 'Review fixture',
       },
     })
     const result = await ingestSimulatedEvent(runtime, {
-      accountId, conversationId: audience.id, sourceKey: randomUUID(), kind: 'REPLY',
+      accountId, conversationId: audience.id, contactId, sourceKey: randomUUID(), kind: 'REPLY',
       occurredAt: new Date(), messageText: proposalText,
     })
     assert.equal(result.status, 'ACCEPTED')
@@ -256,7 +265,7 @@ test('only a reviewer can see the draft and concurrent approval has one effect',
   const preview = await request('GET', path, { actor: 'reviewer' })
   assert.equal(preview.status, 200, JSON.stringify(preview.body))
   assert.equal(preview.body.target.accountId, accountA)
-  assert.equal(preview.body.content, '供您参考：' + proposalText)
+  assert.equal(preview.body.content, '供您参考：' + proposalText + '\n\nAI 披露：AI role, version two')
   const ifMatch = preview.headers.get('etag') ?? ''
   const data = { reviewDigest: action.reviewDigest, decision: 'APPROVE', reason: 'Check target and content' }
   const submit = (key: string, body = data, version = ifMatch) =>
@@ -324,14 +333,18 @@ test('review rechecks evidence expiry and adapter version, and records a valid r
 })
 
 
-function simulationDatabase() {
+function simulationConnectionString() {
   const url = new URL(config.databaseUrl)
   url.searchParams.set('options', '-c role=rica_simulation_executor')
-  return createDatabase(url.toString())
+  return url.toString()
 }
 
-async function approveSimulation(accountId = accountA) {
-  const proposal = await proposeReview(accountId)
+function simulationDatabase() {
+  return createDatabase(simulationConnectionString())
+}
+
+async function approveSimulation(accountId = accountA, contactId?: string) {
+  const proposal = await proposeReview(accountId, contactId)
   const response = await request('POST', actionPath(proposal.action.id) + '/decisions', {
     actor: 'reviewer', key: 'approve-' + proposal.action.id, ifMatch: '"run-v3"',
     data: { reviewDigest: proposal.action.reviewDigest, decision: 'APPROVE', reason: 'Approved simulation fixture' },
@@ -371,6 +384,18 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     assert.equal(await reserveSimulation(executor, stale.action.id), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: stale.action.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: stale.action.id } }), 0)
+
+    // A matching payload hash is insufficient if the approved content omits the authoritative disclosure.
+    const undisclosed = await approveSimulation(await newSimulationAccount())
+    const content = 'Previously approved content without disclosure'
+    await owner.simulatedDraft.update({
+      where: { characterId_runId: { characterId: a, runId: undisclosed.action.runId } }, data: { content },
+    })
+    await owner.actionProposal.update({
+      where: { id: undisclosed.action.id }, data: { payloadHash: createHash('sha256').update(content).digest('hex') },
+    })
+    assert.equal(await reserveSimulation(executor, undisclosed.action.id), false)
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: undisclosed.action.id } }), 0)
 
     const paused = await approveSimulation(await newSimulationAccount())
     await executeSimulation(executor, paused.action.id, async (db, id) => {
@@ -418,16 +443,73 @@ test('duplicate delivery uses one local receipt and the daily reservation cannot
   }
 })
 
-test('restart recovers existing receipts and keeps unknown attempts blocked from redispatch', async () => {
+test('simulation rate limits the same contact across conversations for a rolling hour', async () => {
+  const executor = simulationDatabase()
+  try {
+    const accountId = await newSimulationAccount()
+    async function contact() {
+      return (await owner.contact.create({
+        data: { characterId: a, identityId: identityA, accountId, remoteKey: randomUUID() },
+      })).id
+    }
+    const firstContact = await contact()
+    const first = (await approveSimulation(accountId, firstContact)).action
+    const second = (await approveSimulation(accountId, firstContact)).action
+    const other = (await approveSimulation(accountId, await contact())).action
+    await executeSimulation(executor, first.id)
+    await executeSimulation(executor, second.id)
+    await executeSimulation(executor, other.id)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [first.id, other.id] } } }), 2)
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: second.id } }), 0)
+
+    await owner.simulationReceipt.update({
+      where: { actionId: first.id }, data: { createdAt: new Date(Date.now() - 3_601_000) },
+    })
+    await executeSimulation(executor, second.id)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: second.id } }), 1)
+  } finally {
+    await executor.$disconnect()
+  }
+})
+
+async function crashSimulationProcess(actionId: string, checkpoint: 'permit' | 'receipt') {
+  const program = `
+    import { createDatabase } from './packages/persistence/client.ts'
+    import { reserveSimulation, recordSimulationReceipt } from './packages/persistence/simulation-execution.ts'
+    const [id, phase] = process.argv.slice(1)
+    const db = createDatabase(process.env.RICA_TEST_SIMULATION_URL)
+    if (!await reserveSimulation(db, id)) throw new Error('Permit was not issued')
+    if (phase === 'receipt' && !await recordSimulationReceipt(db, id)) throw new Error('Receipt was not written')
+    process.send(phase)
+    process.on('message', () => {})
+  `
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', program, actionId, checkpoint], {
+    env: { ...process.env, RICA_TEST_SIMULATION_URL: simulationConnectionString() },
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    windowsHide: true,
+  })
+  const closed = once(child, 'close')
+  try {
+    const [message] = await Promise.race([
+      once(child, 'message', { signal: AbortSignal.timeout(10_000) }),
+      closed.then(() => { throw new Error('Simulation process exited before the checkpoint') }),
+    ])
+    assert.equal(message, checkpoint)
+  } finally {
+    child.kill('SIGKILL')
+    await closed
+  }
+}
+
+test('restart recovers receipts and only evidence-backed manual resolution releases an unknown attempt', async () => {
   const executor = simulationDatabase()
   try {
     const unknownAccount = await newSimulationAccount()
     const lost = (await approveSimulation(unknownAccount)).action
     const waiting = (await approveSimulation(unknownAccount)).action
     const recorded = (await approveSimulation(await newSimulationAccount())).action
-    assert.equal(await reserveSimulation(executor, lost.id), true)
-    assert.equal(await reserveSimulation(executor, recorded.id), true)
-    await recordSimulationReceipt(executor, recorded.id)
+    await crashSimulationProcess(lost.id, 'permit')
+    await crashSimulationProcess(recorded.id, 'receipt')
 
     const expired = new Date(Date.now() - 1000)
     await owner.simulationAttempt.updateMany({
@@ -440,6 +522,44 @@ test('restart recovers existing receipts and keeps unknown attempts blocked from
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: waiting.runId } })).state, 'READY')
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [lost.id, waiting.id] } } }), 0)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: recorded.id } }), 1)
+
+    const path = actionPath(lost.id) + '/reconciliation'
+    assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+    const pending = await request('GET', path)
+    assert.equal(pending.body.evidenceRef, null)
+    assert.equal((await request('POST', path, {
+      key: 'resolve-prematurely', ifMatch: pending.headers.get('etag') ?? '',
+      data: { outcome: 'DEFINITELY_NOT_SENT', evidenceRef: '0'.repeat(64), reason: 'Too early' },
+    })).status, 409)
+
+    await owner.simulationAttempt.update({
+      where: { actionId: lost.id }, data: { permitUntil: new Date(Date.now() - 16 * 60_000) },
+    })
+    const review = await request('GET', path)
+    assert.equal(review.status, 200)
+    assert.equal(review.body.outcome, 'DEFINITELY_NOT_SENT')
+    const ifMatch = review.headers.get('etag') ?? ''
+    const decision = {
+      outcome: review.body.outcome, evidenceRef: review.body.evidenceRef, reason: 'Checked sealed local ledger',
+    }
+    assert.equal((await request('POST', path, {
+      key: 'forged-evidence', ifMatch, data: { ...decision, outcome: 'CONFIRMED' },
+    })).status, 409)
+    const resolved = await request('POST', path, { key: 'correct-resolution', ifMatch, data: decision })
+    assert.equal(resolved.status, 200, JSON.stringify(resolved.body))
+    assert.equal(resolved.body.status, 'BLOCKED')
+    assert.equal((await request('POST', path, { key: 'correct-resolution', ifMatch, data: decision })).status, 200)
+    assert.equal(await owner.managementAudit.count({ where: { targetId: lost.id, operation: 'simulation.resolve' } }), 1)
+    const attempt = await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: lost.id } })
+    assert.equal(attempt.status, 'NOT_SENT')
+    assert.equal(attempt.resolutionEvidence, decision.evidenceRef)
+    assert.equal(attempt.resolutionReason, decision.reason)
+    await assert.rejects(executor.simulationAttempt.findMany({ select: { resolutionReason: true } }), /permission denied/i)
+
+    await runSimulationBatch(executor, null)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: waiting.id } }), 1)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: lost.id } }), 0)
   } finally {
     await executor.$disconnect()
   }

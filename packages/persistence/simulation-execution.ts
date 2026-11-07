@@ -98,10 +98,24 @@ export async function reserveSimulation(db: PrismaClient, actionId: string) {
     })
     if (reserved >= dailyLimit) return false
 
+    if (target.contactId) {
+      const [recent] = await tx.$queryRaw<{ occupied: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1 FROM public.simulation_attempts s
+          LEFT JOIN public.simulation_receipts r ON (r.character_id, r.action_id) = (s.character_id, s.action_id)
+          WHERE s.account_id = ${action.accountId}::uuid AND s.contact_id = ${target.contactId}::uuid
+            AND s.status <> 'NOT_SENT'
+            AND COALESCE(r.created_at, s.permit_until) > statement_timestamp() - interval '1 hour'
+        ) AS occupied
+      `
+      if (recent?.occupied) return false
+    }
+
     // The attempt itself is the durable quota reservation. Unknown results keep their unit.
     await tx.simulationAttempt.create({
+      select: { actionId: true },
       data: {
-        actionId, characterId: action.characterId, accountId: action.accountId,
+        actionId, characterId: action.characterId, accountId: action.accountId, contactId: target.contactId,
         windowStart: clock.windowStart,
         permitUntil: new Date(Math.min(now.getTime() + permitDurationMs, action.expiresAt.getTime(), approval.expiresAt.getTime())),
       },
@@ -129,17 +143,19 @@ export async function reconcileSimulation(
     await lockBudgetClock(tx, initial.characterId)
     const action = await candidate(tx, actionId)
     if (!action || (action.state !== 'EXECUTING' && action.state !== 'RECONCILING')) return
-    const attempt = await tx.simulationAttempt.findUniqueOrThrow({ where: { actionId } })
+    const attempt = await tx.simulationAttempt.findUniqueOrThrow({
+      where: { actionId }, select: { status: true, permitUntil: true },
+    })
     const receipt = await tx.simulationReceipt.findUnique({ where: { actionId }, select: { actionId: true } })
 
     if (receipt) {
-      await tx.simulationAttempt.update({ where: { actionId }, data: { status: 'CONFIRMED' } })
+      await tx.simulationAttempt.update({ where: { actionId }, select: { actionId: true }, data: { status: 'CONFIRMED' } })
       await transition(tx, action, 'SIMULATED')
     } else if (outcome === 'NOT_SENT') {
-      await tx.simulationAttempt.update({ where: { actionId }, data: { status: 'NOT_SENT' } })
+      await tx.simulationAttempt.update({ where: { actionId }, select: { actionId: true }, data: { status: 'NOT_SENT' } })
       await transition(tx, action, 'BLOCKED')
     } else if (attempt.status === 'PERMITTED' && (outcome === 'UNKNOWN' || attempt.permitUntil <= new Date())) {
-      await tx.simulationAttempt.update({ where: { actionId }, data: { status: 'UNKNOWN' } })
+      await tx.simulationAttempt.update({ where: { actionId }, select: { actionId: true }, data: { status: 'UNKNOWN' } })
       await transition(tx, action, 'RECONCILING')
     }
   })

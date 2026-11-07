@@ -524,18 +524,23 @@ enum SimulationAttemptStatus {
 }
 
 model SimulationAttempt {
-  actionId    String                  @id @map("action_id") @db.Uuid
-  characterId String                  @map("character_id") @db.Uuid
-  accountId   String                  @map("account_id") @db.Uuid
-  status      SimulationAttemptStatus @default(PERMITTED)
-  windowStart DateTime                @map("window_start") @db.Timestamptz
-  permitUntil DateTime                @map("permit_until") @db.Timestamptz
-  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz
-  action      ActionProposal          @relation(fields: [characterId, actionId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
-  receipt     SimulationReceipt?
+  actionId           String                  @id @map("action_id") @db.Uuid
+  characterId        String                  @map("character_id") @db.Uuid
+  accountId          String                  @map("account_id") @db.Uuid
+  contactId          String?                 @map("contact_id") @db.Uuid
+  resolvedBy         String?                 @map("resolved_by")
+  resolutionReason   String?                 @map("resolution_reason")
+  resolutionEvidence String?                 @map("resolution_evidence")
+  status             SimulationAttemptStatus @default(PERMITTED)
+  windowStart        DateTime                @map("window_start") @db.Timestamptz
+  permitUntil        DateTime                @map("permit_until") @db.Timestamptz
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz
+  action             ActionProposal          @relation(fields: [characterId, actionId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  receipt            SimulationReceipt?
 
   @@unique([characterId, actionId])
   @@index([accountId, windowStart])
+  @@index([accountId, contactId, permitUntil])
   @@index([status, permitUntil])
   @@map("simulation_attempts")
 }
