@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto'
+import { reviewTarget } from '../contracts/action-review.js'
+import { resolveSimulatedPlatform } from '../runtime/simulated-platforms.js'
+import { simulationReviewPolicyVersion } from './action-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
 import { maxSimulatedTextLength, simulatedModel, simulatedModelPlugin } from '../runtime/model-provider.js'
 import type { Plugin } from '../runtime/plugin-registry.js'
@@ -106,7 +110,9 @@ export async function processSimulatedDraft(
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null },
-    include: { run: { include: { inboundEvent: { select: { messageText: true } } } } },
+    include: {
+      run: { include: { inboundEvent: { select: { messageText: true, adapterId: true, adapterVersion: true } } } },
+    },
   })
   const run = event?.run
   if (!run) return
@@ -135,7 +141,26 @@ export async function processSimulatedDraft(
 
     if (run.state === 'CONTEXT_READY') {
       const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
-      if (accepted) {
+      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown }[]>`
+        SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target
+      ` : []
+      const target = bound?.target ? reviewTarget.parse(bound.target) : null
+      const adapterVersion = target ? resolveSimulatedPlatform(target.platform).version : null
+      const inbound = run.inboundEvent
+      const currentAdapter = inbound.adapterId === null
+        || (inbound.adapterId === target?.platform && inbound.adapterVersion === adapterVersion)
+      const proposed = Boolean(accepted && target && adapterVersion && currentAdapter)
+      if (accepted && target && adapterVersion && currentAdapter) {
+        const expiresAt = new Date(Date.now() + 86_400_000)
+        const payloadHash = createHash('sha256').update(candidate.draft.text).digest('hex')
+        const reviewDigest = createHash('sha256').update(JSON.stringify({
+          payloadHash, target, adapterVersion, expiresAt: expiresAt.toISOString(),
+          kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
+          characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
+          identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
+          decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
+          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion: model.version,
+        })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({
           data: {
@@ -149,12 +174,18 @@ export async function processSimulatedDraft(
             modelVersion: model.version,
           },
         })
+        await tx.actionProposal.create({
+          data: {
+            characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
+            policyVersion: simulationReviewPolicyVersion, adapterVersion, expiresAt,
+          },
+        })
       }
       const { count } = await tx.agentRun.updateMany({
         where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
         data: {
-          state: accepted ? 'DRAFTED' : 'CANCELED',
-          stateReason: accepted ? null : 'DRAFT_UNAVAILABLE',
+          state: proposed ? 'WAITING_APPROVAL' : 'CANCELED',
+          stateReason: proposed ? null : 'DRAFT_UNAVAILABLE',
           stateVersion: { increment: 1 },
         },
       })

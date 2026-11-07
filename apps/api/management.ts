@@ -3,6 +3,8 @@ import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import * as schema from '../../packages/contracts/management.js'
+import { actionDecision, actionView } from '../../packages/contracts/action-review.js'
+import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
 import { AuthenticationUnavailable, type Authenticate, type Principal } from './admin-auth.js'
@@ -21,6 +23,7 @@ const character = '/characters/{characterId}' as const
 const characterParams = z.object({ characterId: schema.resourceId })
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
 const grantParams = characterParams.extend({ grantId: schema.resourceId })
+const actionParams = characterParams.extend({ actionId: schema.resourceId })
 
 function error(requestId: string, code: string, message: string) {
   return { error: { requestId, code, message } }
@@ -41,7 +44,8 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     defaultHook: (result, c) => {
       if (!result.success) {
         const requestId = c.get('requestId')
-        if (result.target === 'header' && c.req.method === 'PUT' && c.req.header('If-Match') === undefined) {
+        if (result.target === 'header' && (c.req.method === 'PUT' || c.req.path.endsWith('/decisions'))
+          && c.req.header('If-Match') === undefined) {
           return c.json(error(requestId, 'VERSION_REQUIRED', 'If-Match is required'), 428)
         }
         return c.json(error(requestId, 'INVALID_INPUT', 'Request fields are invalid'), 422)
@@ -276,6 +280,52 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
       ...scope, operation: 'membership.change',
       targetScope: scope.characterId, input, requestId, key: c.req.valid('header')['idempotency-key'],
     }, (tx) => management.changeMembership(tx, scope, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/actions`, security,
+    request: { params: characterParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(actionView)) },
+  }), async (c) => {
+    const { limit, cursor } = management.parsePage(c.req.valid('query'))
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    return c.json(await listReviewActions(db, scope, undefined, limit, cursor), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/actions/{actionId}`, security,
+    request: { params: actionParams },
+    responses: { ...errors, 200: success(actionView) },
+  }), async (c) => {
+    const { characterId, actionId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const { items: [proposal] } = await listReviewActions(db, scope, actionId)
+    c.header('ETag', `"run-v${proposal.version}"`)
+    return c.json(proposal, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/actions/{actionId}/decisions`, security,
+    request: { params: actionParams, headers: schema.idempotencyHeader.merge(schema.versionHeader), body: body(actionDecision) },
+    responses: { ...errors, 200: success(schema.commandResponse), 409: failure },
+  }), async (c) => {
+    const { characterId, actionId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const headers = c.req.valid('header')
+    const expected = Number(/^"run-v([1-9][0-9]{0,9})"$/.exec(headers['if-match'])?.[1])
+    if (!Number.isInteger(expected) || expected >= 2_147_483_647) {
+      throw new management.ManagementError(422, 'INVALID_VERSION', 'Expected a quoted run version')
+    }
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'action.review', targetScope: characterId + '/' + actionId,
+      input: { input, expected }, requestId, key: headers['idempotency-key'], roles: ['REVIEWER'],
+    }, (tx) => decideReviewAction(tx, scope, actionId, expected, input))
+    if (result.status === 'CANCELED' || result.status === 'EXPIRED') {
+      return c.json(error(requestId, 'STALE_REVIEW', 'Proposal is no longer eligible for review'), 409)
+    }
     return c.json({ ...result, requestId }, 200)
   })
 

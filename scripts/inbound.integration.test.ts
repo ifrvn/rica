@@ -83,6 +83,9 @@ after(async () => {
         await tx.outboxEvent.deleteMany({ where: { run: { characterId } } })
         await tx.contextSnapshotEvidence.deleteMany({ where: { characterId } })
         await tx.contextSnapshot.deleteMany({ where: { characterId } })
+        await tx.actionApproval.deleteMany({ where: { characterId } })
+        await tx.actionProposal.deleteMany({ where: { characterId } })
+        await tx.managementAudit.deleteMany({ where: { characterId } })
         await tx.simulatedDraft.deleteMany({ where: { characterId } })
         await tx.agentRun.deleteMany({ where: { characterId } })
         await tx.inboundEvent.deleteMany({ where: { characterId } })
@@ -914,7 +917,7 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
     where: { id: { in: runIds } }, include: { inboundEvent: true },
   })
   assert.ok(runs.every(({ state, stateVersion, accountId }) =>
-    state === 'DRAFTED' && stateVersion === 3 && accountId === personal.id,
+    state === 'WAITING_APPROVAL' && stateVersion === 3 && accountId === personal.id,
   ))
   assert.equal(runs.find(({ id }) => id === accepted.runId)?.inboundEvent.conversationId, allowed.id)
   assert.equal(runs.find(({ id }) => id === accepted.runId)?.inboundEvent.messageText, messageText)

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { createDatabase } from '../packages/persistence/client.js'
+import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
+import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
+import { processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
 const config = loadConfig()
@@ -92,6 +95,14 @@ after(async () => {
         OR: [{ routeScope: { contains: a ?? 'missing-fixture' } }, { routeScope: { contains: b ?? 'missing-fixture' } },
           ...characterIds.map((id) => ({ response: { path: ['id'], equals: id } }))],
       } })
+      await tx.outboxEvent.deleteMany({ where: { run: where } })
+      await tx.actionApproval.deleteMany({ where })
+      await tx.actionProposal.deleteMany({ where })
+      await tx.simulatedDraft.deleteMany({ where })
+      await tx.contextSnapshotEvidence.deleteMany({ where })
+      await tx.contextSnapshot.deleteMany({ where })
+      await tx.agentRun.deleteMany({ where })
+      await tx.inboundEvent.deleteMany({ where })
       await tx.managementAudit.deleteMany({ where })
       await tx.managementMembership.deleteMany({ where })
       await tx.memoryGrant.deleteMany({ where })
@@ -184,6 +195,131 @@ test('management commands reject stale updates and commit idempotency and audit 
   ))
 })
 
+
+async function proposeReview() {
+  const runtimeUrl = new URL(config.databaseUrl)
+  runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
+  const runtime = createDatabase(runtimeUrl.toString())
+  try {
+    const audience = await owner.conversation.create({
+      data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID(), channel: 'PUBLIC' },
+    })
+    const proposalText = 'unique review ' + randomUUID()
+    const memory = await owner.memory.create({
+      data: { characterId: a, identityId: identityA, scope: 'IDENTITY', visibility: 'PUBLIC', content: proposalText },
+    })
+    const source = await owner.sourceRecord.create({
+      data: { characterId: a, identityId: identityA, kind: 'fixture', sourceKey: randomUUID(), classification: 'PUBLIC' },
+    })
+    await owner.memorySource.create({ data: { characterId: a, memoryId: memory.id, sourceId: source.id } })
+    const grant = await owner.memoryGrant.create({
+      data: {
+        characterId: a, memoryId: memory.id, recipientIdentityId: identityA, recipientAccountId: accountA,
+        audience: audience.id, purpose: 'PUBLIC_REFERENCE', validFrom: new Date(Date.now() - 1000),
+        validUntil: new Date(Date.now() + 120_000), approvedBy: 'fixture', reason: 'Review fixture',
+      },
+    })
+    const result = await ingestSimulatedEvent(runtime, {
+      accountId: accountA, conversationId: audience.id, sourceKey: randomUUID(), kind: 'REPLY',
+      occurredAt: new Date(), messageText: proposalText,
+    })
+    assert.equal(result.status, 'ACCEPTED')
+    const runJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, runJob.eventId)
+    const draftJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, draftJob.eventId)
+    const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: result.runId } })
+    return { action, grant, proposalText }
+  } finally {
+    await runtime.$disconnect()
+  }
+}
+
+function actionPath(id: string) { return characterPath(a) + '/actions/' + id }
+
+test('only a reviewer can see the draft and concurrent approval has one effect', async () => {
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+  await owner.platformAccount.update({ where: { id: accountA }, data: { status: 'ACTIVE' } })
+  const role = await request('POST', characterPath(a) + '/memberships', {
+    key: 'enable-review', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Review fixture' },
+  })
+  assert.equal(role.status, 200)
+  const { action, proposalText } = await proposeReview()
+  const path = actionPath(action.id)
+  assert.equal((await request('GET', path)).status, 403)
+  const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
+  assert.equal(queue.body.items[0].content, null)
+  const preview = await request('GET', path, { actor: 'reviewer' })
+  assert.equal(preview.status, 200, JSON.stringify(preview.body))
+  assert.equal(preview.body.target.accountId, accountA)
+  assert.equal(preview.body.content, '供您参考：' + proposalText)
+  const ifMatch = preview.headers.get('etag') ?? ''
+  const data = { reviewDigest: action.reviewDigest, decision: 'APPROVE', reason: 'Check target and content' }
+  const submit = (key: string, body = data, version = ifMatch) =>
+    request('POST', path + '/decisions', { actor: 'reviewer', key, ifMatch: version, data: body })
+
+  assert.equal((await submit('missing-if-match', data, '')).status, 428)
+  assert.equal((await submit('invalid-digest', { ...data, reviewDigest: '0'.repeat(64) })).status, 409)
+  const proposerId = createHash('sha256').update(JSON.stringify([issuer, 'reviewer'])).digest('hex')
+  await owner.actionProposal.update({ where: { id: action.id }, data: { proposerId } })
+  assert.equal((await submit('own-action')).status, 403)
+  await owner.actionProposal.update({ where: { id: action.id }, data: { proposerId: null } })
+
+  const results = await Promise.all(['review-1', 'review-2'].map(async (key) => ({ key, result: await submit(key) })))
+  assert.deepEqual(results.map(({ result }) => result.status).sort(), [200, 412])
+  const success = results.find(({ result }) => result.status === 200)!
+  assert.equal(success.result.body.status, 'READY')
+  assert.equal((await submit(success.key)).status, 200)
+  assert.equal(await owner.actionApproval.count({ where: { actionId: action.id } }), 1)
+  assert.equal(await owner.managementAudit.count({ where: { targetId: action.id, operation: 'action.review' } }), 1)
+
+  await owner.character.update({ where: { id: a }, data: { authEpoch: { increment: 1 } } })
+  const invalidated = await request('GET', path, { actor: 'reviewer' })
+  assert.equal(invalidated.body.state, 'CANCELED')
+  assert.equal(invalidated.body.content, null)
+  assert.equal(await owner.managementAudit.count({ where: { targetId: action.id, operation: 'action.invalidate' } }), 1)
+})
+
+test('review rechecks evidence expiry and adapter version, and records a valid rejection', async () => {
+  for (const scenario of ['grant-expiry', 'adapter-change', 'proposal-expiry', 'payload-change', 'reject'] as const) {
+    const { action, grant } = await proposeReview()
+    if (scenario === 'grant-expiry') {
+      await owner.memoryGrant.update({
+        where: { id: grant.id }, data: { validFrom: new Date(Date.now() - 60_000), validUntil: new Date(Date.now() - 1000) },
+      })
+    } else if (scenario === 'adapter-change') {
+      await owner.actionProposal.update({ where: { id: action.id }, data: { adapterVersion: '0.0.1' } })
+    } else if (scenario === 'payload-change') {
+      await owner.simulatedDraft.update({
+        where: { characterId_runId: { characterId: a, runId: action.runId } },
+        data: { content: 'Changed draft content' },
+      })
+    } else if (scenario === 'proposal-expiry') {
+      await owner.actionProposal.update({
+        where: { id: action.id },
+        data: { createdAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1000) },
+      })
+    }
+    const path = actionPath(action.id)
+    const preview = await request('GET', path, { actor: 'reviewer' })
+    const rejected = scenario === 'reject'
+    const expected = rejected ? 'WAITING_APPROVAL' : scenario === 'proposal-expiry' ? 'EXPIRED' : 'CANCELED'
+    assert.equal(preview.body.state, expected)
+    assert.equal(Boolean(preview.body.content), rejected)
+    const result = await request('POST', path + '/decisions', {
+      actor: 'reviewer', key: scenario, ifMatch: preview.headers.get('etag') ?? '',
+      data: { reviewDigest: action.reviewDigest, decision: 'REJECT', reason: 'Review fixture' },
+    })
+    assert.equal(result.status, rejected ? 200 : 409)
+    if (rejected) assert.equal(result.body.status, 'REJECTED')
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: action.runId } })).state,
+      rejected ? 'REJECTED' : expected)
+    assert.equal(await owner.managementAudit.count({ where: { targetId: action.id, operation: 'action.review' } }), 1)
+    assert.equal(await owner.actionApproval.count({ where: { actionId: action.id } }), rejected ? 1 : 0)
+  }
+})
+
 test('grant and account management enforce bound references and revoke access with an epoch change', async () => {
   const path = characterPath(a)
   const memory = await owner.memory.create({
@@ -210,13 +346,14 @@ test('grant and account management enforce bound references and revoke access wi
   assert.equal(revoke.status, 200)
   assert.equal(revoke.body.authEpoch, grant.body.authEpoch + 1)
   const grants = await request('GET', path + '/memory-grants')
-  assert.equal(grants.body.items.length, 1)
-  assert.equal(grants.body.items[0].id, grant.body.id)
-  assert.ok(grants.body.items[0].revokedAt)
+  const savedGrant = grants.body.items.find(({ id }: { id: string }) => id === grant.body.id)
+  assert.ok(savedGrant)
+  assert.ok(savedGrant.revokedAt)
   const memories = await request('GET', path + '/memories')
   assert.equal(memories.status, 200)
-  assert.equal(memories.body.items[0].id, memory.id)
-  assert.ok(!('content' in memories.body.items[0]))
+  const savedMemory = memories.body.items.find(({ id }: { id: string }) => id === memory.id)
+  assert.ok(savedMemory)
+  assert.ok(!('content' in savedMemory))
   await assert.rejects(management.memory.findMany({ select: { content: true } }), /permission denied/i)
   const account = await request('POST', path + '/controls', {
     key: 'revoke-account', data: { scope: 'ACCOUNT', scopeId: accountA, operation: 'REVOKE_ACCOUNT', reason: 'Unlink' },

@@ -31,9 +31,9 @@ export function denyPermission(): never {
   throw new ManagementError(403, 'FORBIDDEN', 'Permission denied')
 }
 
-type Scope = Readonly<{ actor: Subject; characterId: string }>
+export type Scope = Readonly<{ actor: Subject; characterId: string }>
 
-async function authorize(tx: Tx, scope: Scope, roles: readonly ManagementRole[] = []) {
+export async function authorize(tx: Tx, scope: Scope, roles: readonly ManagementRole[] = []) {
   const members = await tx.managementMembership.findMany({
     where: { characterId: scope.characterId, issuer: scope.actor.issuer, subject: scope.actor.subject },
     select: { role: true },
@@ -57,12 +57,13 @@ type Command = {
   input: unknown
   targetScope: string
   key?: string
+  roles?: readonly ManagementRole[]
 }
 
 export async function executeManagementCommand(
   db: PrismaClient, command: Command, apply: (tx: Tx) => Promise<CommandResult>,
 ) {
-  const { actor, characterId, operation, requestId, input, key, targetScope } = command
+  const { actor, characterId, operation, requestId, input, key, targetScope, roles = ['ADMIN'] } = command
   const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex')
   const routeScope = operation + ':' + targetScope
 
@@ -74,9 +75,9 @@ export async function executeManagementCommand(
     }
     if (characterId) {
       // Check membership again after taking the same lock as role provisioning and revocation.
-      await authorize(tx, { actor, characterId }, ['ADMIN'])
+      await authorize(tx, { actor, characterId }, roles)
       await lockCharacter(tx, characterId)
-      await authorize(tx, { actor, characterId }, ['ADMIN'])
+      await authorize(tx, { actor, characterId }, roles)
     }
 
     const selector = key ? { principalId: actor.id, routeScope, key } : null
