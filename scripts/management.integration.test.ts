@@ -115,6 +115,7 @@ after(async () => {
       await tx.contextSnapshot.deleteMany({ where })
       await tx.scheduleOccurrence.deleteMany({ where })
       await tx.simulationSchedule.deleteMany({ where })
+      await tx.identityStateRevision.deleteMany({ where })
       await tx.agentRun.deleteMany({ where })
       await tx.inboundEvent.deleteMany({ where })
       await tx.managementAudit.deleteMany({ where })
@@ -1103,6 +1104,12 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
     await executeSimulation(executor, independent.id)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: independent.id } }), 1)
     const fresh = (await approveSimulation(accountId, contact.id)).action
+    const released = await owner.contact.findUniqueOrThrow({ where: { id: contact.id } })
+    assert.ok(released.boundaryChangedAt)
+    const backdated = await owner.agentRun.update({
+      where: { id: fresh.runId }, data: { createdAt: new Date(released.boundaryChangedAt.getTime() - 1000) },
+    })
+    assert.equal(backdated.contactBoundaryVersion, 2)
     await executeSimulation(executor, fresh.id)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: fresh.id } }), 1)
   } finally {

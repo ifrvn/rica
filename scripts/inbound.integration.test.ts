@@ -15,6 +15,7 @@ import { simulatedModel, simulatedModelPlugin } from '../packages/runtime/model-
 import { generateSimulatedDraft, processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'
+import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 
 const config = loadConfig()
@@ -90,6 +91,7 @@ after(async () => {
         await tx.actionProposal.deleteMany({ where: { characterId } })
         await tx.managementAudit.deleteMany({ where: { characterId } })
         await tx.simulatedDraft.deleteMany({ where: { characterId } })
+        await tx.identityStateRevision.deleteMany({ where: { characterId } })
         await tx.agentRun.deleteMany({ where: { characterId } })
         await tx.inboundEvent.deleteMany({ where: { characterId } })
         await tx.memoryGrant.deleteMany({ where: { characterId } })
@@ -1309,6 +1311,77 @@ test('run continuity pins local time and shares only approved core facts', async
       })
       assert.ok(selfTrace.evidence.some(({ memoryId }) => memoryId === approved.id))
     }
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('identity state replays late events, ignores retries and decays only within its identity', async () => {
+  assert.ok(fixture)
+  const { characterId } = fixture
+  const accounts = []
+  for (const slug of ['state-ordered', 'state-late', 'state-checkpoint']) {
+    const identity = await db.identity.create({ data: { characterId, slug } })
+    await db.identityVersion.create({
+      data: { characterId, identityId: identity.id, version: 1, roleProfile: {}, actorId: fixtureKey, reason: 'State fixture' },
+    })
+    await db.identity.update({ where: { id: identity.id }, data: { status: 'ACTIVE', activeVersion: 1 } })
+    accounts.push(await db.platformAccount.create({
+      data: {
+        characterId, identityId: identity.id, platform: 'mock-a', status: 'ACTIVE',
+        instanceKey: 'integration', remoteAccountId: randomUUID(),
+      },
+    }))
+  }
+  const runtime = testDatabaseRole('rica_runtime')
+  const ingest = createSimulatedPlatformIngress(runtime)
+  const start = Date.now() - 72 * 3_600_000
+  const inputs = [
+    { kind: 'POST', hours: 0 },
+    { kind: 'MENTION', hours: 8 },
+    { kind: 'REPLY', hours: 24 },
+  ] as const
+  try {
+    const results = []
+    const orders = [[0, 1, 2], [2, 0, 1], [0, 2, 1]]
+    for (const [i, account] of accounts.entries()) {
+      const conversation = await db.conversation.create({
+        data: { characterId, identityId: account.identityId, accountId: account.id, remoteKey: randomUUID(), channel: 'PUBLIC' },
+      })
+      const quiet = await preparedMemoryRun(account.id)
+      const baseline = await runtime.$transaction((tx) => loadRunContinuity(tx, quiet))
+      assert.equal(baseline?.identityState.revision, null)
+      assert.equal(baseline?.identityState.affect.energy, 0.7)
+      const source = { accountId: account.id, platform: account.platform, instanceKey: account.instanceKey,
+        verifiedRemoteAccountId: account.remoteAccountId }
+      let lastRun = quiet
+      for (const j of orders[i]) {
+        const input = inputs[j]
+        const payload = {
+          id: 'state-' + j, account: account.remoteAccountId, thread: conversation.remoteKey, kind: input.kind,
+          occurredAt: new Date(start + input.hours * 3_600_000).toISOString(), text: 'State fixture',
+        }
+        const event = await ingest(source, payload)
+        assert.equal(event.status, 'ACCEPTED')
+        lastRun = event.runId
+        assert.equal((await ingest(source, payload)).status, 'DUPLICATE')
+        const queued = await db.outboxEvent.findFirstOrThrow({ where: { runId: lastRun, type: runQueuedEvent } })
+        await Promise.all(Array.from({ length: 3 }, () => prepareSimulatedRun(runtime, queued.eventId)))
+      }
+      const revisions = await db.identityStateRevision.findMany({ where: { characterId, identityId: account.identityId },
+        orderBy: { revision: 'asc' } })
+      assert.deepEqual(revisions.map(({ revision, ruleVersion }) => [revision, ruleVersion]), [[1, 1], [2, 1], [3, 1]])
+      const current = await runtime.$transaction((tx) => loadRunContinuity(tx, lastRun))
+      assert.equal(current?.identityState.revision, 3)
+      assert.ok(current && current.identityState.motivation.exploration > 0.5
+        && current.identityState.motivation.exploration < revisions[2].values[0])
+      assert.ok(current && Math.abs(current.identityState.affect.energy - 0.7) < Math.abs(revisions[2].values[6] - 0.7))
+      assert.equal((await runtime.$transaction((tx) => loadRunContinuity(tx, quiet)))?.identityState.revision, null)
+      results.push(revisions[2].values)
+    }
+    assert.deepEqual(results[0], results[1])
+    assert.deepEqual(results[0], results[2])
+    await assert.rejects(runtime.identityStateRevision.count(), /permission denied/i)
   } finally {
     await runtime.$disconnect()
   }

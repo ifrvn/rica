@@ -9,6 +9,13 @@ export type RunTime = Readonly<{
   localHour: number
 }>
 
+type IdentityState = Readonly<{
+  revision: number | null
+  ruleVersion: number
+  motivation: { exploration: number; expression: number; social: number; rest: number }
+  affect: { pleasure: number; arousal: number; energy: number }
+}>
+
 type Continuity = {
   runId: string
   characterId: string
@@ -38,10 +45,11 @@ type Continuity = {
 }
 
 export async function loadRunContinuity(tx: Prisma.TransactionClient, runId: string) {
-  const [row] = await tx.$queryRaw<{ context: Continuity | null }[]>`
-    SELECT public.rica_run_continuity(${runId}::uuid) AS context
+  const [row] = await tx.$queryRaw<{ context: Continuity | null; identityState: IdentityState | null }[]>`
+    SELECT public.rica_run_continuity(${runId}::uuid) AS context,
+      public.rica_run_identity_state(${runId}::uuid) AS "identityState"
   `
-  if (!row?.context) return null
+  if (!row?.context || !row.identityState) return null
   const { occurredAt, now, timezone, ...context } = row.context
   let formatter: Intl.DateTimeFormat
   let zone = timezone
@@ -58,7 +66,7 @@ export async function loadRunContinuity(tx: Prisma.TransactionClient, runId: str
   }
   const current = local(now)
   const time: RunTime = { occurredAt, now, timezone: zone, localDate: current.date, eventLocalDate: local(occurredAt).date, localHour: current.hour }
-  return { ...context, time }
+  return { ...context, time, identityState: row.identityState }
 }
 
 export type RunContinuity = NonNullable<Awaited<ReturnType<typeof loadRunContinuity>>>

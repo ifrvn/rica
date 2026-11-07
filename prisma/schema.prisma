@@ -236,7 +236,30 @@ model AgentRun {
   scheduleOccurrence ScheduleOccurrence?
 
   @@unique([characterId, id])
+  identityStateRevisions IdentityStateRevision[]
+  contactBoundaryVersion Int? @map("contact_boundary_version")
   @@map("agent_runs")
+}
+
+model IdentityStateRevision {
+  characterId String      @map("character_id") @db.Uuid
+  identityId   String      @map("identity_id") @db.Uuid
+  revision     Int
+  runId        String      @unique @map("run_id") @db.Uuid
+  eventId      String      @unique @map("event_id") @db.Uuid
+  eventKind    InboundKind @map("event_kind")
+  effectiveAt  DateTime    @map("effective_at") @db.Timestamptz
+  throughAt    DateTime    @map("through_at") @db.Timestamptz
+  throughEventId String    @map("through_event_id") @db.Uuid
+  values       Float[]     @map("state_vector")
+  ruleVersion  Int         @map("rule_version")
+  actorId      String      @map("actor_id")
+  appliedAt    DateTime    @default(dbgenerated("clock_timestamp()")) @map("applied_at") @db.Timestamptz
+  run          AgentRun    @relation(fields: [characterId, runId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, identityId, revision])
+  @@index([characterId, identityId, effectiveAt, eventId], map: "identity_state_event_order_idx")
+  @@map("identity_state_revisions")
 }
 
 enum MemoryScope {
