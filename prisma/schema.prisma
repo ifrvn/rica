@@ -544,6 +544,7 @@ model SimulatedDraft {
   decisionEvidenceIds String[]        @map("decision_evidence_ids") @db.Uuid
   writingEvidenceIds  String[]        @map("writing_evidence_ids") @db.Uuid
   citationIds         String[]        @map("citation_ids") @db.Uuid
+  beliefRefs          Json            @default("[]") @map("belief_refs")
   modelId             String?         @map("model_id")
   modelVersion        String?         @map("model_version")
   proposal            ActionProposal?

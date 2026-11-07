@@ -8,7 +8,7 @@ import type { Plugin } from '../runtime/plugin-registry.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { captureMemorySnapshot, captureSelfModelSnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
 import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
-import { loadRunContinuity } from './run-continuity.js'
+import { loadRunContinuity, type RunContinuity } from './run-continuity.js'
 import { draftQueuedEvent } from './run-context.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
@@ -46,6 +46,10 @@ function evidenceMatches(current: readonly ModelEvidence[] | null, previous: Rea
     && current.every(({ id, revision }) => previous.get(id) === revision)
 }
 
+function beliefRefs(context: RunContinuity) {
+  return context.beliefs.map(({ id, version }) => ({ id, version }))
+}
+
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
@@ -68,6 +72,7 @@ async function buildSimulatedDraft(
   const selfRevisions = new Map(context.self.facts.map(({ id, revision }) => [id, revision]))
   const time = { ...context.time }
   const goalVersions = context.goals.map(({ id, version }) => id + ':' + version).join(',')
+  const beliefVersions = beliefRefs(context)
 
   signal.throwIfAborted()
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
@@ -93,7 +98,7 @@ async function buildSimulatedDraft(
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
 
-  return { draft, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions }
+  return { draft, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
@@ -106,6 +111,7 @@ async function recheckDraft(
   const context = await loadRunContinuity(tx, runId)
   return !!context && evidenceMatches(context.self.facts, candidate.selfRevisions)
     && context.goals.map(({ id, version }) => id + ':' + version).join(',') === candidate.goalVersions
+    && JSON.stringify(beliefRefs(context)) === JSON.stringify(candidate.beliefVersions)
 }
 
 export async function generateSimulatedDraft(
@@ -176,7 +182,7 @@ export async function processSimulatedDraft(
           characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
-          selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions,
+          selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
           citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion: model.version,
         })).digest('hex')
         signal.throwIfAborted()
@@ -188,6 +194,7 @@ export async function processSimulatedDraft(
             decisionEvidenceIds: [...candidate.decisionRevisions.keys()],
             writingEvidenceIds: [...candidate.writingRevisions.keys()],
             citationIds: candidate.draft.evidenceIds,
+            beliefRefs: candidate.beliefVersions,
             modelId: model.id,
             modelVersion: model.version,
           },

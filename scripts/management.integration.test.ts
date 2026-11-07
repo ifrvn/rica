@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { simulatedModelPlugin } from '../packages/runtime/model-provider.js'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { dailyScheduleSlot, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
@@ -223,7 +224,7 @@ async function databaseNow() {
   return clock.now.getTime()
 }
 
-async function proposeReview(accountId = accountA, contactId?: string) {
+async function proposeReview(accountId = accountA, contactId?: string, model = simulatedModelPlugin) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(runtimeUrl.toString())
@@ -260,7 +261,7 @@ async function proposeReview(accountId = accountA, contactId?: string) {
     const runJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, runJob.eventId)
     const draftJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, draftJob.eventId)
+    await processSimulatedDraft(runtime, draftJob.eventId, model)
     const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: result.runId } })
     return { action, grant, proposalText }
   } finally {
@@ -1128,14 +1129,14 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
   }
 })
 
-async function beliefEvidence(sourceId?: string, accountId?: string) {
+async function beliefEvidence(sourceId?: string, accountId?: string, expiresAt?: Date) {
   const source = sourceId ? { id: sourceId } : await owner.sourceRecord.create({
     data: { characterId: a, identityId: identityA, accountId, kind: 'fixture', sourceKey: randomUUID(), classification: 'PERSONAL' },
   })
   const memory = await owner.memory.create({
     data: {
       characterId: a, identityId: identityA, accountId, scope: accountId ? 'ACCOUNT' : 'IDENTITY',
-      visibility: 'PERSONAL', content: 'Belief fixture',
+      visibility: 'PERSONAL', content: 'Belief fixture', expiresAt,
     },
   })
   await owner.memorySource.create({ data: { characterId: a, memoryId: memory.id, sourceId: source.id } })
@@ -1221,6 +1222,102 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
   })
   assert.equal(replacement.body.status, 'ACTIVE')
   assert.equal((await request('GET', path)).body.version, 4)
+})
+
+async function beliefReviewAccount() {
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+  return newSimulationAccount()
+}
+
+test('subjective belief projection stays inside decisions and expired references block execution', async () => {
+  const expiresAt = new Date((await databaseNow()) + 8000)
+  const first = await beliefEvidence(undefined, undefined, expiresAt)
+  const second = await beliefEvidence()
+  const statement = 'I prefer a shaded trail'
+  const created = await request('POST', beliefCollection(identityA), {
+    key: 'belief-decision-projection', data: beliefData([first.citation, second.citation], statement),
+  })
+  assert.equal(created.body.status, 'ACTIVE')
+  const reference = { id: created.body.id, version: 1 }
+  const model: typeof simulatedModelPlugin = {
+    ...simulatedModelPlugin,
+    implementation: {
+      async decide(input, signal) {
+        assert.deepEqual(input.context.beliefs.find(({ id }) => id === reference.id), {
+          ...reference, kind: 'PREFERENCE', statement, confidence: 0.7, subjective: true,
+        })
+        return simulatedModelPlugin.implementation.decide(input, signal)
+      },
+      async write(input, signal) {
+        assert.equal('context' in input, false)
+        assert.equal(JSON.stringify(input).includes(statement), false)
+        return simulatedModelPlugin.implementation.write(input, signal)
+      },
+    },
+  }
+  const { action } = await proposeReview(await beliefReviewAccount(), undefined, model)
+  const approval = await request('POST', actionPath(action.id) + '/decisions', {
+    actor: 'reviewer', key: 'approve-belief-projection', ifMatch: '"run-v3"',
+    data: { reviewDigest: action.reviewDigest, decision: 'APPROVE', reason: 'Belief projection fixture' },
+  })
+  assert.equal(approval.status, 200, JSON.stringify(approval.body))
+  const path = characterPath(a) + '/runs/' + action.runId + '/replay'
+  const replay = await request('GET', path)
+  assert.equal(replay.status, 200, JSON.stringify(replay.body))
+  assert.ok(replay.body.beliefRefs.some(({ id, version }: { id: string; version: number }) => id === reference.id && version === 1))
+  assert.equal(JSON.stringify(replay.body).includes(statement), false)
+
+  const waiting = await approveSimulation(await newSimulationAccount())
+  const executor = simulationDatabase()
+  try {
+    let permitted = false
+    await executeSimulation(executor, action.id, async (db, id) => {
+      permitted = true
+      await sleep(Math.max(0, expiresAt.getTime() - (await databaseNow()) + 50))
+      return recordSimulationReceipt(db, id)
+    })
+    assert.equal(permitted, true)
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: action.runId } })).state, 'BLOCKED')
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
+    assert.equal(await reserveSimulation(executor, waiting.action.id), false)
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: waiting.action.runId } })).state, 'BLOCKED')
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: waiting.action.id } }), 0)
+  } finally {
+    await executor.$disconnect()
+  }
+})
+
+test('subjective belief supersession during decision prevents the in-flight proposal', async () => {
+  const first = await beliefEvidence()
+  const second = await beliefEvidence()
+  const third = await beliefEvidence()
+  const collection = beliefCollection(identityA)
+  const created = await request('POST', collection, {
+    key: 'belief-in-flight', data: beliefData([first.citation, second.citation]),
+  })
+  assert.equal(created.body.status, 'ACTIVE')
+  let runId: string | undefined
+  const model: typeof simulatedModelPlugin = {
+    ...simulatedModelPlugin,
+    implementation: {
+      ...simulatedModelPlugin.implementation,
+      async decide({ context }) {
+        runId = context.runId
+        assert.ok(context.beliefs.some(({ id, version }) => id === created.body.id && version === 1))
+        const updated = await request('PUT', collection + '/' + created.body.id, {
+          ifMatch: '"1"', data: beliefData([second.citation, third.citation], 'I prefer to work outside'),
+        })
+        assert.equal(updated.body.status, 'ACTIVE')
+        return 'REPLY'
+      },
+    },
+  }
+  await assert.rejects(proposeReview(await beliefReviewAccount(), undefined, model), { code: 'P2025' })
+  assert.ok(runId)
+  const run = await owner.agentRun.findUniqueOrThrow({ where: { id: runId } })
+  assert.equal(run.state, 'CANCELED')
+  assert.equal(run.stateReason, 'DRAFT_UNAVAILABLE')
 })
 
 test('manual goal cap is atomic and replay pins the identity version of active goals', async () => {
