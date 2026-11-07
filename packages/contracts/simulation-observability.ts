@@ -29,6 +29,23 @@ export const runReplayView = z.object({
   }).nullable(),
 })
 
+export const dailyMetricsQuery = z.object({ from: z.iso.date(), through: z.iso.date() }).refine(({ from, through }) => {
+  const span = Date.parse(through) - Date.parse(from)
+  return from >= '0001-01-01' && span >= 0 && span <= 30 * 86_400_000
+}, 'Choose an inclusive range of up to 31 UTC days')
+
+const count = z.number().int().nonnegative()
+export const simulationDailyRow = z.object({
+  utcDay: z.iso.date(), proposals: count, approvals: count, rejections: count, duplicateFlags: count,
+  draftLatencyMs: count.nullable(), receipts: count, peakAccountReceipts: count, flaggedReceipts: count,
+  receiptsWithoutApproval: count, reservedUnits: count, modelCalls: count, budgetDenials: count,
+})
+export const simulationDailyMetricsView = z.object({
+  days: z.array(simulationDailyRow).max(31),
+  alerts: z.array(z.enum(['FLAGGED_RECEIPTS', 'UNAPPROVED_RECEIPTS', 'MODEL_BUDGET_EXHAUSTED',
+    'RECEIPT_VOLUME_DRIFT', 'REVIEW_RATE_DRIFT'])),
+})
+
 const backlog = z.object({ count: z.number().int().nonnegative(), oldestAt: timestamp.nullable() })
 
 export const simulationBacklogView = z.object({

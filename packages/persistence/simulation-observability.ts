@@ -1,4 +1,5 @@
-import { runReplayView, simulationBacklogView } from '../contracts/simulation-observability.js'
+import type { z } from '@hono/zod-openapi'
+import { runReplayView, simulationBacklogView, simulationDailyRow, type simulationDailyMetricsView } from '../contracts/simulation-observability.js'
 import type { PrismaClient } from './generated/client.js'
 import { authorize, ManagementError, type Scope } from './management.js'
 
@@ -10,6 +11,37 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
     return runReplayView.parse(row.view)
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readSimulationDailyMetrics(db: PrismaClient, scope: Scope, { from, through }: { from: string; through: string }) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ days: unknown; today: string }[]>`
+      SELECT public.rica_simulation_daily_metrics(${scope.characterId}::uuid, ${from}::date, ${through}::date) AS days,
+        (statement_timestamp() AT TIME ZONE 'UTC')::date::text AS today
+    `
+    const days = simulationDailyRow.array().parse(row.days)
+    const alerts: z.infer<typeof simulationDailyMetricsView>['alerts'] = []
+    if (days.some(({ flaggedReceipts }) => flaggedReceipts > 0)) alerts.push('FLAGGED_RECEIPTS')
+    if (days.some(({ receiptsWithoutApproval }) => receiptsWithoutApproval > 0)) alerts.push('UNAPPROVED_RECEIPTS')
+    if (days.some(({ budgetDenials }) => budgetDenials > 0)) alerts.push('MODEL_BUDGET_EXHAUSTED')
+
+    const complete = days.filter(({ utcDay }) => utcDay < row.today)
+    if (complete.length >= 14) {
+      const sum = (window: typeof days) => window.reduce((totals, day) => ({
+        receipts: totals.receipts + day.receipts, proposals: totals.proposals + day.proposals,
+        reviewed: totals.reviewed + day.approvals + day.rejections,
+      }), { receipts: 0, proposals: 0, reviewed: 0 })
+      const earlier = sum(complete.slice(-14, -7))
+      const recent = sum(complete.slice(-7))
+      if (recent.receipts >= earlier.receipts * 2 + 7) alerts.push('RECEIPT_VOLUME_DRIFT')
+      if (earlier.proposals > 0 && recent.proposals > 0
+        && Math.abs(recent.reviewed / recent.proposals - earlier.reviewed / earlier.proposals) >= 0.2) {
+        alerts.push('REVIEW_RATE_DRIFT')
+      }
+    }
+    return { days, alerts }
   }, { isolationLevel: 'RepeatableRead' })
 }
 

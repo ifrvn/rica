@@ -4,8 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
-import { runReplayView, simulationBacklogView } from '../../packages/contracts/simulation-observability.js'
-import { readSimulationBacklog, replaySimulationRun } from '../../packages/persistence/simulation-observability.js'
+import { dailyMetricsQuery, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
+import { readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
@@ -684,6 +684,14 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     const { characterId, runId } = c.req.valid('param')
     return c.json(await replaySimulationRun(db, { characterId, actor: c.get('actor') }, runId), 200)
   })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/monitoring/daily`, security,
+    request: { params: characterParams, query: dailyMetricsQuery },
+    responses: { ...errors, 200: success(simulationDailyMetricsView) },
+  }), async (c) => c.json(await readSimulationDailyMetrics(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, c.req.valid('query'),
+  ), 200))
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/monitoring`, security,

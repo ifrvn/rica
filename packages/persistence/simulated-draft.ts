@@ -50,6 +50,14 @@ function beliefRefs(context: RunContinuity) {
   return context.beliefs.map(({ id, version }) => ({ id, version }))
 }
 
+async function reserveModelBudget(tx: Prisma.TransactionClient, runId: string, input: object, outputUnits: number) {
+  const units = Buffer.byteLength(JSON.stringify(input), 'utf8') + outputUnits
+  const [row] = await tx.$queryRaw<{ allowed: boolean }[]>`
+    SELECT public.rica_reserve_model_budget(${runId}::uuid, ${units}::int) AS allowed
+  `
+  return row.allowed
+}
+
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
@@ -65,7 +73,8 @@ async function buildSimulatedDraft(
     const evidence = await readEvidence(tx, runId, decisionRequest)
     const context = evidence && await loadRunContinuity(tx, runId)
     if (!context || !await captureSelfModelSnapshot(tx, runId, context.characterId, context.self.facts)) return null
-    return { evidence, context }
+    const input = { text, evidence, context }
+    return await reserveModelBudget(tx, runId, input, 64) ? input : null
   })
   if (!prepared) return null
   const { evidence: decisionEvidence, context } = prepared
@@ -76,7 +85,7 @@ async function buildSimulatedDraft(
 
   signal.throwIfAborted()
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
-  const decision = await provider.decide({ text, evidence: decisionEvidence, context }, signal)
+  const decision = await provider.decide(prepared, signal)
   signal.throwIfAborted()
   if (decision === 'NO_OP') return null
   if (decision !== 'REPLY') throw new Error('Invalid simulated decision output')
@@ -87,14 +96,17 @@ async function buildSimulatedDraft(
     const [profile] = await tx.$queryRaw<{ style: WritingStyle | null }[]>`
       SELECT public.rica_simulated_writing_style(${runId}::uuid) AS style
     `
-    return profile?.style ? { evidence, style: profile.style } : null
+    if (!profile?.style) return null
+    const input = { text, evidence, style: profile.style, time }
+    const outputUnits = maxSimulatedTextLength * 4 + 1024
+    return await reserveModelBudget(tx, runId, input, outputUnits) ? input : null
   })
   if (!writing) return null
 
   // Preserve the authorized revisions independently of the objects passed to the provider.
   const allowedRevisions = new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
   signal.throwIfAborted()
-  const output = await provider.write({ text, ...writing, time }, signal)
+  const output = await provider.write(writing, signal)
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
 

@@ -96,10 +96,10 @@ after(async () => {
         await tx.inboundEvent.deleteMany({ where: { characterId } })
         await tx.memoryGrant.deleteMany({ where: { characterId } })
         await tx.goalVersion.deleteMany({ where: { characterId } })
-      await tx.identityReflection.deleteMany({ where: { characterId } })
-      await tx.beliefEvidence.deleteMany({ where: { characterId } })
-      await tx.beliefVersion.deleteMany({ where: { characterId } })
-      await tx.memorySource.deleteMany({ where: { characterId } })
+        await tx.identityReflection.deleteMany({ where: { characterId } })
+        await tx.beliefEvidence.deleteMany({ where: { characterId } })
+        await tx.beliefVersion.deleteMany({ where: { characterId } })
+        await tx.memorySource.deleteMany({ where: { characterId } })
         await tx.memory.deleteMany({ where: { characterId } })
         await tx.sourceRecord.deleteMany({ where: { characterId } })
         await tx.conversation.deleteMany({ where: { characterId } })
@@ -116,6 +116,7 @@ after(async () => {
           data: { status: 'PAUSED', activeCoreVersion: null },
         })
         await tx.coreVersion.deleteMany({ where: { characterId } })
+        await tx.modelDailyUsage.deleteMany({ where: { characterId } })
         await tx.character.delete({ where: { id: characterId } })
       })
     }

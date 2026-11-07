@@ -8,6 +8,7 @@ export const reasonInput = z.strictObject({ reason: text })
 export const coreProfile = z.strictObject({
   name: shortText.optional(),
   aiDisclosure: text,
+  dailyModelBudget: z.number().int().min(1024).max(100_000_000).optional(),
   fictionalBackground: text.optional(),
   values: z.array(shortText).max(16).optional(),
   privacyRules: z.array(text).max(16).optional(),

@@ -103,8 +103,9 @@ after(async () => {
     await owner.$transaction(async (tx) => {
       const where = { characterId: { in: characterIds } }
       await tx.managementIdempotency.deleteMany({ where: {
-        OR: [{ routeScope: { contains: a ?? 'missing-fixture' } }, { routeScope: { contains: b ?? 'missing-fixture' } },
-          ...characterIds.map((id) => ({ response: { path: ['id'], equals: id } }))],
+        OR: characterIds.flatMap((id) => [
+          { routeScope: { contains: id } }, { response: { path: ['id'], equals: id } },
+        ]),
       } })
       await tx.outboxEvent.deleteMany({ where: { run: where } })
       await tx.commitmentRevision.deleteMany({ where })
@@ -141,6 +142,7 @@ after(async () => {
       await tx.character.updateMany({ where: { id: { in: characterIds } }, data: { status: 'PAUSED', activeCoreVersion: null } })
       await tx.coreVersion.deleteMany({ where })
       await tx.dailyEnergyProjection.deleteMany({ where })
+      await tx.modelDailyUsage.deleteMany({ where })
       await tx.character.deleteMany({ where: { id: { in: characterIds } } })
     })
   } finally {
@@ -1227,13 +1229,13 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
   assert.equal((await request('GET', path)).body.version, 4)
 })
 
-async function reflectionIdentity(roleProfile: Record<string, unknown> = {}) {
-  const created = await request('POST', characterPath(a) + '/identities', {
+async function reflectionIdentity(roleProfile: Record<string, unknown> = {}, characterId = a) {
+  const created = await request('POST', characterPath(characterId) + '/identities', {
     key: randomUUID(), data: { slug: 'reflection-' + randomUUID(), roleProfile },
   })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const id: string = created.body.id
-  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
+  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE' } })
   await owner.identity.update({ where: { id }, data: { status: 'ACTIVE' } })
   return id
 }
@@ -1653,16 +1655,16 @@ test('approved energy is immutable and visible only within its character and UTC
   }
 })
 
-async function topicAccount(identityId: string, platform: 'mock-a' | 'mock-b', privateChannel = false) {
+async function topicAccount(identityId: string, platform: 'mock-a' | 'mock-b', privateChannel = false, characterId = a) {
   const account = await owner.platformAccount.create({
-    data: { characterId: a, identityId, status: 'ACTIVE', platform, instanceKey: 'integration', remoteAccountId: randomUUID() },
+    data: { characterId, identityId, status: 'ACTIVE', platform, instanceKey: 'integration', remoteAccountId: randomUUID() },
   })
   const contact = privateChannel ? await owner.contact.create({
-    data: { characterId: a, identityId, accountId: account.id, remoteKey: randomUUID() },
+    data: { characterId, identityId, accountId: account.id, remoteKey: randomUUID() },
   }) : null
   const conversation = await owner.conversation.create({
     data: {
-      characterId: a, identityId, accountId: account.id, remoteKey: randomUUID(),
+      characterId, identityId, accountId: account.id, remoteKey: randomUUID(),
       channel: privateChannel ? 'PRIVATE' : 'PUBLIC', privateContactId: contact?.id,
     },
   })
@@ -1730,6 +1732,172 @@ test('cross-platform near duplicates only flag opted-in public topics in the sam
     const secret = 'Private autumn gardening notes for the community workshop.'
     assert.equal((await topicProposal(runtime, privateTopic, secret)).crossPlatformDuplicate, false)
     assert.equal((await topicProposal(runtime, second, secret)).crossPlatformDuplicate, false)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+function metricsPath(characterId: string, from: string, through: string) {
+  return characterPath(characterId) + '/monitoring/daily?from=' + from + '&through=' + through
+}
+
+async function reviewTopic(characterId: string, action: { id: string; reviewDigest: string }, decision: 'APPROVE' | 'REJECT') {
+  const response = await request('POST', characterPath(characterId) + '/actions/' + action.id + '/decisions', {
+    actor: 'reviewer', key: 'm4-' + action.id, ifMatch: '"run-v3"',
+    data: { decision, reviewDigest: action.reviewDigest, reason: 'M4 simulation evaluation' },
+  })
+  assert.equal(response.status, 200, JSON.stringify(response.body))
+}
+
+test('M4 evaluates fourteen simulated days of scope, duplicate reviews, frequency and intervention', { timeout: 90_000 }, async () => {
+  const created = await request('POST', '/characters', { key: 'm4-history', data: characterData('-history') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const role = await request('POST', characterPath(characterId) + '/memberships', {
+    key: 'history-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'History fixture' },
+  })
+  assert.equal(role.status, 200, JSON.stringify(role.body))
+  const identityId = await reflectionIdentity({ duplicateReview }, characterId)
+  const restrictedIdentity = await reflectionIdentity({}, characterId)
+  await owner.character.update({ where: { id: characterId }, data: { timezone: simulationZone(12) } })
+  const first = await topicAccount(identityId, 'mock-a', false, characterId)
+  const second = await topicAccount(identityId, 'mock-b', false, characterId)
+  const marker = 'M4_FORBIDDEN_' + randomUUID()
+  const memory = await owner.memory.create({
+    data: {
+      characterId, identityId: restrictedIdentity, scope: 'IDENTITY', visibility: 'CONFIDENTIAL', importance: 1,
+      content: 'Regional railway maintenance begins this Friday evening ' + marker,
+    },
+  })
+  const source = await owner.sourceRecord.create({
+    data: { characterId, identityId: restrictedIdentity, kind: 'fixture', sourceKey: randomUUID(), classification: 'CONFIDENTIAL' },
+  })
+  await owner.memorySource.create({ data: { characterId, memoryId: memory.id, sourceId: source.id } })
+
+  let modelInputs = 0
+  const model: typeof simulatedModelPlugin = {
+    ...simulatedModelPlugin,
+    implementation: {
+      async decide(input, signal) {
+        modelInputs++
+        assert.equal(JSON.stringify(input).includes(marker), false)
+        return simulatedModelPlugin.implementation.decide(input, signal)
+      },
+      async write(input, signal) {
+        modelInputs++
+        assert.equal(JSON.stringify(input).includes(marker), false)
+        return simulatedModelPlugin.implementation.write(input, signal)
+      },
+    },
+  }
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  const lastDay = new Date((await databaseNow()) - 2 * 86_400_000)
+  lastDay.setUTCHours(12, 0, 0, 0)
+  const firstDay = new Date(lastDay.getTime() - 13 * 86_400_000)
+  const utc = (value: Date) => value.toISOString().slice(0, 10)
+  try {
+    for (let day = 0; day < 14; day++) {
+      const date = new Date(firstDay.getTime() + day * 86_400_000)
+      const topic = 'Regional railway maintenance begins this Friday evening for district ' + (day + 1)
+      const action = await topicProposal(runtime, first, topic, model)
+      const duplicate = await topicProposal(runtime, second, topic + ', soon.', model)
+      assert.equal(action.crossPlatformDuplicate, false)
+      assert.equal(duplicate.crossPlatformDuplicate, true)
+      for (const proposal of [action, duplicate]) {
+        const review = await request('GET', characterPath(characterId) + '/actions/' + proposal.id, { actor: 'reviewer' })
+        assert.equal(review.status, 200)
+        assert.ok(review.body.content)
+        assert.equal(review.body.content.includes(marker), false)
+      }
+      await reviewTopic(characterId, action, 'APPROVE')
+      if (day >= 7) await reviewTopic(characterId, duplicate, 'REJECT')
+      await executeSimulation(executor, action.id)
+      await executeSimulation(executor, action.id)
+      await executeSimulation(executor, duplicate.id)
+      assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 1)
+      assert.equal(await owner.simulationReceipt.count({ where: { actionId: duplicate.id } }), 0)
+
+      // The real simulation pipeline runs above. Only the fixture's observed times are shifted into the virtual day.
+      await owner.$transaction(async (tx) => {
+        const ids = [action.runId, duplicate.runId]
+        const runs = await tx.agentRun.findMany({ where: { id: { in: ids } }, select: { inboundEventId: true } })
+        await tx.inboundEvent.updateMany({
+          where: { id: { in: runs.map(({ inboundEventId }) => inboundEventId) } }, data: { receivedAt: date },
+        })
+        await tx.agentRun.updateMany({ where: { id: { in: ids } }, data: { createdAt: date } })
+        await tx.actionProposal.updateMany({
+          where: { id: { in: [action.id, duplicate.id] } }, data: { createdAt: new Date(date.getTime() + 500) },
+        })
+        await tx.simulationReceipt.update({ where: { actionId: action.id }, data: { createdAt: date } })
+        await tx.simulationAttempt.update({ where: { actionId: action.id }, data: { windowStart: date } })
+      })
+    }
+    assert.equal(modelInputs, 56)
+    assert.equal(await owner.contextSnapshotEvidence.count({ where: { characterId, memoryId: memory.id } }), 0)
+    const path = metricsPath(characterId, utc(firstDay), utc(lastDay))
+    const report = await request('GET', path)
+    assert.equal(report.status, 200, JSON.stringify(report.body))
+    assert.equal(report.body.days.length, 14)
+    assert.deepEqual(report.body.alerts, ['REVIEW_RATE_DRIFT'])
+    for (const [index, row] of report.body.days.entries()) {
+      assert.equal(row.utcDay, utc(new Date(firstDay.getTime() + index * 86_400_000)))
+      assert.equal(row.proposals, 2)
+      assert.equal(row.approvals, 1)
+      assert.equal(row.rejections, Number(index >= 7))
+      assert.equal(row.duplicateFlags, 1)
+      assert.equal(row.receipts, 1)
+      assert.equal(row.peakAccountReceipts, 1)
+      assert.equal(row.flaggedReceipts, 0)
+      assert.equal(row.receiptsWithoutApproval, 0)
+    }
+    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+    assert.equal(JSON.stringify(report.body).includes(marker), false)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
+  }
+})
+
+test('concurrent model calls share one enforced character budget and report the denial', async () => {
+  const budget = 21_000
+  const created = await request('POST', '/characters', {
+    key: 'm4-budget', data: { ...characterData('-budget'), coreProfile: { aiDisclosure: 'AI role', dailyModelBudget: budget } },
+  })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const identityId = await reflectionIdentity({}, characterId)
+  const target = await topicAccount(identityId, 'mock-a', false, characterId)
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  let decisions = 0
+  let writes = 0
+  const model: typeof simulatedModelPlugin = {
+    ...simulatedModelPlugin,
+    implementation: {
+      async decide(input, signal) {
+        decisions++
+        return simulatedModelPlugin.implementation.decide(input, signal)
+      },
+      async write(input, signal) {
+        writes++
+        return simulatedModelPlugin.implementation.write(input, signal)
+      },
+    },
+  }
+  try {
+    const runs = await Promise.all(['first budget input', 'second budget input'].map((text) => prepareTopic(runtime, target, text)))
+    await Promise.all(runs.map(({ eventId }) => processSimulatedDraft(runtime, eventId, model)))
+    assert.equal(decisions, 2)
+    assert.equal(writes, 1)
+    assert.equal(await owner.actionProposal.count({ where: { characterId } }), 1)
+    const day = new Date(await databaseNow()).toISOString().slice(0, 10)
+    const report = await request('GET', metricsPath(characterId, day, day))
+    assert.equal(report.status, 200, JSON.stringify(report.body))
+    assert.deepEqual(report.body.alerts, ['MODEL_BUDGET_EXHAUSTED'])
+    assert.equal(report.body.days[0].modelCalls, 3)
+    assert.equal(report.body.days[0].budgetDenials, 1)
+    assert.ok(report.body.days[0].reservedUnits <= budget)
   } finally {
     await runtime.$disconnect()
   }

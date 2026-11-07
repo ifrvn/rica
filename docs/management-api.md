@@ -45,6 +45,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
+| `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 或 AUDITOR 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
 | `GET /c/audit` | ADMIN 和 AUDITOR 读取操作元数据、摘要哈希和请求 ID。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | REVIEWER 读取模拟待办和经复核的提案预览。列表不含正文。 |
 | `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
@@ -96,6 +97,14 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 预览和决定都会复核绑定、正文摘要和授权证据。撤权或配置版本更新时，待审和已批准提案会随授权纪元变化失效。适配器或策略版本不匹配、证据过期以及正文变化时，预览会隐藏正文。提交决定时会记录失效或过期状态和审计。后台过期扫描随调度接入。迁移前生成的草稿没有审批摘要，保留为 DRAFTED。真实平台 OAuth、执行许可和回执按后续工作包交付。
 
+
+## 每日评测与预算
+
+`coreProfile.dailyModelBudget` 是每角色每 UTC 日的预留单位上限，允许 1,024 至 100,000,000，默认 10,000,000。每次决策或写作调用前，由数据库原子预留序列化输入字节数与该阶段的输出额度。重试按实际尝试预留，预算不足时跳过该次模型调用。额度是本地估算，供治理使用。
+
+日报按角色和 UTC 日返回提案、批准、拒绝、近似重复提示、模拟回执、账号单日回执峰值、草稿延迟均值和预算计数。审批率以提案日期归组，分子为该组收到审批决定的提案数。回执按实际记录日期归组。报告只包含聚合数据。
+
+告警由日报计算。带重复提示的回执、缺少批准的回执、预算拒绝分别发出对应风险码。有至少 14 个完整 UTC 日时比较最近两个 7 日窗口。后窗回执总量达到前窗两倍加 7，或审批率相差至少 20 个百分点时，报告漂移。授权泄露由隔离验收中的测试标记验证。
 
 ## 回放与积压
 

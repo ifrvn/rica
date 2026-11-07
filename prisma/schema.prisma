@@ -85,6 +85,7 @@ model Character {
   managementAudit       ManagementAudit[]
 
   dailyEnergyProjections DailyEnergyProjection[]
+  modelDailyUsage ModelDailyUsage[]
   @@map("characters")
 }
 
@@ -657,6 +658,18 @@ model ActionProposal {
   @@map("action_proposals")
 }
 
+model ModelDailyUsage {
+  characterId  String @map("character_id") @db.Uuid
+  utcDay        DateTime @map("utc_day") @db.Date
+  reservedUnits Int @default(0) @map("reserved_units")
+  calls         Int @default(0)
+  denied        Int @default(0)
+  character     Character @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, utcDay])
+  @@map("model_daily_usage")
+}
+
 model ActionApproval {
   actionId     String         @id @map("action_id") @db.Uuid
   characterId  String         @map("character_id") @db.Uuid
@@ -709,6 +722,7 @@ model SimulationReceipt {
   commitment  SimulationCommitment?
 
   @@unique([characterId, actionId])
+  @@index([characterId, createdAt])
   @@map("simulation_receipts")
 }
 
