@@ -9,7 +9,7 @@ import { after, before, test } from 'node:test'
 import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
-import { deriveMemory } from '../packages/persistence/memory.js'
+import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
 import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
@@ -122,6 +122,8 @@ after(async () => {
       await tx.managementAudit.deleteMany({ where })
       await tx.managementMembership.deleteMany({ where })
       await tx.memoryGrant.deleteMany({ where })
+      await tx.beliefEvidence.deleteMany({ where })
+      await tx.beliefVersion.deleteMany({ where })
       await tx.memorySource.deleteMany({ where })
       await tx.memoryCorrection.deleteMany({ where })
       await tx.memory.deleteMany({ where })
@@ -1124,6 +1126,101 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }
+})
+
+async function beliefEvidence(sourceId?: string, accountId?: string) {
+  const source = sourceId ? { id: sourceId } : await owner.sourceRecord.create({
+    data: { characterId: a, identityId: identityA, accountId, kind: 'fixture', sourceKey: randomUUID(), classification: 'PERSONAL' },
+  })
+  const memory = await owner.memory.create({
+    data: {
+      characterId: a, identityId: identityA, accountId, scope: accountId ? 'ACCOUNT' : 'IDENTITY',
+      visibility: 'PERSONAL', content: 'Belief fixture',
+    },
+  })
+  await owner.memorySource.create({ data: { characterId: a, memoryId: memory.id, sourceId: source.id } })
+  return { sourceId: source.id, citation: { memoryId: memory.id, memoryRevision: 1, direction: 'SUPPORT', weight: 1 } }
+}
+
+const beliefCollection = (identityId: string) => characterPath(a) + '/identities/' + identityId + '/beliefs'
+const beliefData = (evidence: unknown[], statement = 'I prefer a quiet workspace') => ({
+  kind: 'PREFERENCE', statement, reason: 'Reviewed evidence', evidence,
+})
+
+test('belief evolution counts origin sources once and records strong conflict without overwriting history', async () => {
+  const first = await beliefEvidence()
+  const duplicate = await beliefEvidence(first.sourceId)
+  const independent = await beliefEvidence()
+  const contrary = await beliefEvidence()
+  const collection = beliefCollection(identityA)
+  const initial = await request('POST', collection, { key: 'belief-pending', data: beliefData([first.citation]) })
+  assert.equal(initial.status, 201, JSON.stringify(initial.body))
+  assert.equal(initial.body.status, 'PENDING')
+  const path = collection + '/' + initial.body.id
+  const pendingReplay = await request('PUT', path, { ifMatch: '"1"', data: beliefData([duplicate.citation]) })
+  assert.equal(pendingReplay.body.status, 'PENDING')
+  assert.equal((await request('PUT', path, {
+    ifMatch: '"2"', data: beliefData([first.citation, duplicate.citation]),
+  })).status, 422)
+  assert.equal((await request('POST', collection, {
+    key: 'belief-value', data: { ...beliefData([first.citation, independent.citation]), kind: 'VALUE' },
+  })).status, 422)
+  const evidence = [first.citation, independent.citation]
+  const promoted = await request('PUT', path, { ifMatch: '"2"', data: beliefData(evidence) })
+  assert.equal(promoted.status, 200, JSON.stringify(promoted.body))
+  assert.equal(promoted.body.status, 'ACTIVE')
+  assert.equal((await request('GET', path)).body.confidence, 0.7)
+  assert.equal((await request('PUT', path, {
+    ifMatch: '"3"', data: beliefData([duplicate.citation, independent.citation]),
+  })).status, 200)
+  assert.equal((await request('GET', path)).body.confidence, 0.7)
+  const disputed = await request('PUT', path, {
+    ifMatch: '"4"', data: beliefData([...evidence, { ...contrary.citation, direction: 'OPPOSE' }]),
+  })
+  assert.equal(disputed.body.status, 'DISPUTED')
+  assert.equal((await request('GET', path + '?revision=4')).body.status, 'ACTIVE')
+})
+
+test('belief rollback appends a revision and cannot restore revoked or out-of-scope evidence', async () => {
+  const first = await beliefEvidence()
+  const second = await beliefEvidence()
+  const third = await beliefEvidence()
+  const accountOnly = await beliefEvidence(undefined, accountA)
+  const collection = beliefCollection(identityA)
+  assert.equal((await request('POST', collection, {
+    key: 'belief-account', data: beliefData([first.citation, accountOnly.citation]),
+  })).status, 422)
+  const initial = await request('POST', collection, {
+    key: 'belief-restore', data: beliefData([first.citation, second.citation]),
+  })
+  assert.equal(initial.status, 201, JSON.stringify(initial.body))
+  const path = collection + '/' + initial.body.id
+  assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+  assert.equal((await request('GET', beliefCollection(identityB) + '/' + initial.body.id)).status, 404)
+  assert.equal((await request('PUT', path, {
+    ifMatch: '"1"', data: beliefData([second.citation, third.citation], 'I prefer to work outside'),
+  })).status, 200)
+  const data = { restoreVersion: 1, reason: 'Restore the previous preference' }
+  assert.equal((await request('POST', path + '/restore', { ifMatch: '"1"', data })).status, 412)
+  const restored = await request('POST', path + '/restore', { ifMatch: '"2"', data })
+  assert.equal(restored.status, 200, JSON.stringify(restored.body))
+  assert.equal(restored.body.version, 3)
+  assert.equal((await request('GET', path)).body.restoredFrom, 1)
+
+  assert.equal(await revokeMemoryAccess(owner, { kind: 'SOURCE', characterId: a, id: first.sourceId }), true)
+  for (const url of [path, path + '?revision=1']) {
+    const view = await request('GET', url)
+    assert.equal(view.body.status, 'INVALIDATED')
+    assert.equal(view.body.statement, null)
+    assert.equal(view.body.confidence, null)
+    assert.deepEqual(view.body.evidence, [])
+  }
+  assert.equal((await request('POST', path + '/restore', { ifMatch: '"3"', data })).status, 409)
+  const replacement = await request('PUT', path, {
+    ifMatch: '"3"', data: beliefData([second.citation, third.citation], 'I prefer to work outside'),
+  })
+  assert.equal(replacement.body.status, 'ACTIVE')
+  assert.equal((await request('GET', path)).body.version, 4)
 })
 
 test('manual goal cap is atomic and replay pins the identity version of active goals', async () => {

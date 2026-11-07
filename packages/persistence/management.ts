@@ -409,6 +409,35 @@ export async function approveDailyEnergy(tx: Tx, scope: Scope, input: Input<type
   return { id: row.outcome }
 }
 
+export async function readBelief(db: PrismaClient, scope: Scope, identityId: string, beliefId: string, revision?: number) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+      SELECT public.rica_read_belief(${scope.characterId}::uuid, ${identityId}::uuid,
+        ${beliefId}::uuid, ${revision ?? null}::int) AS view
+    `
+    if (!row?.view) unavailable()
+    return row.view
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function writeBelief(tx: Tx, scope: Scope, identityId: string, beliefId: string, expected: number,
+  input: Input<typeof contracts.beliefInput> | Input<typeof contracts.beliefRestoreInput>) {
+  const [row] = await tx.$queryRaw<{ status: string }[]>`
+    SELECT public.rica_write_belief(${scope.characterId}::uuid, ${identityId}::uuid,
+      ${beliefId}::uuid, ${expected}::int, ${JSON.stringify(input)}::jsonb, ${scope.actor.id}) AS status
+  `
+  if (row.status === 'MISSING') unavailable()
+  if (row.status === 'STALE') throw new ManagementError(412, 'STALE_VERSION', 'Resource version has changed')
+  if (row.status === 'KIND') invalid('Belief kind cannot be changed')
+  if (row.status === 'EVIDENCE') invalid('Evidence must be current and available at identity scope')
+  if (row.status === 'DUPLICATE_SOURCE') invalid('Each origin source may be submitted once per revision')
+  if (row.status === 'RESTORE_BLOCKED') {
+    throw new ManagementError(409, 'BELIEF_RESTORE_BLOCKED', 'Revision is not restorable with its current evidence')
+  }
+  return { id: beliefId, version: expected + 1, status: row.status }
+}
+
 export async function readManualGoals(db: PrismaClient, scope: Scope, identityId: string,
   goalId?: string, revision?: number) {
   return db.$transaction(async (tx) => {

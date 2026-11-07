@@ -63,6 +63,23 @@ export const membershipInput = reasonInput.extend({
   role: z.enum(['ADMIN', 'OPERATOR', 'REVIEWER', 'AUDITOR']),
   action: z.enum(['GRANT', 'REVOKE']),
 })
+const beliefKind = z.enum(['OPINION', 'PREFERENCE'])
+const beliefEvidence = z.object({
+  memoryId: resourceId, memoryRevision: z.number().int().min(1).max(2_147_483_647),
+  direction: z.enum(['SUPPORT', 'OPPOSE']), weight: z.number().min(0).max(1),
+})
+export const beliefInput = reasonInput.extend({
+  kind: beliefKind, statement: z.string().trim().min(1).max(1000), evidence: z.array(beliefEvidence).min(1).max(16),
+})
+export const beliefRestoreInput = reasonInput.extend({ restoreVersion: z.number().int().min(1).max(2_147_483_647) })
+export const beliefView = z.object({
+  id: resourceId, identityId: resourceId, version: z.number().int(), kind: beliefKind,
+  status: z.enum(['PENDING', 'ACTIVE', 'DISPUTED', 'INVALIDATED']),
+  statement: z.string().nullable(), confidence: z.number().nullable(), reason: z.string().nullable(),
+  restoredFrom: z.number().int().nullable(), createdAt: z.iso.datetime({ offset: true }),
+  evidence: z.array(beliefEvidence.extend({ sourceId: resourceId })),
+})
+
 const goalStatus = z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'DONE', 'CANCELED', 'EXPIRED'])
 export const manualGoalInput = reasonInput.extend({
   title: text, status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'DONE', 'CANCELED']),

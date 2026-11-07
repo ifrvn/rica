@@ -121,8 +121,47 @@ model Identity {
   @@unique([characterId, id])
   @@unique([characterId, slug])
   goals GoalVersion[]
+  beliefs BeliefVersion[]
 
   @@map("identities")
+}
+
+model BeliefVersion {
+  characterId  String   @map("character_id") @db.Uuid
+  identityId   String   @map("identity_id") @db.Uuid
+  beliefId     String   @map("belief_id") @db.Uuid
+  version      Int
+  kind         String
+  statement    String
+  status       String
+  confidence   Float
+  reason       String
+  actorId      String   @map("actor_id")
+  restoredFrom Int?     @map("restored_from")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  identity     Identity @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  evidence     BeliefEvidence[]
+
+  @@id([characterId, identityId, beliefId, version])
+  @@map("belief_versions")
+}
+
+model BeliefEvidence {
+  characterId    String        @map("character_id") @db.Uuid
+  identityId     String        @map("identity_id") @db.Uuid
+  beliefId       String        @map("belief_id") @db.Uuid
+  version        Int
+  sourceId       String        @map("source_id") @db.Uuid
+  memoryId       String        @map("memory_id") @db.Uuid
+  memoryRevision Int           @map("memory_revision")
+  direction      String
+  weight         Float
+  belief         BeliefVersion @relation(fields: [characterId, identityId, beliefId, version], references: [characterId, identityId, beliefId, version], onDelete: Restrict, onUpdate: NoAction)
+  provenance     MemorySource  @relation(fields: [characterId, memoryId, sourceId], references: [characterId, memoryId, sourceId], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, identityId, beliefId, version, sourceId])
+  @@index([characterId, memoryId, sourceId])
+  @@map("belief_evidence")
 }
 
 model GoalVersion {
@@ -385,6 +424,8 @@ model MemorySource {
 
   @@id([characterId, memoryId, sourceId])
   @@index([characterId, sourceId])
+  beliefEvidence BeliefEvidence[]
+
   @@map("memory_sources")
 }
 

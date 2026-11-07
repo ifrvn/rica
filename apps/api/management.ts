@@ -258,6 +258,72 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     return c.json({ ...result, requestId }, 201)
   })
 
+  const beliefs = `${character}/identities/{identityId}/beliefs` as const
+  const beliefParams = identityParams.extend({ beliefId: schema.resourceId })
+  app.openapi(createRoute({
+    method: 'get', path: `${beliefs}/{beliefId}`, security,
+    request: { params: beliefParams, query: z.object({ revision: z.string().regex(/^[1-9][0-9]{0,8}$/).optional() }) },
+    responses: { ...errors, 200: success(schema.beliefView) },
+  }), async (c) => {
+    const { characterId, identityId, beliefId } = c.req.valid('param')
+    const { revision } = c.req.valid('query')
+    const view = schema.beliefView.parse(await management.readBelief(
+      db, { characterId, actor: c.get('actor') }, identityId, beliefId, revision ? Number(revision) : undefined,
+    ))
+    c.header('ETag', '"' + view.version + '"')
+    return c.json(view, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: beliefs, security,
+    request: { params: identityParams, headers: schema.idempotencyHeader, body: body(schema.beliefInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, identityId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'belief.create', targetScope: characterId + '/' + identityId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.writeBelief(tx, scope, identityId, randomUUID(), 0, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${beliefs}/{beliefId}`, security,
+    request: { params: beliefParams, headers: schema.versionHeader, body: body(schema.beliefInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, identityId, beliefId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'belief.update', targetScope: characterId + '/' + identityId + '/' + beliefId,
+      input: { input, expected }, requestId,
+    }, (tx) => management.writeBelief(tx, scope, identityId, beliefId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${beliefs}/{beliefId}/restore`, security,
+    request: { params: beliefParams, headers: schema.versionHeader, body: body(schema.beliefRestoreInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, identityId, beliefId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'belief.restore', targetScope: characterId + '/' + identityId + '/' + beliefId,
+      input: { input, expected }, requestId,
+    }, (tx) => management.writeBelief(tx, scope, identityId, beliefId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
   const goals = `${character}/identities/{identityId}/goals` as const
   const goalParams = identityParams.extend({ goalId: schema.resourceId })
   const goalQuery = z.object({ revision: z.string().regex(/^[1-9][0-9]{0,8}$/).optional() })

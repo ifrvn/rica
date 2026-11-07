@@ -36,7 +36,9 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 或 AUDITOR 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
 | `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 或 AUDITOR 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
 | `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 更新状态和配置。 |
-
+| `POST /c/identities/{identityId}/beliefs` | ADMIN 使用幂等键提交身份观点或偏好及其证据。 |
+| `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 或 AUDITOR 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
+| `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
 | `POST /c/memberships` | ADMIN 授予或撤销当前发行者下的角色权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
@@ -46,7 +48,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
 
-POST 带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无令牌或令牌无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
+声明幂等键的 POST 请求带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无令牌或令牌无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
 
 分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求把响应的 `nextCursor` 作为 `cursor` 传回。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
 
@@ -57,6 +59,14 @@ ADMIN 可在身份档案的 `roleProfile.stateRule` 配置动机和模拟情绪�
 每个事件固定使用其身份版本的配置。重放以当前折叠的事件规则计算前一事件至该事件的衰减和增量。读取状态时使用最后折叠事件的半衰期，已保存的修订保持原值。
 
 每日投影的请求字段为 `utcDay`、`energy` 和 `reason`。`energy` 可取 `LOW`、`NORMAL` 或 `HIGH`。管理员只可批准未来 UTC 日，同角色的身份在该日读取同一档位。没有审批时返回 `NORMAL`。内部决策收到档位，不收到审批理由、操作者或其他身份的局部状态。
+
+## 身份观点与偏好
+
+创建和更新接受 `kind`、`statement`、`reason` 和一至十六条 `evidence`。类型可取 `OPINION` 或 `PREFERENCE`，创建后固定。每条证据包含 `memoryId`、`memoryRevision`、`direction` 和 `weight`。方向可取 `SUPPORT` 或 `OPPOSE`，权重为 0 至 1。
+
+证据必须是同一身份的有效身份级公开或个人记忆，且只有一个同身份、无账号或会话绑定的原始来源。服务端解析来源。同一来源的两条记忆在同一版本中返回 422。更新提交完整的证据集合，原有权重按净变化计分，重复提交相同来源及权重不会抬高置信度。从 0.5 起算，每批最多变动 0.20。正式生效需至少两个独立的支持来源且置信度至少为 0.65。一条强支持和一条强反对同时出现时记录为 `DISPUTED`，强证据的权重至少为 0.8。其余未达标的版本为 `PENDING`。
+
+恢复请求提交 `restoreVersion` 和 `reason`，并用当前最新版本作为 If-Match。只可恢复更早的 `ACTIVE` 版本。记忆纠错、过期或来源撤销后，相关版本读取为 `INVALIDATED`，正文、置信度、理由和证据引用隐藏，恢复返回 409。ADMIN 可基于现有有效证据提交新的版本并重新计分。观点入口当前供管理端使用。
 
 ## 模拟审批
 
