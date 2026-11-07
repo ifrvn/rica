@@ -36,6 +36,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 或 AUDITOR 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
 | `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 或 AUDITOR 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
 | `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 更新状态和配置。 |
+| `GET /c/identities/{identityId}/reflections/{utcDay}` | ADMIN 或 AUDITOR 查看该身份指定 UTC 日的反思和候选引用。 |
 | `POST /c/identities/{identityId}/beliefs` | ADMIN 使用幂等键提交身份观点或偏好及其证据。 |
 | `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 或 AUDITOR 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
 | `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
@@ -67,6 +68,12 @@ ADMIN 可在身份档案的 `roleProfile.stateRule` 配置动机和模拟情绪�
 证据必须是同一身份的有效身份级公开或个人记忆，且只有一个同身份、无账号或会话绑定的原始来源。服务端解析来源。同一来源的两条记忆在同一版本中返回 422。更新提交完整的证据集合，原有权重按净变化计分，重复提交相同来源及权重不会抬高置信度。从 0.5 起算，每批最多变动 0.20。正式生效需至少两个独立的支持来源且置信度至少为 0.65。一条强支持和一条强反对同时出现时记录为 `DISPUTED`，强证据的权重至少为 0.8。其余未达标的版本为 `PENDING`。
 
 恢复请求提交 `restoreVersion` 和 `reason`，并用当前最新版本作为 If-Match。只可恢复更早的 `ACTIVE` 版本。记忆纠错、过期或来源撤销后，相关版本读取为 `INVALIDATED`，正文、置信度、理由和证据引用隐藏，恢复返回 409。ADMIN 可基于现有有效证据提交新的版本并重新计分。观点版本由管理端提交。模拟内部决策按置信度读取最多八条当前身份的有效正式观点，以主观判断字段区分。写作模型使用单独授权的证据。审批预览、审批决定、执行许可和模拟回执写入都会复核草稿引用的观点版本。
+
+## 每日身份反思
+
+Worker 为启用的角色和身份汇总上一完整 UTC 日。同一身份同一天只记录一次，重启或多个 Worker 同时扫描可重试。反思分别保存虚构背景存在标记、已确认模拟回执计数及未核实入站计数，并记录生成时的核心和身份版本。汇总使用计数和引用，原始消息及档案正文保留在源存储中。
+
+若该日有合格的身份级记忆，反思最多生成一条待复核的偏好，并返回其 `candidateBeliefId`。已用于自动候选的同一登记来源不会再次生成候选。来源失效时，候选按观点接口的规则隐藏内容。管理员复核时可引用其他独立来源，再按正式观点规则提交更新。
 
 ## 模拟审批
 

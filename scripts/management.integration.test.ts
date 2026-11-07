@@ -14,6 +14,7 @@ import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory
 import { reviewTarget } from '../packages/contracts/action-review.js'
 import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
+import { scanIdentityReflections } from '../packages/persistence/identity-reflection.js'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
@@ -123,6 +124,7 @@ after(async () => {
       await tx.managementAudit.deleteMany({ where })
       await tx.managementMembership.deleteMany({ where })
       await tx.memoryGrant.deleteMany({ where })
+      await tx.identityReflection.deleteMany({ where })
       await tx.beliefEvidence.deleteMany({ where })
       await tx.beliefVersion.deleteMany({ where })
       await tx.memorySource.deleteMany({ where })
@@ -1224,13 +1226,88 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
   assert.equal((await request('GET', path)).body.version, 4)
 })
 
+async function reflectionIdentity() {
+  const created = await request('POST', characterPath(a) + '/identities', {
+    key: randomUUID(), data: { slug: 'reflection-' + randomUUID(), roleProfile: {} },
+  })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const id: string = created.body.id
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
+  await owner.identity.update({ where: { id }, data: { status: 'ACTIVE' } })
+  return id
+}
+
+function reflectionPath(identityId: string, utcDay: string) {
+  return characterPath(a) + '/identities/' + identityId + '/reflections/' + utcDay
+}
+
+async function reflectionDay() {
+  const date = new Date((await databaseNow()) - 86_400_000)
+  date.setUTCHours(12, 0, 0, 0)
+  return { date, utcDay: date.toISOString().slice(0, 10) }
+}
+
+test('daily reflection deduplicates runs and creates only an identity-local pending preference', async () => {
+  const identityId = await reflectionIdentity()
+  const otherIdentity = await reflectionIdentity()
+  const { date, utcDay } = await reflectionDay()
+  const account = await owner.platformAccount.create({
+    data: {
+      characterId: a, identityId, status: 'ACTIVE', platform: 'mock-a',
+      instanceKey: 'integration', remoteAccountId: randomUUID(),
+    },
+  })
+  const conversation = await owner.conversation.create({
+    data: { characterId: a, identityId, accountId: account.id, remoteKey: randomUUID(), channel: 'PUBLIC' },
+  })
+  await owner.inboundEvent.create({
+    data: {
+      characterId: a, identityId, accountId: account.id, conversationId: conversation.id, sourceKey: randomUUID(), kind: 'POST',
+      occurredAt: date, receivedAt: date, messageText: 'unverified fixture message',
+    },
+  })
+  const memory = await owner.memory.create({
+    data: { characterId: a, identityId, scope: 'IDENTITY', visibility: 'PERSONAL', content: 'private experience', createdAt: date },
+  })
+  const source = await owner.sourceRecord.create({
+    data: { characterId: a, identityId, kind: 'fixture', sourceKey: randomUUID(), classification: 'PERSONAL' },
+  })
+  await owner.memorySource.create({ data: { characterId: a, memoryId: memory.id, sourceId: source.id } })
+  const runtimeUrl = new URL(config.databaseUrl)
+  runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
+  const runtime = createDatabase(runtimeUrl.toString())
+  try {
+    await Promise.all([scanIdentityReflections(runtime, null), scanIdentityReflections(runtime, null)])
+    const path = reflectionPath(identityId, utcDay)
+    const reflection = await request('GET', path)
+    assert.equal(reflection.status, 200, JSON.stringify(reflection.body))
+    assert.deepEqual(reflection.body.observedActivity, { kind: 'OBSERVED_ACTIVITY', simulatedReceipts: 0 })
+    assert.deepEqual(reflection.body.unverifiedExternal, { kind: 'UNVERIFIED_EXTERNAL', inboundMessages: 1 })
+    assert.equal(reflection.body.fictionalProfile.kind, 'FICTIONAL_PROFILE')
+    assert.equal(JSON.stringify(reflection.body).includes('unverified fixture message'), false)
+    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+    assert.equal((await request('GET', reflectionPath(otherIdentity, utcDay))).body.candidateBeliefId, null)
+    const beliefId = reflection.body.candidateBeliefId
+    const beliefPath = beliefCollection(identityId) + '/' + beliefId
+    const belief = await request('GET', beliefPath)
+    assert.equal(belief.body.status, 'PENDING')
+    assert.equal(belief.body.evidence[0].memoryId, memory.id)
+    assert.equal(await owner.beliefVersion.count({ where: { characterId: a, identityId } }), 1)
+
+    assert.equal(await revokeMemoryAccess(owner, { kind: 'SOURCE', characterId: a, id: source.id }), true)
+    assert.equal((await request('GET', beliefPath)).body.status, 'INVALIDATED')
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 async function beliefReviewAccount() {
   await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
   await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
   return newSimulationAccount()
 }
 
-test('subjective belief projection stays inside decisions and expired references block execution', async () => {
+test('subjective belief projection stays inside decisions and expired references block execution', { timeout: 20_000 }, async () => {
   const expiresAt = new Date((await databaseNow()) + 8000)
   const first = await beliefEvidence(undefined, undefined, expiresAt)
   const second = await beliefEvidence()
@@ -1274,7 +1351,7 @@ test('subjective belief projection stays inside decisions and expired references
     let permitted = false
     await executeSimulation(executor, action.id, async (db, id) => {
       permitted = true
-      await sleep(Math.max(0, expiresAt.getTime() - (await databaseNow()) + 50))
+      while ((await databaseNow()) < expiresAt.getTime()) await sleep(100)
       return recordSimulationReceipt(db, id)
     })
     assert.equal(permitted, true)

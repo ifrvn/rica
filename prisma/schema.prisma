@@ -122,8 +122,26 @@ model Identity {
   @@unique([characterId, slug])
   goals GoalVersion[]
   beliefs BeliefVersion[]
+  reflections IdentityReflection[]
 
   @@map("identities")
+}
+
+model IdentityReflection {
+  characterId      String   @map("character_id") @db.Uuid
+  identityId       String   @map("identity_id") @db.Uuid
+  utcDay           DateTime @map("utc_day") @db.Date
+  coreVersion      Int      @map("core_version")
+  identityVersion  Int      @map("identity_version")
+  fictionalProfile Boolean  @map("fictional_profile")
+  observedReceipts Int      @map("observed_receipts")
+  unverifiedEvents Int      @map("unverified_events")
+  candidateBeliefId String? @map("candidate_belief_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  identity         Identity @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, identityId, utcDay])
+  @@map("identity_reflections")
 }
 
 model BeliefVersion {

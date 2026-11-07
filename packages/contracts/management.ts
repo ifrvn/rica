@@ -63,6 +63,14 @@ export const membershipInput = reasonInput.extend({
   role: z.enum(['ADMIN', 'OPERATOR', 'REVIEWER', 'AUDITOR']),
   action: z.enum(['GRANT', 'REVOKE']),
 })
+export const identityReflectionView = z.object({
+  identityId: resourceId, utcDay: z.iso.date(), coreVersion: z.number().int(), identityVersion: z.number().int(),
+  createdAt: z.iso.datetime({ offset: true }), candidateBeliefId: resourceId.nullable(),
+  fictionalProfile: z.object({ kind: z.literal('FICTIONAL_PROFILE'), present: z.boolean() }),
+  observedActivity: z.object({ kind: z.literal('OBSERVED_ACTIVITY'), simulatedReceipts: z.number().int().nonnegative() }),
+  unverifiedExternal: z.object({ kind: z.literal('UNVERIFIED_EXTERNAL'), inboundMessages: z.number().int().nonnegative() }),
+})
+
 const beliefKind = z.enum(['OPINION', 'PREFERENCE'])
 const beliefEvidence = z.object({
   memoryId: resourceId, memoryRevision: z.number().int().min(1).max(2_147_483_647),

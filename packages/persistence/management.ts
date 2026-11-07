@@ -409,6 +409,17 @@ export async function approveDailyEnergy(tx: Tx, scope: Scope, input: Input<type
   return { id: row.outcome }
 }
 
+export async function readIdentityReflection(db: PrismaClient, scope: Scope, identityId: string, day: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+      SELECT public.rica_read_identity_reflection(${scope.characterId}::uuid, ${identityId}::uuid, ${day}::date) AS view
+    `
+    if (!row?.view) unavailable()
+    return row.view
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
 export async function readBelief(db: PrismaClient, scope: Scope, identityId: string, beliefId: string, revision?: number) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])

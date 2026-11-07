@@ -258,6 +258,16 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     return c.json({ ...result, requestId }, 201)
   })
 
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/identities/{identityId}/reflections/{utcDay}`, security,
+    request: { params: identityParams.extend({ utcDay: z.iso.date() }) },
+    responses: { ...errors, 200: success(schema.identityReflectionView) },
+  }), async (c) => {
+    const { characterId, identityId, utcDay } = c.req.valid('param')
+    const view = await management.readIdentityReflection(db, { characterId, actor: c.get('actor') }, identityId, utcDay)
+    return c.json(schema.identityReflectionView.parse(view), 200)
+  })
+
   const beliefs = `${character}/identities/{identityId}/beliefs` as const
   const beliefParams = identityParams.extend({ beliefId: schema.resourceId })
   app.openapi(createRoute({

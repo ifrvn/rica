@@ -2,6 +2,7 @@ import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue, Worker } from 'bullmq'
 import { Redis } from 'ioredis'
+import { scanIdentityReflections } from '../../packages/persistence/identity-reflection.js'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
@@ -134,7 +135,20 @@ export async function startOutboxWorker(
     }
   }
 
-  const loops = [relay(), scheduleLoop()]
+  async function reflectionLoop() {
+    let cursor: string | null = null
+    while (!stop.signal.aborted) {
+      try {
+        cursor = await scanIdentityReflections(db, cursor)
+      } catch {
+        cursor = null
+        logError()
+      }
+      await sleep(cursor ? 1000 : 60_000, undefined, { signal: stop.signal }).catch(() => {})
+    }
+  }
+
+  const loops = [relay(), scheduleLoop(), reflectionLoop()]
   return {
     async close() {
       stop.abort()
