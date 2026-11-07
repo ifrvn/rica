@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { coreProfile, identityProfile } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
+import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
+import { dailyScheduleSlot } from './simulation-schedules.js'
 import type { ManagementRole, Prisma, PrismaClient } from './generated/client.js'
 
 type Subject = Readonly<{ issuer: string; subject: string; id: string }>
@@ -421,5 +423,72 @@ export async function listAudit(db: PrismaClient, scope: Scope, page: Page) {
       ...args, where,
     })
     return makePage(rows, page, ({ characterId: _, createdAt, ...entry }) => ({ ...entry, createdAt: createdAt.toISOString() }))
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+async function scheduleTiming(tx: Tx, input: Input<typeof scheduleUpdate>) {
+  const { zone, rule, enabled } = input
+  const [zoneCheck] = await tx.$queryRaw<{ valid: boolean }[]>`
+    SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_timezone_names WHERE name = ${zone}) AS valid
+  `
+  if (!zoneCheck?.valid) invalid('Unsupported schedule time zone')
+  const dueAt = rule.kind === 'REMINDER' ? new Date(rule.dueAt) : null
+  const localTime = rule.kind === 'DAILY' ? rule.localTime : null
+  const nextAt = !enabled ? null : dueAt ?? await dailyScheduleSlot(tx, zone, localTime!, new Date())
+  return { zone, kind: rule.kind, dueAt, localTime, enabled, nextAt }
+}
+
+export async function createSchedule(tx: Tx, scope: Scope, input: Input<typeof scheduleInput>) {
+  const { characterId } = scope
+  const { accountId, conversationId, contactId, scheduleKey } = input
+  const account = await tx.platformAccount.findFirst({
+    where: { id: accountId, characterId, platform: { in: ['mock-a', 'mock-b'] } },
+    select: { identityId: true },
+  })
+  if (!account) unavailable()
+  const conversation = await tx.conversation.findFirst({
+    where: { id: conversationId, characterId, identityId: account.identityId, accountId },
+    select: { channel: true, privateContactId: true },
+  })
+  if (!conversation) unavailable()
+  if (conversation.channel === 'PRIVATE' && conversation.privateContactId !== contactId) unavailable()
+  if (conversation.channel === 'PUBLIC' && contactId) invalid('Public schedule must not specify a private contact')
+  const timing = await scheduleTiming(tx, input)
+  const { id, version } = await tx.simulationSchedule.create({
+    data: { ...timing, characterId, identityId: account.identityId, accountId, conversationId, contactId, scheduleKey },
+    select: { id: true, version: true },
+  })
+  return { id, version }
+}
+
+export async function updateSchedule(
+  tx: Tx, scope: Scope, id: string, expected: number, input: Input<typeof scheduleUpdate>,
+) {
+  const schedule = await tx.simulationSchedule.findFirst({
+    where: { id, characterId: scope.characterId }, select: { version: true },
+  })
+  if (!schedule) unavailable()
+  checkVersion(schedule.version, expected)
+  const timing = await scheduleTiming(tx, input)
+  return tx.simulationSchedule.update({
+    where: { id }, data: { ...timing, version: { increment: 1 } }, select: { id: true, version: true },
+  })
+}
+
+export async function listSchedules(db: PrismaClient, scope: Scope, page: Page) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN'])
+    const where = { characterId: scope.characterId }
+    const args = await pageArgs(page, (id) => tx.simulationSchedule.findFirst({ where: { ...where, id }, select: { id: true } }))
+    const rows = await tx.simulationSchedule.findMany({
+      ...args, where,
+      select: { id: true, scheduleKey: true, zone: true, kind: true, localTime: true, dueAt: true,
+        nextAt: true, enabled: true, version: true, accountId: true, conversationId: true, contactId: true },
+    })
+    return makePage(rows, page, ({ kind, localTime, dueAt, nextAt, ...row }) => ({
+      ...row,
+      rule: kind === 'DAILY' ? { kind, localTime: localTime! } : { kind, dueAt: dueAt!.toISOString() },
+      nextAt: nextAt?.toISOString() ?? null,
+    }))
   }, { isolationLevel: 'RepeatableRead' })
 }

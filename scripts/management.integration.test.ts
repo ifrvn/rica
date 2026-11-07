@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { startOutboxWorker } from '../apps/worker/outbox.js'
+import { dailyScheduleSlot, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
 import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
@@ -106,6 +109,8 @@ after(async () => {
       await tx.simulatedDraft.deleteMany({ where })
       await tx.contextSnapshotEvidence.deleteMany({ where })
       await tx.contextSnapshot.deleteMany({ where })
+      await tx.scheduleOccurrence.deleteMany({ where })
+      await tx.simulationSchedule.deleteMany({ where })
       await tx.agentRun.deleteMany({ where })
       await tx.inboundEvent.deleteMany({ where })
       await tx.managementAudit.deleteMany({ where })
@@ -562,6 +567,155 @@ test('restart recovers receipts and only evidence-backed manual resolution relea
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: lost.id } }), 0)
   } finally {
     await executor.$disconnect()
+  }
+})
+
+
+function scheduleRuntimeUrl() {
+  const url = new URL(config.databaseUrl)
+  url.searchParams.set('options', '-c role=rica_runtime')
+  return url.toString()
+}
+
+async function scheduleConversation() {
+  return owner.conversation.create({
+    data: {
+      characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID(), channel: 'PUBLIC',
+    },
+  })
+}
+
+test('daily schedule slots skip spring gaps and choose the earlier fall overlap', async () => {
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    const zone = 'America/New_York'
+    const gap = await dailyScheduleSlot(runtime, zone, '02:30', new Date('2026-03-08T06:00:00Z'))
+    assert.equal(gap.toISOString(), '2026-03-09T06:30:00.000Z')
+    const fold = await dailyScheduleSlot(runtime, zone, '01:30', new Date('2026-11-01T04:00:00Z'))
+    assert.equal(fold.toISOString(), '2026-11-01T05:30:00.000Z')
+    const afterFirst = await dailyScheduleSlot(runtime, zone, '01:30', new Date('2026-11-01T05:45:00Z'))
+    assert.equal(afterFirst.toISOString(), '2026-11-02T06:30:00.000Z')
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('parallel schedule scans catch up only the latest eligible slot and edits cancel the old run', async () => {
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    await owner.character.update({ where: { id: a }, data: { timezone: 'UTC' } })
+    const conversation = await scheduleConversation()
+    const path = characterPath(a) + '/schedules'
+    const plan = {
+      scheduleKey: 'daily-fixture', accountId: accountA, conversationId: conversation.id, enabled: true,
+      zone: 'UTC', rule: { kind: 'DAILY', localTime: '09:00' },
+    }
+    assert.equal((await request('POST', path, { actor: 'reviewer', key: 'forbidden-schedule', data: plan })).status, 403)
+    const created = await request('POST', path, { key: 'daily-fixture', data: plan })
+    assert.equal(created.status, 201, JSON.stringify(created.body))
+    const stale = await request('POST', path, {
+      key: 'late-fixture', data: { ...plan, scheduleKey: 'late-fixture', rule: { kind: 'DAILY', localTime: '08:00' } },
+    })
+    assert.equal(stale.status, 201, JSON.stringify(stale.body))
+    assert.deepEqual((await request('GET', path)).body.items.map(({ scheduleKey }: { scheduleKey: string }) => scheduleKey),
+      ['daily-fixture', 'late-fixture'])
+    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+    const scheduleId = created.body.id
+    await owner.simulationSchedule.updateMany({
+      where: { id: { in: [scheduleId, stale.body.id] } }, data: { nextAt: new Date('2026-03-10T08:00:00Z') },
+    })
+    const now = new Date('2026-03-12T10:30:00Z')
+    await Promise.all(Array.from({ length: 6 }, () => scanSimulationSchedules(runtime, null, now)))
+    await scanSimulationSchedules(runtime, null, new Date('2026-03-11T10:30:00Z'))
+    const occurrences = await owner.scheduleOccurrence.findMany({ where: { scheduleId } })
+    assert.equal(occurrences.length, 1)
+    assert.equal(occurrences[0].scheduledAt.toISOString(), '2026-03-12T09:00:00.000Z')
+    assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId: stale.body.id } }), 0)
+    const runId = occurrences[0].runId
+    assert.equal(await owner.outboxEvent.count({ where: { runId, type: runQueuedEvent } }), 1)
+    assert.equal(await owner.managementAudit.count({ where: { targetId: runId, operation: 'schedule.fire' } }), 1)
+    await assert.rejects(ingestSimulatedEvent(runtime, {
+      accountId: accountA, sourceKey: 'schedule:forged', kind: 'POST', occurredAt: now,
+    }), /Invalid simulated event/)
+
+    const disabled = await request('PUT', path + '/' + scheduleId, {
+      ifMatch: '"1"', data: { zone: plan.zone, rule: plan.rule, enabled: false },
+    })
+    assert.equal(disabled.status, 200)
+    assert.equal(disabled.body.version, 2)
+    const run = await owner.agentRun.findUniqueOrThrow({ where: { id: runId } })
+    assert.equal(run.state, 'CANCELED')
+    assert.equal(run.stateReason, 'SCHEDULE_CHANGED')
+    assert.equal(await owner.managementAudit.count({ where: { targetId: runId, operation: 'schedule.invalidate' } }), 1)
+    assert.equal((await request('PUT', path + '/' + scheduleId, {
+      ifMatch: '"1"', data: { zone: plan.zone, rule: plan.rule, enabled: true },
+    })).status, 412)
+    await owner.simulationSchedule.update({ where: { id: stale.body.id }, data: { enabled: false, nextAt: null } })
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('an overdue reminder survives quiet hours and reaches the normal Worker once', async () => {
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    const conversation = await scheduleConversation()
+    const dueAt = '2025-12-30T05:30:00.000Z'
+    const created = await request('POST', characterPath(a) + '/schedules', {
+      key: 'commitment-fixture',
+      data: {
+        scheduleKey: 'commitment-fixture', accountId: accountA, conversationId: conversation.id,
+        zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt },
+      },
+    })
+    assert.equal(created.status, 201, JSON.stringify(created.body))
+    const id = created.body.id
+    await scanSimulationSchedules(runtime, null, new Date('2026-01-02T03:00:00Z'))
+    assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId: id } }), 0)
+    assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id } })).nextAt?.toISOString(),
+      '2026-01-02T08:00:00.000Z')
+    for (let i = 0; i < 2; i++) await scanSimulationSchedules(runtime, null, new Date('2026-01-02T08:00:00Z'))
+    const occurrences = await owner.scheduleOccurrence.findMany({ where: { scheduleId: id } })
+    assert.equal(occurrences.length, 1)
+    assert.equal(occurrences[0].scheduledAt.toISOString(), dueAt)
+    assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id } })).nextAt, null)
+    const worker = startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl)
+    try {
+      const runId = occurrences[0].runId
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        if ((await owner.agentRun.findUniqueOrThrow({ where: { id: runId } })).state === 'CONTEXT_READY') break
+        await sleep(50)
+      }
+      assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: runId } })).state, 'CONTEXT_READY')
+      assert.equal(await owner.outboxEvent.count({ where: { runId, type: runQueuedEvent, processedAt: { not: null } } }), 1)
+
+      await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+      const live = await request('POST', characterPath(a) + '/schedules', {
+        key: 'worker-scanned-reminder',
+        data: {
+          scheduleKey: 'worker-scanned-reminder', accountId: accountA, conversationId: conversation.id,
+          zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt: new Date().toISOString() },
+        },
+      })
+      assert.equal(live.status, 201)
+      let state: string | undefined
+      const scanDeadline = Date.now() + 10_000
+      while (Date.now() < scanDeadline) {
+        const occurrence = await owner.scheduleOccurrence.findFirst({
+          where: { scheduleId: live.body.id }, select: { run: { select: { state: true } } },
+        })
+        state = occurrence?.run.state
+        if (state === 'CONTEXT_READY') break
+        await sleep(50)
+      }
+      assert.equal(state, 'CONTEXT_READY')
+      assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId: live.body.id } }), 1)
+    } finally {
+      await worker.close()
+    }
+  } finally {
+    await runtime.$disconnect()
   }
 })
 

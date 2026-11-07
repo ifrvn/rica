@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
+import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
 import * as schema from '../../packages/contracts/management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
@@ -361,6 +362,49 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
       ...scope, operation: 'simulation.resolve', targetScope: characterId + '/' + actionId,
       input: { input, expected }, requestId, key: headers['idempotency-key'],
     }, (tx) => resolveSimulationReconciliation(tx, scope, actionId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/schedules`, security,
+    request: { params: characterParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(scheduleView)) },
+  }), async (c) => c.json(await management.listSchedules(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
+  ), 200))
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/schedules`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(scheduleInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'schedule.create', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.createSchedule(tx, scope, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${character}/schedules/{scheduleId}`, security,
+    request: {
+      params: characterParams.extend({ scheduleId: schema.resourceId }),
+      headers: schema.versionHeader, body: body(scheduleUpdate),
+    },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, scheduleId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'schedule.update', targetScope: characterId + '/' + scheduleId,
+      input: { input, expected }, requestId,
+    }, (tx) => management.updateSchedule(tx, scope, scheduleId, expected, input))
     return c.json({ ...result, requestId }, 200)
   })
 

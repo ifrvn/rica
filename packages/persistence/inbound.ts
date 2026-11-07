@@ -3,6 +3,7 @@ import { registerPlugins } from '../runtime/plugin-registry.js'
 import { resolveSimulatedPlatform, type NormalizedPlatformEvent } from '../runtime/simulated-platforms.js'
 import type { InboundKind, PrismaClient } from './generated/client.js'
 import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
+import { scheduleSourcePrefix } from './simulation-schedules.js'
 
 type SimulatedEvent = Readonly<{
   accountId: string
@@ -48,7 +49,7 @@ async function storeSimulatedEvent(db: PrismaClient, event: SimulatedEvent, remo
     || messageText.length > maxSimulatedTextLength || messageText.includes('\0'))) {
     throw new Error('Invalid simulated message')
   }
-  if (sourceKey.trim().length === 0 || sourceKey.length > 256 || !Number.isFinite(occurredAt.getTime())) {
+  if (sourceKey.trim().length === 0 || sourceKey.length > 256 || sourceKey.startsWith(scheduleSourcePrefix) || !Number.isFinite(occurredAt.getTime())) {
     throw new Error('Invalid simulated event')
   }
 

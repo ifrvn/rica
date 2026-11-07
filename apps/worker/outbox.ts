@@ -4,6 +4,7 @@ import { Redis } from 'ioredis'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
+import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
 import { simulatedModelPlugin, type ModelProvider } from '../../packages/runtime/model-provider.js'
 import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 
@@ -72,11 +73,23 @@ export function startOutboxWorker(
     }
   }
 
-  const loop = relay()
+  async function scheduleLoop() {
+    let cursor: string | null = null
+    while (!stop.signal.aborted) {
+      try {
+        cursor = await scanSimulationSchedules(db, cursor)
+      } catch {
+        logError()
+      }
+      await sleep(1000, undefined, { signal: stop.signal }).catch(() => {})
+    }
+  }
+
+  const loops = [relay(), scheduleLoop()]
   return {
     async close() {
       stop.abort()
-      await loop
+      await Promise.all(loops)
       try {
         await Promise.all([worker.close(), queue.close()])
       } finally {
