@@ -1109,3 +1109,86 @@ test('platform ingress rejects mismatched source and private recipient before cr
     await runtime.$disconnect()
   }
 })
+
+test('measures authorized recall with 100000 memories and 10 concurrent runs', {
+  skip: process.env.RICA_RECALL_BENCHMARK !== '1',
+}, async (t) => {
+  assert.ok(fixture)
+  const { characterId, accounts } = fixture
+  assert.equal(await db.memory.count({ where: { characterId } }), 0, 'Run the recall benchmark on its own')
+  t.after(async () => {
+    await db.memorySource.deleteMany({ where: { characterId } })
+    let deleted: number
+    do {
+      deleted = await db.$executeRaw`
+        WITH batch AS (
+          SELECT id FROM public.memories WHERE character_id = ${characterId}::uuid LIMIT 5000
+        )
+        DELETE FROM public.memories m USING batch WHERE m.id = batch.id
+      `
+    } while (deleted === 5000)
+  })
+  const scopes = [
+    { identityId: null, count: 10_000, marker: 'core' },
+    ...accounts.map(({ identityId }, index) => ({ identityId, count: 30_000, marker: 'identity-' + index })),
+  ]
+  for (const { identityId, count, marker } of scopes) {
+    const source = await db.sourceRecord.create({
+      data: { characterId, identityId, kind: 'fixture', sourceKey: marker, classification: 'PUBLIC' },
+    })
+    for (let start = 1; start <= count; start += 5000) {
+      await db.$executeRaw`
+        WITH inserted AS (
+          INSERT INTO public.memories (character_id, identity_id, scope, visibility, content, core_approved_at)
+          SELECT ${characterId}::uuid, ${identityId}::uuid,
+            CASE WHEN ${identityId}::uuid IS NULL THEN 'CORE'::"MemoryScope" ELSE 'IDENTITY'::"MemoryScope" END,
+            'PUBLIC', ${marker} || ' ' || n || CASE WHEN n % 100 = 0 THEN ' alpine signal' ELSE ' historical record' END,
+            CASE WHEN ${identityId}::uuid IS NULL THEN statement_timestamp() END
+          FROM generate_series(${start}::integer, ${start + 4999}::integer) n
+          RETURNING id
+        )
+        INSERT INTO public.memory_sources (character_id, memory_id, source_id)
+        SELECT ${characterId}::uuid, id, ${source.id}::uuid FROM inserted
+      `
+    }
+  }
+  assert.equal(await db.memory.count({ where: { characterId } }), 100_000)
+  await db.$executeRaw`ANALYZE public.memories, public.memory_sources, public.sources_registry`
+
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const runs = await Promise.all(Array.from({ length: 10 }, async (_, index) => {
+      const identity = index % accounts.length
+      const id = await preparedMemoryRun(accounts[identity].id)
+      return { id, identity }
+    }))
+    const samples: number[] = []
+    const failures: string[] = []
+    for (let round = 0; round <= 10; round++) {
+      await Promise.all(runs.map(async ({ id, identity }) => {
+        const start = performance.now()
+        try {
+          const result = await recallAuthorizedMemories(runtime, id, { purpose: 'DECISION_SUPPORT' }, 'alpine signal')
+          if (round > 0) samples.push(performance.now() - start)
+          assert.equal(result.length, 8)
+          assert.ok(result.every(({ content }) => content.startsWith('core ') || content.startsWith('identity-' + identity + ' ')))
+        } catch (error) {
+          failures.push(String(error))
+        }
+      }))
+      if (failures.length) break
+    }
+    samples.sort((a, b) => a - b)
+    const percentile = (p: number) => Number(samples[Math.ceil(samples.length * p) - 1]?.toFixed(1) ?? NaN)
+    console.log(JSON.stringify({
+      memories: 100_000, concurrency: runs.length, samples: samples.length, failures: failures.length,
+      statementTimeouts: failures.filter((message) => message.includes('57014')).length,
+      p50Ms: percentile(0.5), p95Ms: percentile(0.95), maxMs: percentile(1),
+    }))
+    assert.equal(failures.length, 0, failures[0])
+    assert.equal(samples.length, 100)
+    assert.ok(percentile(0.95) <= 300, 'Authorized recall exceeded the 300 ms P95 target')
+  } finally {
+    await runtime.$disconnect()
+  }
+})

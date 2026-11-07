@@ -10,7 +10,7 @@ import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { createDatabase } from '../packages/persistence/client.js'
-import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
+import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '../packages/persistence/simulation-execution.js'
@@ -978,4 +978,101 @@ test('grant and account management enforce bound references and revoke access wi
   assert.equal((await request('POST', path + '/controls', {
     key: 'resume-revoked', data: { scope: 'ACCOUNT', scopeId: accountA, operation: 'RESUME', reason: 'Rejected transition' },
   })).status, 409)
+})
+
+test('three identities on two platforms reach separate approved simulation receipts', async () => {
+  const runtimeUrl = scheduleRuntimeUrl()
+  const runtime = createDatabase(runtimeUrl)
+  const executor = simulationDatabase()
+  try {
+    await owner.character.update({
+      where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) },
+    })
+    const ingest = createSimulatedPlatformIngress(runtime)
+    const occurredAt = new Date()
+    const runs = []
+    for (const [style, platform, expected] of [
+      ['formal', 'mock-a', '感谢您的来信，我会认真考虑。'],
+      ['casual', 'mock-b', '收到啦，我会看看。'],
+      ['concise', 'mock-a', '收到。'],
+    ] as const) {
+      const identity = await request('POST', characterPath(a) + '/identities', {
+        key: 'e2e-' + style, data: { slug: 'e2e-' + style, roleProfile: { writingStyle: style } },
+      })
+      assert.equal(identity.status, 201)
+      const account = await request('POST', characterPath(a) + '/accounts', {
+        key: 'e2e-account-' + style,
+        data: { identityId: identity.body.id, platform, instanceKey: 'integration', remoteAccountId: randomUUID() },
+      })
+      assert.equal(account.status, 201)
+      const identityId: string = identity.body.id
+      const accountId: string = account.body.id
+      await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
+      const bound = await owner.platformAccount.update({ where: { id: accountId }, data: { status: 'ACTIVE' } })
+      const conversation = await owner.conversation.create({
+        data: { characterId: a, identityId, accountId, channel: 'PUBLIC', remoteKey: 'e2e-thread' },
+      })
+      const text = 'same topic across simulation platforms'
+      const payload = platform === 'mock-a' ? {
+        id: 'e2e-delivery', account: bound.remoteAccountId, thread: conversation.remoteKey,
+        kind: 'MENTION', occurredAt: occurredAt.toISOString(), text,
+      } : {
+        delivery: 'e2e-delivery', recipient: bound.remoteAccountId, action: 'mention',
+        timeMs: occurredAt.getTime(), message: { conversation: conversation.remoteKey, body: text },
+      }
+      const source = { accountId, platform, instanceKey: bound.instanceKey }
+      const result = await ingest(source, payload)
+      assert.equal(result.status, 'ACCEPTED')
+      assert.deepEqual(await ingest(source, payload), { status: 'DUPLICATE', runId: result.runId })
+      runs.push({ id: result.runId, accountId, identityId, expected, conversationId: conversation.id })
+    }
+
+    const ids = runs.map(({ id }) => id)
+    const worker = startOutboxWorker(runtimeUrl, config.redisUrl)
+    try {
+      const deadline = Date.now() + 15_000
+      while (Date.now() < deadline) {
+        if (await owner.actionProposal.count({ where: { runId: { in: ids } } }) === runs.length) break
+        await sleep(50)
+      }
+      assert.equal(await owner.actionProposal.count({ where: { runId: { in: ids } } }), runs.length)
+    } finally {
+      await worker.close()
+    }
+
+    const character = await owner.character.findUniqueOrThrow({ where: { id: a } })
+    await Promise.all(runs.map(async ({ id, accountId, identityId, expected, conversationId }) => {
+      const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: id } })
+      const path = actionPath(action.id)
+      const preview = await request('GET', path, { actor: 'reviewer' })
+      assert.equal(preview.status, 200)
+      assert.equal(preview.body.target.accountId, accountId)
+      assert.equal(preview.body.target.identityId, identityId)
+      assert.equal(preview.body.target.conversationId, conversationId)
+      assert.equal(preview.body.content.split('\n\nAI 披露：')[0], expected)
+      assert.match(preview.body.content, /\n\nAI 披露：\S/)
+      await executeSimulation(executor, action.id)
+      assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
+      const decision = await request('POST', path + '/decisions', {
+        actor: 'reviewer', key: 'e2e-approve-' + id, ifMatch: preview.headers.get('etag') ?? '',
+        data: { decision: 'APPROVE', reviewDigest: action.reviewDigest, reason: 'Approve bound simulation' },
+      })
+      assert.equal(decision.status, 200, JSON.stringify(decision.body))
+      await executeSimulation(executor, action.id)
+      await executeSimulation(executor, action.id)
+      const receipts = await owner.simulationReceipt.findMany({
+        where: { actionId: action.id }, select: { attempt: { select: { accountId: true } } },
+      })
+      assert.equal(receipts.length, 1)
+      assert.equal(receipts[0].attempt.accountId, accountId)
+      const replay = await request('GET', characterPath(a) + '/runs/' + id + '/replay')
+      assert.equal(replay.status, 200)
+      assert.equal(replay.body.state, 'SIMULATED')
+      assert.equal(replay.body.coreVersion, character.activeCoreVersion)
+      assert.equal(replay.body.accountId, accountId)
+      assert.equal(replay.body.identityId, identityId)
+    }))
+  } finally {
+    await Promise.all([executor.$disconnect(), runtime.$disconnect()])
+  }
 })
