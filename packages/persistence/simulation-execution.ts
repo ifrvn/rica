@@ -52,8 +52,9 @@ async function transition(tx: Tx, action: Candidate, state: 'EXECUTING' | 'RECON
 }
 
 async function lockBudgetClock(tx: Tx, characterId: string) {
-  const [clock] = await tx.$queryRaw<{ windowStart: Date; localHour: number }[]>`
-    SELECT * FROM public.rica_simulation_budget_clock(${characterId}::uuid)
+  const [clock] = await tx.$queryRaw<{ windowStart: Date; localHour: number; now: Date }[]>`
+    SELECT clock.*, clock_timestamp() AS now
+    FROM public.rica_simulation_budget_clock(${characterId}::uuid) clock
   `
   return clock
 }
@@ -68,7 +69,7 @@ export async function reserveSimulation(db: PrismaClient, actionId: string) {
     const action = await candidate(tx, actionId)
     if (!clock || action?.state !== 'READY') return false
 
-    const now = new Date()
+    const { now } = clock
     if (action.expiresAt <= now) {
       await transition(tx, action, 'EXPIRED')
       return false
@@ -140,9 +141,9 @@ export async function reconcileSimulation(
   return db.$transaction(async (tx) => {
     const initial = await candidate(tx, actionId)
     if (!initial || (initial.state !== 'EXECUTING' && initial.state !== 'RECONCILING')) return
-    await lockBudgetClock(tx, initial.characterId)
+    const clock = await lockBudgetClock(tx, initial.characterId)
     const action = await candidate(tx, actionId)
-    if (!action || (action.state !== 'EXECUTING' && action.state !== 'RECONCILING')) return
+    if (!clock || !action || (action.state !== 'EXECUTING' && action.state !== 'RECONCILING')) return
     const attempt = await tx.simulationAttempt.findUniqueOrThrow({
       where: { actionId }, select: { status: true, permitUntil: true },
     })
@@ -154,7 +155,7 @@ export async function reconcileSimulation(
     } else if (outcome === 'NOT_SENT') {
       await tx.simulationAttempt.update({ where: { actionId }, select: { actionId: true }, data: { status: 'NOT_SENT' } })
       await transition(tx, action, 'BLOCKED')
-    } else if (attempt.status === 'PERMITTED' && (outcome === 'UNKNOWN' || attempt.permitUntil <= new Date())) {
+    } else if (attempt.status === 'PERMITTED' && (outcome === 'UNKNOWN' || attempt.permitUntil <= clock.now)) {
       await tx.simulationAttempt.update({ where: { actionId }, select: { actionId: true }, data: { status: 'UNKNOWN' } })
       await transition(tx, action, 'RECONCILING')
     }
