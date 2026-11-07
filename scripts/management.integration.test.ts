@@ -392,6 +392,15 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: stale.action.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: stale.action.id } }), 0)
 
+    const revoked = await approveSimulation(await newSimulationAccount())
+    const revokedGrant = await request('POST', characterPath(a) + '/memory-grants/' + revoked.grant.id + '/revoke', {
+      key: 'revoke-before-permit', data: { reason: 'Withdraw evidence after approval' },
+    })
+    assert.equal(revokedGrant.status, 200)
+    await executeSimulation(executor, revoked.action.id, async () => assert.fail('Revoked proposal reached the adapter'))
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: revoked.action.runId } })).state, 'CANCELED')
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: revoked.action.id } }), 0)
+
     // A matching payload hash is insufficient if the approved content omits the authoritative disclosure.
     const undisclosed = await approveSimulation(await newSimulationAccount())
     const content = 'Previously approved content without disclosure'
@@ -991,6 +1000,7 @@ test('three identities on two platforms reach separate approved simulation recei
     const ingest = createSimulatedPlatformIngress(runtime)
     const occurredAt = new Date()
     const runs = []
+    const memoryCount = await owner.memory.count({ where: { characterId: a } })
     for (const [style, platform, expected] of [
       ['formal', 'mock-a', '感谢您的来信，我会认真考虑。'],
       ['casual', 'mock-b', '收到啦，我会看看。'],
@@ -1021,9 +1031,12 @@ test('three identities on two platforms reach separate approved simulation recei
         timeMs: occurredAt.getTime(), message: { conversation: conversation.remoteKey, body: text },
       }
       const source = { accountId, platform, instanceKey: bound.instanceKey }
-      const result = await ingest(source, payload)
-      assert.equal(result.status, 'ACCEPTED')
-      assert.deepEqual(await ingest(source, payload), { status: 'DUPLICATE', runId: result.runId })
+      const deliveries = await Promise.all(Array.from({ length: 100 }, () => ingest(source, payload)))
+      const accepted = deliveries.filter((delivery) => delivery.status === 'ACCEPTED')
+      assert.equal(accepted.length, 1)
+      const [result] = accepted
+      assert.ok(deliveries.every((delivery) => 'runId' in delivery && delivery.runId === result.runId))
+      assert.equal(await owner.inboundEvent.count({ where: { accountId, sourceKey: 'e2e-delivery' } }), 1)
       runs.push({ id: result.runId, accountId, identityId, expected, conversationId: conversation.id })
     }
 
@@ -1068,10 +1081,16 @@ test('three identities on two platforms reach separate approved simulation recei
       const replay = await request('GET', characterPath(a) + '/runs/' + id + '/replay')
       assert.equal(replay.status, 200)
       assert.equal(replay.body.state, 'SIMULATED')
+      await assert.rejects(runtime.$executeRaw`
+        UPDATE public.agent_runs SET mode = mode WHERE id = ${id}::uuid
+      `, /permission denied/i)
       assert.equal(replay.body.coreVersion, character.activeCoreVersion)
       assert.equal(replay.body.accountId, accountId)
       assert.equal(replay.body.identityId, identityId)
     }))
+    assert.deepEqual(await owner.$queryRaw`SELECT unnest(enum_range(NULL::"RunMode"))::text AS mode`,
+      [{ mode: 'SIMULATION' }])
+    assert.equal(await owner.memory.count({ where: { characterId: a } }), memoryCount)
   } finally {
     await Promise.all([executor.$disconnect(), runtime.$disconnect()])
   }
