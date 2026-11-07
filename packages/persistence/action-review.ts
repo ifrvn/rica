@@ -6,7 +6,9 @@ import { authorize, denyPermission, ManagementError, type Scope } from './manage
 
 export const simulationReviewPolicyVersion = 1
 
-const reviewStates = ['WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED'] as const
+const reviewStates = [
+  'WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED',
+] as const
 type ReviewState = typeof reviewStates[number]
 type Proposal = {
   id: string

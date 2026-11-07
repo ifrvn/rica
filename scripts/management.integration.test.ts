@@ -8,6 +8,7 @@ import { createDatabase } from '../packages/persistence/client.js'
 import { ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
+import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '../packages/persistence/simulation-execution.js'
 import { loadConfig } from '../packages/runtime/config.js'
 
 const config = loadConfig()
@@ -96,6 +97,8 @@ after(async () => {
           ...characterIds.map((id) => ({ response: { path: ['id'], equals: id } }))],
       } })
       await tx.outboxEvent.deleteMany({ where: { run: where } })
+      await tx.simulationReceipt.deleteMany({ where })
+      await tx.simulationAttempt.deleteMany({ where })
       await tx.actionApproval.deleteMany({ where })
       await tx.actionProposal.deleteMany({ where })
       await tx.simulatedDraft.deleteMany({ where })
@@ -196,13 +199,13 @@ test('management commands reject stale updates and commit idempotency and audit 
 })
 
 
-async function proposeReview() {
+async function proposeReview(accountId = accountA) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(runtimeUrl.toString())
   try {
     const audience = await owner.conversation.create({
-      data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID(), channel: 'PUBLIC' },
+      data: { characterId: a, identityId: identityA, accountId, remoteKey: randomUUID(), channel: 'PUBLIC' },
     })
     const proposalText = 'unique review ' + randomUUID()
     const memory = await owner.memory.create({
@@ -214,13 +217,13 @@ async function proposeReview() {
     await owner.memorySource.create({ data: { characterId: a, memoryId: memory.id, sourceId: source.id } })
     const grant = await owner.memoryGrant.create({
       data: {
-        characterId: a, memoryId: memory.id, recipientIdentityId: identityA, recipientAccountId: accountA,
+        characterId: a, memoryId: memory.id, recipientIdentityId: identityA, recipientAccountId: accountId,
         audience: audience.id, purpose: 'PUBLIC_REFERENCE', validFrom: new Date(Date.now() - 1000),
         validUntil: new Date(Date.now() + 120_000), approvedBy: 'fixture', reason: 'Review fixture',
       },
     })
     const result = await ingestSimulatedEvent(runtime, {
-      accountId: accountA, conversationId: audience.id, sourceKey: randomUUID(), kind: 'REPLY',
+      accountId, conversationId: audience.id, sourceKey: randomUUID(), kind: 'REPLY',
       occurredAt: new Date(), messageText: proposalText,
     })
     assert.equal(result.status, 'ACCEPTED')
@@ -317,6 +320,128 @@ test('review rechecks evidence expiry and adapter version, and records a valid r
       rejected ? 'REJECTED' : expected)
     assert.equal(await owner.managementAudit.count({ where: { targetId: action.id, operation: 'action.review' } }), 1)
     assert.equal(await owner.actionApproval.count({ where: { actionId: action.id } }), rejected ? 1 : 0)
+  }
+})
+
+
+function simulationDatabase() {
+  const url = new URL(config.databaseUrl)
+  url.searchParams.set('options', '-c role=rica_simulation_executor')
+  return createDatabase(url.toString())
+}
+
+async function approveSimulation(accountId = accountA) {
+  const proposal = await proposeReview(accountId)
+  const response = await request('POST', actionPath(proposal.action.id) + '/decisions', {
+    actor: 'reviewer', key: 'approve-' + proposal.action.id, ifMatch: '"run-v3"',
+    data: { reviewDigest: proposal.action.reviewDigest, decision: 'APPROVE', reason: 'Approved simulation fixture' },
+  })
+  assert.equal(response.status, 200, JSON.stringify(response.body))
+  return proposal
+}
+
+async function newSimulationAccount() {
+  const account = await owner.platformAccount.create({
+    data: {
+      characterId: a, identityId: identityA, status: 'ACTIVE',
+      platform: 'mock-a', instanceKey: 'integration', remoteAccountId: randomUUID(),
+    },
+  })
+  return account.id
+}
+
+function simulationZone(hour: number) {
+  const shift = (hour - new Date().getUTCHours() + 35) % 24 - 11
+  return shift === 0 ? 'UTC' : 'Etc/GMT' + (shift > 0 ? '-' : '+') + Math.abs(shift)
+}
+
+test('simulation defers quiet hours and rejects stale evidence or a paused binding', async () => {
+  const executor = simulationDatabase()
+  try {
+    const quiet = await approveSimulation()
+    await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(1) } })
+    assert.equal(await reserveSimulation(executor, quiet.action.id), false)
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: quiet.action.runId } })).state, 'READY')
+    await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+
+    const stale = await approveSimulation()
+    await owner.memoryGrant.update({
+      where: { id: stale.grant.id }, data: { validFrom: new Date(Date.now() - 60_000), validUntil: new Date(Date.now() - 1000) },
+    })
+    assert.equal(await reserveSimulation(executor, stale.action.id), false)
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: stale.action.runId } })).state, 'BLOCKED')
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: stale.action.id } }), 0)
+
+    const paused = await approveSimulation(await newSimulationAccount())
+    await executeSimulation(executor, paused.action.id, async (db, id) => {
+      await owner.character.update({ where: { id: a }, data: { status: 'PAUSED', authEpoch: { increment: 1 } } })
+      return recordSimulationReceipt(db, id)
+    })
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: paused.action.id } }), 0)
+    assert.equal((await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: paused.action.id } })).status, 'NOT_SENT')
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: paused.action.runId } })).state, 'BLOCKED')
+    assert.equal(await reserveSimulation(executor, quiet.action.id), false)
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: quiet.action.id } }), 0)
+  } finally {
+    await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
+    await executor.$disconnect()
+  }
+})
+
+test('duplicate delivery uses one local receipt and the daily reservation cannot exceed five', async () => {
+  const executor = simulationDatabase()
+  try {
+    const proposals = []
+    for (let i = 0; i < 6; i++) proposals.push((await approveSimulation()).action)
+    const first = proposals[0]
+    await recordSimulationReceipt(executor, first.id)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: first.id } }), 0)
+
+    let calls = 0
+    await Promise.all(Array.from({ length: 6 }, () => executeSimulation(executor, first.id, async (db, id) => {
+      calls++
+      return recordSimulationReceipt(db, id)
+    })))
+    assert.equal(calls, 1)
+    for (let round = 0; round < 5; round++) {
+      await Promise.all(proposals.slice(1).map(({ id }) => executeSimulation(executor, id)))
+    }
+
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: proposals.map(({ id }) => id) } } }), 5)
+    assert.equal(await owner.simulationAttempt.count({ where: { accountId: accountA } }), 5)
+    assert.equal(await owner.agentRun.count({
+      where: { id: { in: proposals.map(({ runId }) => runId) }, state: 'READY' },
+    }), 1)
+    await assert.rejects(executor.simulatedDraft.findMany({ select: { content: true } }), /permission denied/i)
+  } finally {
+    await executor.$disconnect()
+  }
+})
+
+test('restart recovers existing receipts and keeps unknown attempts blocked from redispatch', async () => {
+  const executor = simulationDatabase()
+  try {
+    const unknownAccount = await newSimulationAccount()
+    const lost = (await approveSimulation(unknownAccount)).action
+    const waiting = (await approveSimulation(unknownAccount)).action
+    const recorded = (await approveSimulation(await newSimulationAccount())).action
+    assert.equal(await reserveSimulation(executor, lost.id), true)
+    assert.equal(await reserveSimulation(executor, recorded.id), true)
+    await recordSimulationReceipt(executor, recorded.id)
+
+    const expired = new Date(Date.now() - 1000)
+    await owner.simulationAttempt.updateMany({
+      where: { actionId: { in: [lost.id, recorded.id] } }, data: { permitUntil: expired },
+    })
+    await runSimulationBatch(executor, null)
+    await runSimulationBatch(executor, null)
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: lost.runId } })).state, 'RECONCILING')
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: recorded.runId } })).state, 'SIMULATED')
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: waiting.runId } })).state, 'READY')
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [lost.id, waiting.id] } } }), 0)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: recorded.id } }), 1)
+  } finally {
+    await executor.$disconnect()
   }
 })
 

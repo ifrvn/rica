@@ -17,7 +17,7 @@ export const reviewTarget = z.object({
 })
 export const actionView = z.object({
   id: z.uuid(), runId: z.uuid(), mode: z.literal('SIMULATION'), kind: z.literal('REPLY'),
-  state: z.enum(['WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED']),
+  state: z.enum(['WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']),
   version: z.number().int(), target: reviewTarget,
   expiresAt: z.iso.datetime(), reviewDigest: z.string(),
   riskCodes: z.array(z.string()), content: z.string().nullable(),

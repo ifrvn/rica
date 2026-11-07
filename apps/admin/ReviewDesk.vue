@@ -22,6 +22,7 @@ let pending: { signature: string; key: string } | undefined
 const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/actions')
 const statusText: Record<ActionView['state'], string> = {
   WAITING_APPROVAL: '待审', READY: '已批准', REJECTED: '已拒绝', CANCELED: '已失效', EXPIRED: '已过期',
+  EXECUTING: '模拟执行中', RECONCILING: '待对账', SIMULATED: '模拟完成', BLOCKED: '执行已拦截',
 }
 
 class RequestError extends Error {

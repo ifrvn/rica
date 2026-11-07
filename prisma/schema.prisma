@@ -54,6 +54,10 @@ enum RunState {
   READY
   REJECTED
   EXPIRED
+  EXECUTING
+  RECONCILING
+  SIMULATED
+  BLOCKED
 }
 
 enum RunStateReason {
@@ -476,19 +480,20 @@ enum ReviewDecision {
 }
 
 model ActionProposal {
-  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  characterId    String          @map("character_id") @db.Uuid
-  runId          String          @unique @map("run_id") @db.Uuid
-  target         Json
-  payloadHash    String          @map("payload_hash") @db.VarChar(64)
-  reviewDigest   String          @map("review_digest") @db.VarChar(64)
-  policyVersion  Int             @map("policy_version")
-  adapterVersion String          @map("adapter_version")
-  proposerId     String?         @map("proposer_id")
-  expiresAt      DateTime        @map("expires_at") @db.Timestamptz
-  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz
-  draft          SimulatedDraft  @relation(fields: [characterId, runId], references: [characterId, runId], onDelete: Restrict, onUpdate: NoAction)
-  approval       ActionApproval?
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId       String             @map("character_id") @db.Uuid
+  runId             String             @unique @map("run_id") @db.Uuid
+  target            Json
+  payloadHash       String             @map("payload_hash") @db.VarChar(64)
+  reviewDigest      String             @map("review_digest") @db.VarChar(64)
+  policyVersion     Int                @map("policy_version")
+  adapterVersion    String             @map("adapter_version")
+  proposerId        String?            @map("proposer_id")
+  expiresAt         DateTime           @map("expires_at") @db.Timestamptz
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  draft             SimulatedDraft     @relation(fields: [characterId, runId], references: [characterId, runId], onDelete: Restrict, onUpdate: NoAction)
+  approval          ActionApproval?
+  simulationAttempt SimulationAttempt?
 
   @@unique([characterId, id])
   @@unique([characterId, runId])
@@ -509,4 +514,38 @@ model ActionApproval {
 
   @@unique([characterId, actionId])
   @@map("action_approvals")
+}
+
+enum SimulationAttemptStatus {
+  PERMITTED
+  UNKNOWN
+  CONFIRMED
+  NOT_SENT
+}
+
+model SimulationAttempt {
+  actionId    String                  @id @map("action_id") @db.Uuid
+  characterId String                  @map("character_id") @db.Uuid
+  accountId   String                  @map("account_id") @db.Uuid
+  status      SimulationAttemptStatus @default(PERMITTED)
+  windowStart DateTime                @map("window_start") @db.Timestamptz
+  permitUntil DateTime                @map("permit_until") @db.Timestamptz
+  createdAt   DateTime                @default(now()) @map("created_at") @db.Timestamptz
+  action      ActionProposal          @relation(fields: [characterId, actionId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  receipt     SimulationReceipt?
+
+  @@unique([characterId, actionId])
+  @@index([accountId, windowStart])
+  @@index([status, permitUntil])
+  @@map("simulation_attempts")
+}
+
+model SimulationReceipt {
+  actionId    String            @id @map("action_id") @db.Uuid
+  characterId String            @map("character_id") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  attempt     SimulationAttempt @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([characterId, actionId])
+  @@map("simulation_receipts")
 }
