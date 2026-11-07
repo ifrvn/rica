@@ -20,15 +20,23 @@ export function ingestSimulatedEvent(db: PrismaClient, event: SimulatedEvent) {
   return storeSimulatedEvent(db, event)
 }
 
-type PlatformSource = Readonly<{ accountId: string; platform: string; instanceKey: string }>
+type PlatformSource = Readonly<{
+  accountId: string
+  platform: string
+  instanceKey: string
+  verifiedRemoteAccountId: string
+}>
 
-// Only trusted simulation ingress calls this entry. Platform and instance come from the host.
+// Only trusted simulation ingress calls this entry. The host supplies the verified subject independently of the payload.
 export function createSimulatedPlatformIngress(db: PrismaClient, enabled = ['mock-a', 'mock-b']) {
   const resolveAdapter = registerPlugins('enabled platform', enabled.map(resolveSimulatedPlatform))
 
   return (source: PlatformSource, payload: unknown) => {
     const adapter = resolveAdapter(source.platform)
     const normalized = adapter.implementation.normalize(payload)
+    if (source.verifiedRemoteAccountId !== normalized.remoteAccountId) {
+      return Promise.resolve({ status: 'ACCOUNT_UNAVAILABLE' } as const)
+    }
     return storeSimulatedEvent(db, {
       accountId: source.accountId, sourceKey: normalized.sourceKey, messageText: normalized.messageText,
       kind: normalized.kind, occurredAt: normalized.occurredAt,

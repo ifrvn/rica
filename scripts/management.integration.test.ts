@@ -517,15 +517,24 @@ async function crashSimulationProcess(actionId: string, checkpoint: 'permit' | '
   }
 }
 
-test('restart recovers receipts and only evidence-backed manual resolution releases an unknown attempt', async () => {
+test('restart and adapter replacement reconcile in-flight attempts without replaying them', async () => {
   const executor = simulationDatabase()
   try {
     const unknownAccount = await newSimulationAccount()
     const lost = (await approveSimulation(unknownAccount)).action
     const waiting = (await approveSimulation(unknownAccount)).action
     const recorded = (await approveSimulation(await newSimulationAccount())).action
+    const notSent = (await approveSimulation(await newSimulationAccount())).action
     await crashSimulationProcess(lost.id, 'permit')
     await crashSimulationProcess(recorded.id, 'receipt')
+
+    // The persisted proposals belong to the old adapter after a process replacement.
+    await owner.actionProposal.updateMany({
+      where: { id: { in: [lost.id, recorded.id, notSent.id] } }, data: { adapterVersion: '0.0.1' },
+    })
+    await executeSimulation(executor, notSent.id, async () => assert.fail('Old approval reached the replacement adapter'))
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: notSent.runId } })).state, 'BLOCKED')
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: notSent.id } }), 0)
 
     const expired = new Date(Date.now() - 1000)
     await owner.simulationAttempt.updateMany({
@@ -690,7 +699,7 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
     assert.equal(occurrences.length, 1)
     assert.equal(occurrences[0].scheduledAt.toISOString(), dueAt)
     assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id } })).nextAt, null)
-    const worker = startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl)
+    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl)
     try {
       const runId = occurrences[0].runId
       const deadline = Date.now() + 10_000
@@ -979,11 +988,29 @@ test('grant and account management enforce bound references and revoke access wi
   assert.ok(savedMemory)
   assert.ok(!('content' in savedMemory))
   await assert.rejects(management.memory.findMany({ select: { content: true } }), /permission denied/i)
+  const approved = (await approveSimulation()).action
   const account = await request('POST', path + '/controls', {
     key: 'revoke-account', data: { scope: 'ACCOUNT', scopeId: accountA, operation: 'REVOKE_ACCOUNT', reason: 'Unlink' },
   })
   assert.equal(account.status, 200)
   assert.equal(account.body.status, 'REVOKED')
+  const bound = await owner.platformAccount.findUniqueOrThrow({ where: { id: accountA } })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    const ingest = createSimulatedPlatformIngress(runtime)
+    const payload = {
+      id: 'revoked-simulated-subject', account: bound.remoteAccountId, thread: audience.remoteKey,
+      kind: 'REPLY', occurredAt: new Date().toISOString(), text: 'Reply after revocation',
+    }
+    assert.deepEqual(await ingest({ accountId: bound.id, platform: bound.platform, instanceKey: bound.instanceKey, verifiedRemoteAccountId: bound.remoteAccountId }, payload),
+      { status: 'ACCOUNT_UNAVAILABLE' })
+    assert.equal(await owner.inboundEvent.count({ where: { accountId: bound.id, sourceKey: payload.id } }), 0)
+    await executeSimulation(executor, approved.id, async () => assert.fail('Revoked account reached the adapter'))
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: approved.id } }), 0)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
+  }
   assert.equal((await request('POST', path + '/controls', {
     key: 'resume-revoked', data: { scope: 'ACCOUNT', scopeId: accountA, operation: 'RESUME', reason: 'Rejected transition' },
   })).status, 409)
@@ -1030,7 +1057,7 @@ test('three identities on two platforms reach separate approved simulation recei
         delivery: 'e2e-delivery', recipient: bound.remoteAccountId, action: 'mention',
         timeMs: occurredAt.getTime(), message: { conversation: conversation.remoteKey, body: text },
       }
-      const source = { accountId, platform, instanceKey: bound.instanceKey }
+      const source = { accountId, platform, instanceKey: bound.instanceKey, verifiedRemoteAccountId: bound.remoteAccountId }
       const deliveries = await Promise.all(Array.from({ length: 100 }, () => ingest(source, payload)))
       const accepted = deliveries.filter((delivery) => delivery.status === 'ACCEPTED')
       assert.equal(accepted.length, 1)
@@ -1041,7 +1068,7 @@ test('three identities on two platforms reach separate approved simulation recei
     }
 
     const ids = runs.map(({ id }) => id)
-    const worker = startOutboxWorker(runtimeUrl, config.redisUrl)
+    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl)
     try {
       const deadline = Date.now() + 15_000
       while (Date.now() < deadline) {

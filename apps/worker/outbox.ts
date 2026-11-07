@@ -1,3 +1,4 @@
+import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue, Worker } from 'bullmq'
 import { Redis } from 'ioredis'
@@ -9,35 +10,83 @@ import { simulatedModelPlugin, type ModelProvider } from '../../packages/runtime
 import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
-const queueName = 'character-bootstrap'
+export const outboxQueueName = 'character-bootstrap'
 
-export function startOutboxWorker(
+export class WorkerDependencyUnavailable extends Error {
+  constructor(readonly dependencies: ('postgres' | 'redis')[]) {
+    super('Outbox worker dependencies unavailable')
+  }
+}
+
+export async function startOutboxWorker(
   databaseUrl: string, redisUrl: string, model: Plugin<ModelProvider> = simulatedModelPlugin,
 ) {
   const db = createDatabase(databaseUrl)
-  const producer = new Redis(redisUrl, { maxRetriesPerRequest: 1 })
+  const producer = new Redis(redisUrl, {
+    lazyConnect: true, connectTimeout: 1500, commandTimeout: 2000, maxRetriesPerRequest: 1,
+  })
+  const logError = () => console.warn(JSON.stringify({ service: 'worker', event: 'dependency_error' }))
+  producer.on('error', logError)
+  const [postgres, redis] = await Promise.allSettled([
+    db.$queryRaw`SELECT event_id FROM public.outbox LIMIT 0`,
+    producer.connect().then(() => producer.ping()),
+  ])
+  if (postgres.status === 'rejected' || redis.status === 'rejected') {
+    producer.disconnect()
+    await db.$disconnect()
+    const dependencies: WorkerDependencyUnavailable['dependencies'] = []
+    if (postgres.status === 'rejected') dependencies.push('postgres')
+    if (redis.status === 'rejected') dependencies.push('redis')
+    throw new WorkerDependencyUnavailable(dependencies)
+  }
   const consumer = new Redis(redisUrl, { maxRetriesPerRequest: null })
-  const queue = new Queue<{ eventId: string }>(queueName, { connection: producer })
-  const worker = new Worker<{ eventId: string }>(queueName, async ({ name, data }) => {
-    if (name === runQueuedEvent) {
-      await prepareSimulatedRun(db, data.eventId)
-      return
+  const queue = new Queue<{ eventId: string }>(outboxQueueName, { connection: producer })
+  const worker = new Worker<{ eventId: string }>(outboxQueueName, async ({ name, data }) => {
+    try {
+      if (name === runQueuedEvent) {
+        await prepareSimulatedRun(db, data.eventId)
+        return
+      }
+      if (name === draftQueuedEvent) {
+        await processSimulatedDraft(db, data.eventId, model)
+        return
+      }
+      if (name !== smokeEvent) throw new Error('Unknown outbox job')
+      await db.outboxEvent.updateMany({
+        where: { eventId: data.eventId, type: smokeEvent, processedAt: null },
+        data: { processedAt: new Date() },
+      })
+    } catch {
+      // BullMQ records failure details in Redis. Keep plugin and payload data out of them.
+      throw new Error('Outbox job failed')
     }
-    if (name === draftQueuedEvent) {
-      await processSimulatedDraft(db, data.eventId, model)
-      return
-    }
-    if (name !== smokeEvent) throw new Error('Unknown outbox job')
-    await db.outboxEvent.updateMany({
-      where: { eventId: data.eventId, type: smokeEvent, processedAt: null },
-      data: { processedAt: new Date() },
-    })
-  }, { connection: consumer })
+  }, { connection: consumer, autorun: false })
   const stop = new AbortController()
 
-  const logError = () => console.warn(JSON.stringify({ service: 'worker', event: 'dependency_error' }))
   worker.on('error', logError)
+  worker.on('failed', () => console.warn(JSON.stringify({ service: 'worker', event: 'job_failed' })))
   queue.on('error', logError)
+
+  async function closeConnections(force = false) {
+    try {
+      await Promise.all([worker.close(force), queue.close()])
+    } finally {
+      producer.disconnect()
+      consumer.disconnect()
+      await db.$disconnect()
+    }
+  }
+
+  try {
+    await Promise.all([
+      queue.waitUntilReady(),
+      once(worker, 'ready', { signal: AbortSignal.timeout(4000) }),
+    ])
+  } catch {
+    await closeConnections(true)
+    throw new WorkerDependencyUnavailable(['redis'])
+  }
+  void worker.run().catch(logError)
 
   async function relay() {
     while (!stop.signal.aborted) {
@@ -90,13 +139,7 @@ export function startOutboxWorker(
     async close() {
       stop.abort()
       await Promise.all(loops)
-      try {
-        await Promise.all([worker.close(), queue.close()])
-      } finally {
-        producer.disconnect()
-        consumer.disconnect()
-        await db.$disconnect()
-      }
+      await closeConnections()
     },
   }
 }
