@@ -182,6 +182,7 @@ model InboundEvent {
 
   @@unique([accountId, sourceKey])
   @@unique([characterId, identityId, accountId, id])
+  @@index([characterId, identityId, accountId, conversationId, contactId, occurredAt, id], map: "inbound_context_history_idx")
   @@map("inbound_events")
 }
 
@@ -198,6 +199,7 @@ model AgentRun {
   mode            RunMode         @default(SIMULATION)
   state           RunState        @default(QUEUED)
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  contextTimezone String?         @map("context_timezone")
   inboundEvent    InboundEvent    @relation(fields: [characterId, identityId, accountId, inboundEventId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
   core            CoreVersion     @relation(fields: [characterId, coreVersion], references: [characterId, version], onDelete: Restrict, onUpdate: NoAction)
   identity        IdentityVersion @relation(fields: [characterId, identityId, identityVersion], references: [characterId, identityId, version], onDelete: Restrict, onUpdate: NoAction)
@@ -268,11 +270,25 @@ model Memory {
   derivedMemories Memory[] @relation("MemoryDerivation")
 
   snapshotEvidence ContextSnapshotEvidence[]
+  corrections MemoryCorrection[]
 
   @@unique([characterId, id])
   @@index([characterId, parentMemoryId])
   @@index([characterId, status, scope, identityId, accountId])
   @@map("memories")
+}
+
+model MemoryCorrection {
+  characterId String   @map("character_id") @db.Uuid
+  memoryId    String   @map("memory_id") @db.Uuid
+  revision    Int
+  actorId     String   @map("actor_id")
+  reason      String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  memory      Memory   @relation(fields: [characterId, memoryId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([characterId, memoryId, revision])
+  @@map("memory_corrections")
 }
 
 model SourceRecord {

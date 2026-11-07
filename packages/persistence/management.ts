@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
-import { coreProfile, identityProfile } from '../contracts/management.js'
+import { coreProfile, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
@@ -381,6 +381,29 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
     })
     return makePage(rows, page, ({ bindingVersion, createdAt: _, ...view }) => ({ ...view, version: bindingVersion }))
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readMemoryProvenance(db: PrismaClient, scope: Scope, memoryId: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+      SELECT public.rica_memory_provenance(${scope.characterId}::uuid, ${memoryId}::uuid) AS view
+    `
+    if (!row?.view) unavailable()
+    return memoryProvenanceView.parse(row.view)
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function correctMemory(tx: Tx, scope: Scope, memoryId: string, expected: number,
+  input: Input<typeof contracts.memoryCorrectionInput>) {
+  const [row] = await tx.$queryRaw<{ status: string }[]>`
+    SELECT public.rica_correct_memory(${scope.characterId}::uuid, ${memoryId}::uuid,
+      ${expected}::int, ${input.content}, ${scope.actor.id}, ${input.reason}) AS status
+  `
+  if (row.status === 'MISSING') unavailable()
+  if (row.status === 'STALE') throw new ManagementError(412, 'STALE_VERSION', 'Resource version has changed')
+  if (row.status !== 'UPDATED') throw new ManagementError(409, 'MEMORY_UNAVAILABLE', 'Memory cannot be corrected')
+  return { id: memoryId, version: expected + 1 }
 }
 
 export async function listMemories(db: PrismaClient, scope: Scope, page: Page) {

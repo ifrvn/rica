@@ -234,6 +234,33 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
   ), 200))
 
+  const memoryParams = characterParams.extend({ memoryId: schema.resourceId })
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/memories/{memoryId}/provenance`, security,
+    request: { params: memoryParams }, responses: { ...errors, 200: success(schema.memoryProvenanceView) },
+  }), async (c) => {
+    const { characterId, memoryId } = c.req.valid('param')
+    const view = await management.readMemoryProvenance(db, { characterId, actor: c.get('actor') }, memoryId)
+    c.header('ETag', '"' + view.revision + '"')
+    return c.json(view, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${character}/memories/{memoryId}/correction`, security,
+    request: { params: memoryParams, headers: schema.versionHeader, body: body(schema.memoryCorrectionInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, memoryId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const expected = version(c.req.valid('header'))
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'memory.correct', targetScope: characterId + '/' + memoryId, input: { input, expected }, requestId,
+    }, (tx) => management.correctMemory(tx, scope, memoryId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
   app.openapi(createRoute({
     method: 'get', path: `${character}/memory-grants`, security,
     request: { params: characterParams, query: schema.listQuery },

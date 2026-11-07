@@ -8,23 +8,26 @@ export const reasonInput = z.strictObject({ reason: text })
 export const coreProfile = z.strictObject({
   name: shortText.optional(),
   aiDisclosure: text,
+  fictionalBackground: text.optional(),
   values: z.array(shortText).max(16).optional(),
   privacyRules: z.array(text).max(16).optional(),
 })
+const timezone = z.string().min(1).max(80).refine((timeZone) => {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone })
+    return !/^[+-]/.test(timeZone)
+  } catch {
+    return false
+  }
+})
 export const identityProfile = z.strictObject({
   displayName: shortText.optional(),
+  timezone: timezone.optional(),
   writingStyle: z.enum(['neutral', 'formal', 'casual', 'concise']).optional(),
 })
 export const characterInput = z.strictObject({
   slug,
-  timezone: z.string().min(1).max(80).refine((timeZone) => {
-    try {
-      new Intl.DateTimeFormat('en', { timeZone })
-      return !/^[+-]/.test(timeZone)
-    } catch {
-      return false
-    }
-  }),
+  timezone,
   coreProfile,
 })
 export const coreInput = reasonInput.extend({ coreProfile })
@@ -46,6 +49,21 @@ export const membershipInput = reasonInput.extend({
   role: z.enum(['ADMIN', 'OPERATOR', 'REVIEWER', 'AUDITOR']),
   action: z.enum(['GRANT', 'REVOKE']),
 })
+export const memoryCorrectionInput = reasonInput.extend({
+  content: z.string().trim().min(1).max(1500).refine((content) => !content.includes('\0')),
+})
+export const memoryProvenanceView = z.object({
+  id: resourceId, revision: z.number().int(), status: z.enum(['ACTIVE', 'REVOKED']),
+  parentMemoryId: resourceId.nullable(),
+  sources: z.array(z.object({
+    id: resourceId, kind: z.string(), classification: z.enum(['PUBLIC','PERSONAL','CONFIDENTIAL','RESTRICTED']),
+    revokedAt: z.iso.datetime({ offset: true }).nullable(),
+  })),
+  corrections: z.array(z.object({
+    revision: z.number().int(), actorId: z.string(), reason: z.string(), createdAt: z.iso.datetime({ offset: true }),
+  })),
+})
+
 export const memoryGrantInput = reasonInput.extend({
   memoryId: resourceId,
   recipientIdentityId: resourceId,

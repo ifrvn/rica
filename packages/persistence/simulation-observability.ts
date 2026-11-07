@@ -6,7 +6,7 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
-      SELECT public.rica_replay_simulation_run(${scope.characterId}::uuid, ${runId}::uuid) AS view
+      SELECT public.rica_replay_run_with_time(${scope.characterId}::uuid, ${runId}::uuid) AS view
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
     return runReplayView.parse(row.view)

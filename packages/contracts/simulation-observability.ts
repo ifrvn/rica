@@ -11,7 +11,7 @@ export const runReplayView = z.object({
   mode: z.literal('SIMULATION'), identityId: z.uuid(), accountId: z.uuid(),
   coreVersion: z.number().int(), identityVersion: z.number().int(),
   bindingVersion: z.number().int(), authEpoch: z.number().int(),
-  occurredAt: timestamp, createdAt: timestamp,
+  occurredAt: timestamp, createdAt: timestamp, contextTimezone: z.string().nullable(),
   snapshots: z.array(z.object({
     id: z.uuid(), purpose: z.enum(['INTERNAL_CONTEXT', 'DECISION_SUPPORT', 'PUBLIC_REFERENCE', 'PRIVATE_REPLY']),
     rankingVersion: z.number().int(), createdAt: timestamp, evidence: z.array(evidence),

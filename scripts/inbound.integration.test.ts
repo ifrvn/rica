@@ -1261,6 +1261,47 @@ test('private and public prompt injection cannot switch account or leak evidence
   }
 })
 
+test('run continuity pins local time and shares only approved core facts', async () => {
+  assert.ok(fixture)
+  const { characterId, accounts } = fixture
+  const { memory: approved } = await testMemory('CORE', 'PUBLIC')
+  const { memory: privateFact } = await testMemory('IDENTITY', 'CONFIDENTIAL', { identityId: accounts[0].identityId })
+  const marker = randomUUID()
+  await db.memory.update({ where: { id: privateFact.id }, data: { content: marker } })
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    for (const [index, account] of accounts.entries()) {
+      const timezone = index === 0 ? 'America/Los_Angeles' : 'Asia/Hong_Kong'
+      await db.character.update({ where: { id: characterId }, data: { timezone } })
+      const runId = await preparedMemoryRun(account.id)
+      await db.character.update({ where: { id: characterId }, data: { timezone: 'UTC' } })
+      const draft = await generateSimulatedDraft(runtime, runId, 'continuity probe', {
+        purpose: 'PUBLIC_REFERENCE', audience: 'continuity-probe',
+      }, {
+        async decide(input) {
+          assert.equal(input.context.identityId, account.identityId)
+          assert.equal(input.context.time.timezone, timezone)
+          assert.equal(input.context.time.eventLocalDate, index === 0 ? '2026-11-05' : '2026-11-06')
+          assert.equal(new Date(input.context.time.occurredAt).toISOString(), occurredAt.toISOString())
+          assert.equal(new Date(input.context.time.now).toISOString(),
+            (await db.agentRun.findUniqueOrThrow({ where: { id: runId } })).createdAt.toISOString())
+          assert.ok(input.context.self.facts.some(({ id }) => id === approved.id))
+          assert.ok(!JSON.stringify(input.context.self).includes(marker))
+          return 'REPLY'
+        },
+        async write(input, signal) {
+          assert.ok(!('context' in input))
+          assert.equal(input.time.timezone, timezone)
+          return simulatedModel.write(input, signal)
+        },
+      })
+      assert.ok(draft)
+    }
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 test('measures authorized recall with 100000 memories and 10 concurrent runs', {
   skip: process.env.RICA_RECALL_BENCHMARK !== '1',
 }, async (t) => {

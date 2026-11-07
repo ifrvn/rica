@@ -1,3 +1,4 @@
+import type { RunContinuity, RunTime } from '../persistence/run-continuity.js'
 import { registerPlugins, type Plugin } from './plugin-registry.js'
 
 export const maxSimulatedTextLength = 4_000
@@ -19,8 +20,8 @@ const replies = {
 export type WritingStyle = keyof typeof replies
 
 export type ModelProvider = Readonly<{
-  decide(input: ModelInput, signal: AbortSignal): Promise<unknown>
-  write(input: ModelInput & Readonly<{ style: WritingStyle }>, signal: AbortSignal): Promise<unknown>
+  decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
+  write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime }>, signal: AbortSignal): Promise<unknown>
 }>
 
 export const simulatedModel: ModelProvider = {

@@ -8,6 +8,7 @@ import type { Plugin } from '../runtime/plugin-registry.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { captureMemorySnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
 import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
+import { loadRunContinuity } from './run-continuity.js'
 import { draftQueuedEvent } from './run-context.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
@@ -40,7 +41,7 @@ function validateDraft(output: unknown, allowedIds: ReadonlyMap<string, number>)
   return { text: text.trim(), evidenceIds: [...evidenceIds] }
 }
 
-function evidenceMatches(current: ModelEvidence[] | null, previous: ReadonlyMap<string, number>) {
+function evidenceMatches(current: readonly ModelEvidence[] | null, previous: ReadonlyMap<string, number>) {
   return current !== null && current.length === previous.size
     && current.every(({ id, revision }) => previous.get(id) === revision)
 }
@@ -56,12 +57,19 @@ async function buildSimulatedDraft(
   if (!await captureMemorySnapshot(db, runId, writingRequest, text)
     || !await captureMemorySnapshot(db, runId, decisionRequest, text)) return null
 
-  const decisionEvidence = await db.$transaction((tx) => readEvidence(tx, runId, decisionRequest))
-  if (!decisionEvidence) return null
+  const prepared = await db.$transaction(async (tx) => {
+    const evidence = await readEvidence(tx, runId, decisionRequest)
+    const context = evidence && await loadRunContinuity(tx, runId)
+    return context && { evidence, context }
+  })
+  if (!prepared) return null
+  const { evidence: decisionEvidence, context } = prepared
+  const selfRevisions = new Map(context.self.facts.map(({ id, revision }) => [id, revision]))
+  const time = { ...context.time }
 
   signal.throwIfAborted()
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
-  const decision = await provider.decide({ text, evidence: decisionEvidence }, signal)
+  const decision = await provider.decide({ text, evidence: decisionEvidence, context }, signal)
   signal.throwIfAborted()
   if (decision === 'NO_OP') return null
   if (decision !== 'REPLY') throw new Error('Invalid simulated decision output')
@@ -79,11 +87,11 @@ async function buildSimulatedDraft(
   // Preserve the authorized revisions independently of the objects passed to the provider.
   const allowedRevisions = new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
   signal.throwIfAborted()
-  const output = await provider.write({ text, ...writing }, signal)
+  const output = await provider.write({ text, ...writing, time }, signal)
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
 
-  return { draft, decisionRevisions, writingRevisions: allowedRevisions }
+  return { draft, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
@@ -91,8 +99,10 @@ type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>
 async function recheckDraft(
   tx: Prisma.TransactionClient, runId: string, request: WritingRequest, candidate: DraftCandidate,
 ) {
-  return evidenceMatches(await readEvidence(tx, runId, decisionRequest), candidate.decisionRevisions)
-    && evidenceMatches(await readEvidence(tx, runId, request), candidate.writingRevisions)
+  if (!evidenceMatches(await readEvidence(tx, runId, decisionRequest), candidate.decisionRevisions)
+    || !evidenceMatches(await readEvidence(tx, runId, request), candidate.writingRevisions)) return false
+  const context = await loadRunContinuity(tx, runId)
+  return evidenceMatches(context?.self.facts ?? null, candidate.selfRevisions)
 }
 
 export async function generateSimulatedDraft(

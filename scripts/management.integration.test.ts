@@ -9,6 +9,7 @@ import { after, before, test } from 'node:test'
 import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
+import { deriveMemory } from '../packages/persistence/memory.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
@@ -119,6 +120,7 @@ after(async () => {
       await tx.managementMembership.deleteMany({ where })
       await tx.memoryGrant.deleteMany({ where })
       await tx.memorySource.deleteMany({ where })
+      await tx.memoryCorrection.deleteMany({ where })
       await tx.memory.deleteMany({ where })
       await tx.sourceRecord.deleteMany({ where })
       await tx.conversation.deleteMany({ where })
@@ -1014,6 +1016,34 @@ test('grant and account management enforce bound references and revoke access wi
   assert.equal((await request('POST', path + '/controls', {
     key: 'resume-revoked', data: { scope: 'ACCOUNT', scopeId: accountA, operation: 'RESUME', reason: 'Rejected transition' },
   })).status, 409)
+})
+
+test('memory correction revokes old citations and descendants and keeps a metadata trail', async () => {
+  const { action, grant } = await proposeReview(await newSimulationAccount())
+  const memoryId = grant.memoryId
+  const child = await deriveMemory(owner, { characterId: a, parentMemoryId: memoryId, content: 'Derived old claim' })
+  const path = characterPath(a) + '/memories/' + memoryId
+  const initial = await request('GET', path + '/provenance')
+  assert.equal(initial.status, 200)
+  assert.equal(initial.headers.get('etag'), '"1"')
+  assert.equal(initial.body.sources.length, 1)
+  assert.equal((await request('GET', characterPath(b) + '/memories/' + memoryId + '/provenance', { actor: 'admin-b' })).status, 404)
+  const options = { ifMatch: '"1"', data: { content: 'Corrected claim', reason: 'Check source' } }
+  assert.equal((await request('PUT', path + '/correction', { ...options, actor: 'reviewer' })).status, 403)
+  const outcomes = await Promise.all([request('PUT', path + '/correction', options), request('PUT', path + '/correction', options)])
+  assert.deepEqual(outcomes.map(({ status }) => status).sort(), [200, 412])
+  assert.equal((await owner.memory.findUniqueOrThrow({ where: { id: memoryId } })).content, 'Corrected claim')
+  const derived = await owner.memory.findUniqueOrThrow({ where: { id: child.id } })
+  assert.equal(derived.status, 'REVOKED')
+  assert.equal(derived.content, '')
+  assert.ok((await owner.memoryGrant.findUniqueOrThrow({ where: { id: grant.id } })).revokedAt)
+  const trace = await request('GET', path + '/provenance')
+  assert.equal(trace.body.revision, 2)
+  assert.deepEqual(trace.body.corrections.map(({ revision }: { revision: number }) => revision), [2])
+  assert.ok(!JSON.stringify(trace.body).includes('Corrected claim'))
+  const replay = await request('GET', characterPath(a) + '/runs/' + action.runId + '/replay')
+  const evidence = replay.body.snapshots.flatMap((snapshot: { evidence: { available: boolean }[] }) => snapshot.evidence)
+  assert.ok(evidence.length > 0 && evidence.every(({ available }: { available: boolean }) => !available))
 })
 
 test('three identities on two platforms reach separate approved simulation receipts', async () => {
