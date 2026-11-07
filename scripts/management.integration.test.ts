@@ -11,6 +11,7 @@ import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
+import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
@@ -134,6 +135,7 @@ after(async () => {
       await tx.identity.deleteMany({ where })
       await tx.character.updateMany({ where: { id: { in: characterIds } }, data: { status: 'PAUSED', activeCoreVersion: null } })
       await tx.coreVersion.deleteMany({ where })
+      await tx.dailyEnergyProjection.deleteMany({ where })
       await tx.character.deleteMany({ where: { id: { in: characterIds } } })
     })
   } finally {
@@ -214,6 +216,11 @@ test('management commands reject stale updates and commit idempotency and audit 
 })
 
 
+async function databaseNow() {
+  const [clock] = await owner.$queryRaw<{ now: Date }[]>`SELECT statement_timestamp() AS now`
+  return clock.now.getTime()
+}
+
 async function proposeReview(accountId = accountA, contactId?: string) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
@@ -239,8 +246,8 @@ async function proposeReview(accountId = accountA, contactId?: string) {
         ...(contactId
           ? { purpose: 'PRIVATE_REPLY', recipientConversationId: audience.id, recipientContactId: contactId }
           : { purpose: 'PUBLIC_REFERENCE', audience: audience.id }),
-        validFrom: new Date(Date.now() - 1000),
-        validUntil: new Date(Date.now() + 120_000), approvedBy: 'fixture', reason: 'Review fixture',
+        validFrom: new Date('2000-01-01T00:00:00Z'),
+        validUntil: new Date('2999-01-01T00:00:00Z'), approvedBy: 'fixture', reason: 'Review fixture',
       },
     })
     const result = await ingestSimulatedEvent(runtime, {
@@ -308,9 +315,10 @@ test('only a reviewer can see the draft and concurrent approval has one effect',
 test('review rechecks evidence expiry and adapter version, and records a valid rejection', async () => {
   for (const scenario of ['grant-expiry', 'adapter-change', 'proposal-expiry', 'payload-change', 'reject'] as const) {
     const { action, grant } = await proposeReview()
+    const now = await databaseNow()
     if (scenario === 'grant-expiry') {
       await owner.memoryGrant.update({
-        where: { id: grant.id }, data: { validFrom: new Date(Date.now() - 60_000), validUntil: new Date(Date.now() - 1000) },
+        where: { id: grant.id }, data: { validFrom: new Date(now - 60_000), validUntil: new Date(now - 1000) },
       })
     } else if (scenario === 'adapter-change') {
       await owner.actionProposal.update({ where: { id: action.id }, data: { adapterVersion: '0.0.1' } })
@@ -322,7 +330,7 @@ test('review rechecks evidence expiry and adapter version, and records a valid r
     } else if (scenario === 'proposal-expiry') {
       await owner.actionProposal.update({
         where: { id: action.id },
-        data: { createdAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1000) },
+        data: { createdAt: new Date(now - 60_000), expiresAt: new Date(now - 1000) },
       })
     }
     const path = actionPath(action.id)
@@ -390,8 +398,9 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
 
     const stale = await approveSimulation()
+    const now = await databaseNow()
     await owner.memoryGrant.update({
-      where: { id: stale.grant.id }, data: { validFrom: new Date(Date.now() - 60_000), validUntil: new Date(Date.now() - 1000) },
+      where: { id: stale.grant.id }, data: { validFrom: new Date(now - 60_000), validUntil: new Date(now - 1000) },
     })
     assert.equal(await reserveSimulation(executor, stale.action.id), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: stale.action.runId } })).state, 'BLOCKED')
@@ -484,7 +493,7 @@ test('simulation rate limits the same contact across conversations for a rolling
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: second.id } }), 0)
 
     await owner.simulationReceipt.update({
-      where: { actionId: first.id }, data: { createdAt: new Date(Date.now() - 3_601_000) },
+      where: { actionId: first.id }, data: { createdAt: new Date((await databaseNow()) - 3_601_000) },
     })
     await executeSimulation(executor, second.id)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: second.id } }), 1)
@@ -541,7 +550,7 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: notSent.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: notSent.id } }), 0)
 
-    const expired = new Date(Date.now() - 1000)
+    const expired = new Date((await databaseNow()) - 1000)
     await owner.simulationAttempt.updateMany({
       where: { actionId: { in: [lost.id, recorded.id] } }, data: { permitUntil: expired },
     })
@@ -564,7 +573,7 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     })).status, 409)
 
     await owner.simulationAttempt.update({
-      where: { actionId: lost.id }, data: { permitUntil: new Date(Date.now() - 16 * 60_000) },
+      where: { actionId: lost.id }, data: { permitUntil: new Date((await databaseNow()) - 16 * 60_000) },
     })
     const review = await request('GET', path)
     assert.equal(review.status, 200)
@@ -720,7 +729,7 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
         key: 'worker-scanned-reminder',
         data: {
           scheduleKey: 'worker-scanned-reminder', accountId: accountA, conversationId: conversation.id,
-          zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt: new Date().toISOString() },
+          zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt: new Date(Math.min(await databaseNow(), Date.now()) - 10_000).toISOString() },
         },
       })
       assert.equal(live.status, 201)
@@ -891,7 +900,7 @@ test('run replay masks expired and revoked evidence and keeps the original trace
 
   await owner.memoryGrant.update({
     where: { id: grant.id },
-    data: { validFrom: new Date(Date.now() - 120_000), validUntil: new Date(Date.now() - 1000) },
+    data: { validFrom: new Date((await databaseNow()) - 120_000), validUntil: new Date((await databaseNow()) - 1000) },
   })
   const expired = await request('GET', path, { actor: 'auditor' })
   assert.deepEqual(evidence(expired), [{ rank: 1, available: false }])
@@ -936,7 +945,7 @@ test('monitoring reports only the current character’s backlog without triggeri
       key: 'monitoring-schedule',
       data: {
         scheduleKey: 'monitoring-schedule', accountId: accountA, conversationId: conversation.id,
-        zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt: new Date(Date.now() - 1000).toISOString() },
+        zone: 'UTC', enabled: true, rule: { kind: 'REMINDER', dueAt: new Date((await databaseNow()) - 1000).toISOString() },
       },
     })
     assert.equal(created.status, 201)
@@ -966,7 +975,7 @@ test('grant and account management enforce bound references and revoke access wi
   const audience = await owner.conversation.create({
     data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: prefix, channel: 'PUBLIC' },
   })
-  const now = Date.now()
+  const now = await databaseNow()
   const data = {
     memoryId: memory.id, recipientIdentityId: identityA, recipientAccountId: accountA,
     purpose: 'PUBLIC_REFERENCE', audience: audience.id, reason: 'Public grant',
@@ -1151,6 +1160,133 @@ test('manual goal cap is atomic and replay pins the identity version of active g
   const newer = await request('GET', characterPath(a) + '/runs/' + current.action.runId + '/replay')
   assert.equal(newer.body.goalRefs.length, 2)
   assert.deepEqual((await request('GET', replayPath)).body.goalRefs, replay.body.goalRefs)
+})
+
+async function stateFixtureAccount(slug: string) {
+  const created = await request('POST', characterPath(a) + '/identities', {
+    key: slug, data: { slug, roleProfile: {} },
+  })
+  assert.equal(created.status, 201)
+  const identityId: string = created.body.id
+  await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
+  return owner.platformAccount.create({
+    data: { characterId: a, identityId, platform: 'mock-a', status: 'ACTIVE', instanceKey: 'integration',
+      remoteAccountId: randomUUID() },
+  })
+}
+
+test('late state inputs replay with the rule configuration pinned to each event', async () => {
+  const account = await stateFixtureAccount('rule-replay')
+  const conversation = await owner.conversation.create({
+    data: { characterId: a, identityId: account.identityId, accountId: account.id, channel: 'PUBLIC', remoteKey: randomUUID() },
+  })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    const ingest = createSimulatedPlatformIngress(runtime)
+    const source = { accountId: account.id, platform: account.platform, instanceKey: account.instanceKey,
+      verifiedRemoteAccountId: account.remoteAccountId }
+    async function prepare(instant: number) {
+      const event = await ingest(source, {
+        id: randomUUID(), account: account.remoteAccountId, thread: conversation.remoteKey, kind: 'POST',
+        occurredAt: new Date(instant).toISOString(), text: 'Rule fixture',
+      })
+      assert.equal(event.status, 'ACCEPTED')
+      const job = await owner.outboxEvent.findFirstOrThrow({ where: { runId: event.runId, type: runQueuedEvent } })
+      await prepareSimulatedRun(runtime, job.eventId)
+      return event.runId
+    }
+
+    const earlier = Date.now() - 48 * 3_600_000
+    const original = await prepare(earlier + 24 * 3_600_000)
+    const path = characterPath(a) + '/identities/' + account.identityId
+    const zero = [0, 0, 0, 0, 0, 0, 0]
+    const stateRule = {
+      motivationHalfLifeHours: 12, affectHalfLifeHours: 6,
+      deltas: { POST: [0.10, 0, 0, 0, 0, 0, 0], MENTION: zero, REPLY: zero },
+    }
+    const options = { ifMatch: '"1"', data: { roleProfile: { stateRule }, reason: 'Tune simulation rules' } }
+    assert.equal((await request('PUT', path, { ...options, actor: 'reviewer' })).status, 403)
+    assert.equal((await request('PUT', path, {
+      ...options, data: { ...options.data, roleProfile: { stateRule: { ...stateRule,
+        deltas: { ...stateRule.deltas, POST: [0.16, 0, 0, 0, 0, 0, 0] },
+      } } },
+    })).status, 422)
+    const updated = await request('PUT', path, options)
+    assert.equal(updated.status, 200)
+    assert.equal(updated.body.version, 2)
+    const late = await prepare(earlier)
+
+    const old = await owner.identityStateRevision.findUniqueOrThrow({ where: { runId: original } })
+    const current = await owner.identityStateRevision.findUniqueOrThrow({ where: { runId: late } })
+    assert.equal(old.ruleConfiguration, null)
+    assert.ok(Math.abs(old.values[0] - 0.58) < 1e-12)
+    assert.deepEqual(current.ruleConfiguration, stateRule)
+    assert.equal(current.revision, 2)
+    assert.equal(current.throughEventId, old.eventId)
+    // The late input adds 0.10. The original input applies v1's 24-hour decay and 0.08 increment.
+    assert.ok(Math.abs(current.values[0] - 0.63) < 1e-12)
+    const context = await runtime.$transaction((tx) => loadRunContinuity(tx, late))
+    assert.equal(context?.identityState.configurationVersion, 2)
+    const profilePath = characterPath(a) + '/identities?limit=100'
+    const find = (result: Awaited<ReturnType<typeof request>>) =>
+      result.body.items.find(({ id }: { id: string }) => id === account.identityId).profile
+    assert.deepEqual(find(await request('GET', profilePath)).stateRule, stateRule)
+    assert.ok(!('stateRule' in find(await request('GET', profilePath, { actor: 'reviewer' }))))
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('approved energy is immutable and visible only within its character and UTC day', async () => {
+  const [clock] = await owner.$queryRaw<{ day: string }[]>`
+    SELECT ((statement_timestamp() AT TIME ZONE 'UTC')::date)::text AS day
+  `
+  const today = new Date(clock.day + 'T00:00:00Z').getTime()
+  const utcDay = new Date(today + 86_400_000).toISOString().slice(0, 10)
+  const path = characterPath(a) + '/daily-energy'
+  const input = { utcDay, energy: 'HIGH', reason: 'Approved abstract projection' }
+  const options = { key: 'daily-energy-fixture', data: input }
+  assert.equal((await request('POST', path, { ...options, actor: 'reviewer' })).status, 403)
+  assert.equal((await request('POST', path, { ...options, data: { ...input, utcDay: clock.day } })).status, 422)
+  const approved = await request('POST', path, options)
+  assert.equal(approved.status, 201)
+  assert.equal((await request('POST', path, options)).body.id, approved.body.id)
+  assert.equal((await request('POST', path, { key: 'replace-daily', data: { ...input, energy: 'LOW' } })).status, 409)
+  const view = await request('GET', path + '/' + utcDay)
+  assert.equal(view.body.energy, 'HIGH')
+  assert.ok(!('reason' in view.body))
+  assert.equal((await request('GET', characterPath(b) + '/daily-energy/' + utcDay, { actor: 'admin-b' })).status, 404)
+
+  const foreign = await request('POST', characterPath(b) + '/daily-energy', {
+    actor: 'admin-b', key: 'foreign-energy', data: { ...input, energy: 'LOW' },
+  })
+  assert.equal(foreign.status, 201)
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    for (const slug of ['energy-first', 'energy-second']) {
+      const account = await stateFixtureAccount(slug)
+      const run = await ingestSimulatedEvent(runtime, {
+        accountId: account.id, sourceKey: randomUUID(), kind: 'POST', occurredAt: new Date(today),
+      })
+      assert.equal(run.status, 'ACCEPTED')
+      const runId = run.runId
+      const event = await owner.outboxEvent.findFirstOrThrow({ where: { runId, type: runQueuedEvent } })
+      await prepareSimulatedRun(runtime, event.eventId)
+      for (const [offset, expected] of [[-1, 'NORMAL'], [0, 'HIGH'], [1, 'NORMAL']] as const) {
+        await owner.agentRun.update({
+          where: { id: runId }, data: { createdAt: new Date(today + (1 + offset) * 86_400_000) },
+        })
+        const context = await runtime.$transaction<Awaited<ReturnType<typeof loadRunContinuity>>>(
+          (tx) => loadRunContinuity(tx, runId),
+        )
+        assert.equal(context?.identityState.sharedEnergy, expected)
+        assert.equal(context?.identityState.affect.energy, 0.7)
+      }
+    }
+    await assert.rejects(runtime.dailyEnergyProjection.count(), /permission denied/i)
+  } finally {
+    await runtime.$disconnect()
+  }
 })
 
 test('three identities on two platforms reach separate approved simulation receipts', async () => {

@@ -20,9 +20,23 @@ const timezone = z.string().min(1).max(80).refine((timeZone) => {
     return false
   }
 })
+const stateDeltas = z.array(z.number().min(-0.15).max(0.15)).length(7)
+const stateRule = z.strictObject({
+  motivationHalfLifeHours: z.number().min(1).max(168),
+  affectHalfLifeHours: z.number().min(1).max(168),
+  deltas: z.strictObject({ POST: stateDeltas, MENTION: stateDeltas, REPLY: stateDeltas }),
+})
+const energyLevel = z.enum(['LOW', 'NORMAL', 'HIGH'])
+export const dailyEnergyInput = reasonInput.extend({ utcDay: z.iso.date(), energy: energyLevel })
+export const dailyEnergyView = z.object({
+  id: resourceId, utcDay: z.iso.date(), energy: energyLevel,
+  approvedAt: z.iso.datetime({ offset: true }),
+})
+
 export const identityProfile = z.strictObject({
   displayName: shortText.optional(),
   timezone: timezone.optional(),
+  stateRule: stateRule.optional(),
   writingStyle: z.enum(['neutral', 'formal', 'casual', 'concise']).optional(),
 })
 export const characterInput = z.strictObject({

@@ -12,6 +12,8 @@ export type RunTime = Readonly<{
 type IdentityState = Readonly<{
   revision: number | null
   ruleVersion: number
+  configurationVersion: number | null
+  sharedEnergy: 'LOW' | 'NORMAL' | 'HIGH'
   motivation: { exploration: number; expression: number; social: number; rest: number }
   affect: { pleasure: number; arousal: number; energy: number }
 }>

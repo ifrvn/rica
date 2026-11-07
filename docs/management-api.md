@@ -27,6 +27,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。 |
 | `POST /v1/characters`、`PUT /c/core` | 指定主体创建初始暂停角色。ADMIN 提交新核心版本。 |
 | `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本。 |
+| `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取脱敏列表。ADMIN 登记初始暂停的模拟账号。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。 |
 | `GET /c/memories`、`GET /c/memory-grants` | ADMIN 读取记忆元数据和共享授权。 |
@@ -48,6 +49,14 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 POST 带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无令牌或令牌无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
 
 分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求把响应的 `nextCursor` 作为 `cursor` 传回。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
+
+## 身份状态规则与每日精力
+
+ADMIN 可在身份档案的 `roleProfile.stateRule` 配置动机和模拟情绪。`motivationHalfLifeHours` 与 `affectHalfLifeHours` 可在 1 至 168 小时之间设置。`deltas.POST`、`deltas.MENTION` 和 `deltas.REPLY` 各含七个数，依次为探索、表达、社交、休息、愉悦度、唤醒度和精力，每项范围为 −0.15 至 0.15。ADMIN 和 AUDITOR 可在身份列表读取规则。省略规则时采用内置 v1。
+
+每个事件固定使用其身份版本的配置。重放以当前折叠的事件规则计算前一事件至该事件的衰减和增量。读取状态时使用最后折叠事件的半衰期，已保存的修订保持原值。
+
+每日投影的请求字段为 `utcDay`、`energy` 和 `reason`。`energy` 可取 `LOW`、`NORMAL` 或 `HIGH`。管理员只可批准未来 UTC 日，同角色的身份在该日读取同一档位。没有审批时返回 `NORMAL`。内部决策收到档位，不收到审批理由、操作者或其他身份的局部状态。
 
 ## 模拟审批
 

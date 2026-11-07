@@ -84,6 +84,7 @@ model Character {
   managementMemberships ManagementMembership[]
   managementAudit       ManagementAudit[]
 
+  dailyEnergyProjections DailyEnergyProjection[]
   @@map("characters")
 }
 
@@ -241,6 +242,20 @@ model AgentRun {
   @@map("agent_runs")
 }
 
+model DailyEnergyProjection {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId String    @map("character_id") @db.Uuid
+  utcDay      DateTime  @map("utc_day") @db.Date
+  energy      String
+  actorId     String    @map("actor_id")
+  reason      String
+  approvedAt  DateTime  @default(now()) @map("approved_at") @db.Timestamptz
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([characterId, utcDay])
+  @@map("daily_energy_projections")
+}
+
 model IdentityStateRevision {
   characterId String      @map("character_id") @db.Uuid
   identityId   String      @map("identity_id") @db.Uuid
@@ -259,6 +274,7 @@ model IdentityStateRevision {
 
   @@id([characterId, identityId, revision])
   @@index([characterId, identityId, effectiveAt, eventId], map: "identity_state_event_order_idx")
+  ruleConfiguration Json? @map("rule_configuration")
   @@map("identity_state_revisions")
 }
 

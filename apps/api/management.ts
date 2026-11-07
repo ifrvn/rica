@@ -234,6 +234,30 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
   ), 200))
 
+  const energyParams = characterParams.extend({ utcDay: z.iso.date() })
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/daily-energy/{utcDay}`, security,
+    request: { params: energyParams }, responses: { ...errors, 200: success(schema.dailyEnergyView) },
+  }), async (c) => {
+    const { characterId, utcDay } = c.req.valid('param')
+    return c.json(await management.readDailyEnergy(db, { characterId, actor: c.get('actor') }, utcDay), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/daily-energy`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(schema.dailyEnergyInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'state.energy.approve', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.approveDailyEnergy(tx, scope, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
   const goals = `${character}/identities/{identityId}/goals` as const
   const goalParams = identityParams.extend({ goalId: schema.resourceId })
   const goalQuery = z.object({ revision: z.string().regex(/^[1-9][0-9]{0,8}$/).optional() })

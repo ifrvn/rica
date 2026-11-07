@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
-import { contactBoundaryView, coreProfile, identityProfile, memoryProvenanceView } from '../contracts/management.js'
+import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
@@ -43,6 +43,7 @@ export async function authorize(tx: Tx, scope: Scope, roles: readonly Management
   })
   if (members.length === 0) unavailable()
   if (roles.length && !members.some(({ role }) => roles.includes(role))) denyPermission()
+  return members
 }
 
 async function lockCharacter(tx: Tx, characterId: string) {
@@ -353,9 +354,13 @@ export async function getCharacter(db: PrismaClient, scope: Scope) {
   })
 }
 
+const identityProfileWithoutRule = identityProfile.omit({ stateRule: true }).strip()
+
 export async function listIdentities(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope)
+    const members = await authorize(tx, scope)
+    const profile = members.some(({ role }) => role === 'ADMIN' || role === 'AUDITOR')
+      ? identityProfile.strip() : identityProfileWithoutRule
     const where = { characterId: scope.characterId }
     const args = await pageArgs(page, (id) => tx.identity.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.identity.findMany({
@@ -365,7 +370,7 @@ export async function listIdentities(db: PrismaClient, scope: Scope, page: Page)
     })
     return makePage(rows, page, ({ id, slug, status, activeVersion, activeProfile }) => ({
       id, slug, status, version: activeVersion,
-      profile: identityProfile.strip().safeParse(activeProfile?.roleProfile).data ?? null,
+      profile: profile.safeParse(activeProfile?.roleProfile).data ?? null,
     }))
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -381,6 +386,27 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
     })
     return makePage(rows, page, ({ bindingVersion, createdAt: _, ...view }) => ({ ...view, version: bindingVersion }))
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readDailyEnergy(db: PrismaClient, scope: Scope, day: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+      SELECT public.rica_read_daily_energy(${scope.characterId}::uuid, ${day}::date) AS view
+    `
+    if (!row?.view) unavailable()
+    return dailyEnergyView.parse(row.view)
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function approveDailyEnergy(tx: Tx, scope: Scope, input: Input<typeof contracts.dailyEnergyInput>) {
+  const [row] = await tx.$queryRaw<{ outcome: string }[]>`
+    SELECT public.rica_approve_daily_energy(${scope.characterId}::uuid, ${input.utcDay}::date,
+      ${input.energy}, ${scope.actor.id}, ${input.reason}) AS outcome
+  `
+  if (row.outcome === 'DAY_NOT_FUTURE') invalid('A projection must be approved before its UTC day begins')
+  if (row.outcome === 'DAY_EXISTS') throw new ManagementError(409, 'DAY_EXISTS', 'This UTC day already has a projection')
+  return { id: row.outcome }
 }
 
 export async function readManualGoals(db: PrismaClient, scope: Scope, identityId: string,
