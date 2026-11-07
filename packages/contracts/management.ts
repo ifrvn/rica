@@ -97,6 +97,10 @@ export const beliefView = z.object({
   statement: z.string().nullable(), confidence: z.number().nullable(), reason: z.string().nullable(),
   restoredFrom: z.number().int().nullable(), createdAt: z.iso.datetime({ offset: true }),
   evidence: z.array(beliefEvidence.extend({ sourceId: resourceId })),
+  remainingEvidence: z.object({
+    supportingSources: z.number().int().nonnegative(), opposingSources: z.number().int().nonnegative(),
+    confidence: z.number().min(0).max(1),
+  }).nullable(),
 })
 
 const goalStatus = z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'DONE', 'CANCELED', 'EXPIRED'])

@@ -1217,6 +1217,7 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
     assert.equal(view.body.statement, null)
     assert.equal(view.body.confidence, null)
     assert.deepEqual(view.body.evidence, [])
+    assert.deepEqual(view.body.remainingEvidence, { supportingSources: 1, opposingSources: 0, confidence: 0.6 })
   }
   assert.equal((await request('POST', path + '/restore', { ifMatch: '"3"', data })).status, 409)
   const replacement = await request('PUT', path, {
