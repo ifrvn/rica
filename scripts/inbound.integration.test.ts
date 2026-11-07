@@ -1125,7 +1125,7 @@ test('platform ingress rejects mismatched source and private recipient before cr
   }
 })
 
-test('ranked reads preserve normalized words and current-conversation evidence', async () => {
+test('ranked reads preserve normalized words, concept aliases and current-conversation evidence', async () => {
   assert.ok(fixture)
   const { characterId } = fixture
   const [account] = fixture.accounts
@@ -1145,7 +1145,7 @@ test('ranked reads preserve normalized words and current-conversation evidence',
   await db.memorySource.create({ data: { characterId, memoryId: thread.id, sourceId: source.id } })
 
   const { memory: mixedSources } = await testMemory('IDENTITY', 'PUBLIC', { identityId: account.identityId })
-  await db.memory.update({ where: { id: mixedSources.id }, data: { content: 'Rica restricted marker', importance: 1 } })
+  await db.memory.update({ where: { id: mixedSources.id }, data: { content: 'feline restricted marker', importance: 1 } })
   const restricted = await db.sourceRecord.create({
     data: { characterId, identityId: account.identityId, kind: 'fixture', sourceKey: randomUUID(), classification: 'RESTRICTED' },
   })
@@ -1155,8 +1155,10 @@ test('ranked reads preserve normalized words and current-conversation evidence',
   const runtime = testDatabaseRole('rica_runtime')
   try {
     const request = { purpose: 'DECISION_SUPPORT' } as const
+    const { memory: alias } = await testMemory('IDENTITY', 'PUBLIC', { identityId: account.identityId })
+    await db.memory.update({ where: { id: alias.id }, data: { content: 'feline behavior', importance: 1 } })
     const ranked = await recallAuthorizedMemories(runtime, runId, request, '猫咪 Rica')
-    assert.deepEqual(new Set(ranked.map(({ id }) => id)), new Set([word.id, thread.id]))
+    assert.deepEqual(new Set(ranked.map(({ id }) => id)), new Set([word.id, thread.id, alias.id]))
     const contextOnly = await recallAuthorizedMemories(runtime, runId, request, '')
     assert.deepEqual(contextOnly.map(({ id }) => id), [thread.id])
   } finally {

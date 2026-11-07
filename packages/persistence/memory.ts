@@ -1,5 +1,5 @@
 import type { MemoryCandidate } from '../contracts/memory.js'
-import { memoryKeywords, rankMemoryCandidates } from '../runtime/memory-ranking.js'
+import { memoryPrefilterWords, rankMemoryCandidates } from '../runtime/memory-ranking.js'
 import { Prisma, type PrismaClient } from './generated/client.js'
 import { bindingMatches, lockEventContext, lockSimulatedBinding } from './run-context.js'
 
@@ -50,7 +50,7 @@ export async function loadMemoryReadScope(
 export async function readMemoryCandidates(
   tx: Prisma.TransactionClient, scope: MemoryReadScope, options: { query?: string; memoryIds?: string[] } = {},
 ) {
-  const keywordPatterns = options.query === undefined ? undefined : memoryKeywords(options.query)
+  const keywordPatterns = options.query === undefined ? undefined : memoryPrefilterWords(options.query)
     .filter((word) => /^[\x00-\x7f]+$/u.test(word))
     .map((word) => '%' + word.replace(/[\\%_]/g, '\\$&') + '%')
   const readScope = { ...scope, keyword_patterns: keywordPatterns }
