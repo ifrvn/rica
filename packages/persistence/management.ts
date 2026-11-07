@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import type { commitmentInput, commitmentQuery, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
 import { coreProfile, identityProfile } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
@@ -465,9 +466,11 @@ export async function updateSchedule(
   tx: Tx, scope: Scope, id: string, expected: number, input: Input<typeof scheduleUpdate>,
 ) {
   const schedule = await tx.simulationSchedule.findFirst({
-    where: { id, characterId: scope.characterId }, select: { version: true },
+    where: { id, characterId: scope.characterId },
+    select: { version: true, commitment: { select: { id: true } } },
   })
   if (!schedule) unavailable()
+  if (schedule.commitment) throw new ManagementError(409, 'COMMITMENT_SCHEDULE', 'Update this reminder through its commitment')
   checkVersion(schedule.version, expected)
   const timing = await scheduleTiming(tx, input)
   return tx.simulationSchedule.update({
@@ -489,6 +492,81 @@ export async function listSchedules(db: PrismaClient, scope: Scope, page: Page) 
       ...row,
       rule: kind === 'DAILY' ? { kind, localTime: localTime! } : { kind, dueAt: dueAt!.toISOString() },
       nextAt: nextAt?.toISOString() ?? null,
+    }))
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function createCommitment(tx: Tx, scope: Scope, input: Input<typeof commitmentInput>) {
+  const { characterId, actor } = scope
+  const [bound] = await tx.$queryRaw<{
+    accountId: string; identityId: string; conversationId: string; contactId: string | null; zone: string
+  }[]>`
+    SELECT * FROM public.rica_confirmed_commitment_scope(${characterId}::uuid, ${input.actionId}::uuid)
+  `
+  if (!bound) unavailable()
+
+  const id = randomUUID()
+  const dueAt = new Date(input.dueAt)
+  const schedule = await tx.simulationSchedule.create({
+    data: {
+      ...bound, characterId, scheduleKey: 'commitment:' + id, kind: 'REMINDER', dueAt, nextAt: dueAt,
+    },
+    select: { id: true },
+  })
+  const commitment = await tx.simulationCommitment.create({
+    data: { id, characterId, actionId: input.actionId, scheduleId: schedule.id, title: input.title, dueAt },
+    select: { id: true, version: true, state: true },
+  })
+  await tx.commitmentRevision.create({
+    data: { commitmentId: id, characterId, version: commitment.version, state: commitment.state,
+      dueAt, reason: input.reason, actorId: actor.id },
+  })
+  return { id, version: commitment.version, status: commitment.state }
+}
+
+export async function updateCommitment(
+  tx: Tx, scope: Scope, id: string, expected: number, input: Input<typeof commitmentUpdate>,
+) {
+  const { characterId, actor } = scope
+  const current = await tx.simulationCommitment.findFirst({ where: { id, characterId } })
+  if (!current) unavailable()
+  checkVersion(current.version, expected)
+  if (current.state !== 'OPEN' && current.state !== 'DEFERRED') {
+    throw new ManagementError(409, 'COMMITMENT_CLOSED', 'Commitment is already closed')
+  }
+
+  const deferred = input.operation === 'DEFER'
+  const dueAt = deferred ? new Date(input.dueAt) : current.dueAt
+  if (deferred && (dueAt <= current.dueAt || dueAt <= new Date())) invalid('New deadline must be later and in the future')
+  if (input.operation === 'EXPIRE' && current.dueAt > new Date()) invalid('Commitment deadline has not passed')
+  const states = { DEFER: 'DEFERRED', FULFILL: 'FULFILLED', CANCEL: 'CANCELED', EXPIRE: 'EXPIRED' } as const
+  const state = states[input.operation]
+  const version = expected + 1
+
+  await tx.simulationSchedule.update({
+    where: { id: current.scheduleId },
+    data: { dueAt, nextAt: deferred ? dueAt : null, enabled: deferred, version: { increment: 1 } },
+  })
+  await tx.simulationCommitment.update({ where: { id }, data: { dueAt, state, version } })
+  await tx.commitmentRevision.create({
+    data: { commitmentId: id, characterId, version, state, dueAt, reason: input.reason, actorId: actor.id },
+  })
+  return { id, version, status: state }
+}
+
+export async function listCommitments(db: PrismaClient, scope: Scope, input: Input<typeof commitmentQuery>) {
+  const page = parsePage(input)
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN'])
+    const where = { characterId: scope.characterId, schedule: { accountId: input.accountId, contactId: input.contactId } }
+    const args = await pageArgs(page, (id) => tx.simulationCommitment.findFirst({ where: { ...where, id }, select: { id: true } }))
+    const rows = await tx.simulationCommitment.findMany({
+      ...args, where,
+      select: { id: true, actionId: true, scheduleId: true, title: true, state: true, version: true, dueAt: true,
+        schedule: { select: { accountId: true, conversationId: true, contactId: true, nextAt: true } } },
+    })
+    return makePage(rows, page, ({ schedule, dueAt, ...row }) => ({
+      ...row, ...schedule, dueAt: dueAt.toISOString(), nextAt: schedule.nextAt?.toISOString() ?? null,
     }))
   }, { isolationLevel: 'RepeatableRead' })
 }

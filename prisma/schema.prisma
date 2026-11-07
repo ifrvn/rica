@@ -550,10 +550,11 @@ model SimulationAttempt {
 }
 
 model SimulationReceipt {
-  actionId    String            @id @map("action_id") @db.Uuid
-  characterId String            @map("character_id") @db.Uuid
-  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz
-  attempt     SimulationAttempt @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
+  actionId    String                @id @map("action_id") @db.Uuid
+  characterId String                @map("character_id") @db.Uuid
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  attempt     SimulationAttempt     @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
+  commitment  SimulationCommitment?
 
   @@unique([characterId, actionId])
   @@map("simulation_receipts")
@@ -565,24 +566,25 @@ enum ScheduleKind {
 }
 
 model SimulationSchedule {
-  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  characterId    String               @map("character_id") @db.Uuid
-  identityId     String               @map("identity_id") @db.Uuid
-  accountId      String               @map("account_id") @db.Uuid
-  conversationId String               @map("conversation_id") @db.Uuid
-  contactId      String?              @map("contact_id") @db.Uuid
-  scheduleKey    String               @map("schedule_key")
+  id             String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String                @map("character_id") @db.Uuid
+  identityId     String                @map("identity_id") @db.Uuid
+  accountId      String                @map("account_id") @db.Uuid
+  conversationId String                @map("conversation_id") @db.Uuid
+  contactId      String?               @map("contact_id") @db.Uuid
+  scheduleKey    String                @map("schedule_key")
   zone           String
   kind           ScheduleKind
-  localTime      String?              @map("local_time")
-  dueAt          DateTime?            @map("due_at") @db.Timestamptz
-  nextAt         DateTime?            @map("next_at") @db.Timestamptz
-  enabled        Boolean              @default(true)
-  version        Int                  @default(1)
-  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz
-  conversation   Conversation         @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "simulation_schedules_conversation_fkey")
-  contact        Contact?             @relation(fields: [characterId, identityId, accountId, contactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "simulation_schedules_contact_fkey")
+  localTime      String?               @map("local_time")
+  dueAt          DateTime?             @map("due_at") @db.Timestamptz
+  nextAt         DateTime?             @map("next_at") @db.Timestamptz
+  enabled        Boolean               @default(true)
+  version        Int                   @default(1)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  conversation   Conversation          @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "simulation_schedules_conversation_fkey")
+  contact        Contact?              @relation(fields: [characterId, identityId, accountId, contactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "simulation_schedules_contact_fkey")
   occurrences    ScheduleOccurrence[]
+  commitment     SimulationCommitment?
 
   @@unique([characterId, id])
   @@unique([characterId, scheduleKey])
@@ -602,4 +604,48 @@ model ScheduleOccurrence {
   @@id([scheduleId, scheduledAt])
   @@unique([characterId, runId])
   @@map("schedule_occurrences")
+}
+
+enum CommitmentState {
+  OPEN
+  DEFERRED
+  FULFILLED
+  CANCELED
+  EXPIRED
+}
+
+model SimulationCommitment {
+  id          String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId String               @map("character_id") @db.Uuid
+  actionId    String               @map("action_id") @db.Uuid
+  scheduleId  String               @map("schedule_id") @db.Uuid
+  title       String
+  state       CommitmentState      @default(OPEN)
+  dueAt       DateTime             @map("due_at") @db.Timestamptz
+  version     Int                  @default(1)
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  receipt     SimulationReceipt    @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
+  schedule    SimulationSchedule   @relation(fields: [characterId, scheduleId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  revisions   CommitmentRevision[]
+
+  @@unique([characterId, id])
+  @@unique([characterId, actionId])
+  @@unique([characterId, scheduleId])
+  @@index([characterId, createdAt, id])
+  @@map("simulation_commitments")
+}
+
+model CommitmentRevision {
+  commitmentId String               @map("commitment_id") @db.Uuid
+  characterId  String               @map("character_id") @db.Uuid
+  version      Int
+  state        CommitmentState
+  dueAt        DateTime             @map("due_at") @db.Timestamptz
+  reason       String
+  actorId      String               @map("actor_id")
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  commitment   SimulationCommitment @relation(fields: [characterId, commitmentId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([commitmentId, version])
+  @@map("commitment_revisions")
 }

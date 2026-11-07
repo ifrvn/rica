@@ -33,6 +33,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `POST /c/memory-grants`、`POST /c/memory-grants/{grantId}/revoke` | ADMIN 创建或撤销用途授权。公开引用绑定指定会话，私聊回复绑定确切的会话与联系人。 |
 | `POST /c/memberships` | ADMIN 授予或撤销当前发行者下的角色权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
+| `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
 | `GET /c/audit` | ADMIN 和 AUDITOR 读取操作元数据、摘要哈希和请求 ID。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | REVIEWER 读取模拟待办和经复核的提案预览。列表不含正文。 |
 | `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |

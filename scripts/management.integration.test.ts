@@ -102,6 +102,8 @@ after(async () => {
           ...characterIds.map((id) => ({ response: { path: ['id'], equals: id } }))],
       } })
       await tx.outboxEvent.deleteMany({ where: { run: where } })
+      await tx.commitmentRevision.deleteMany({ where })
+      await tx.simulationCommitment.deleteMany({ where })
       await tx.simulationReceipt.deleteMany({ where })
       await tx.simulationAttempt.deleteMany({ where })
       await tx.actionApproval.deleteMany({ where })
@@ -714,6 +716,122 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
     } finally {
       await worker.close()
     }
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+
+async function commitmentFixture(privateRecipient = false) {
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  const accountId = await newSimulationAccount()
+  const contact = privateRecipient ? await owner.contact.create({
+    data: { characterId: a, identityId: identityA, accountId, remoteKey: randomUUID() },
+  }) : null
+  const { action } = await approveSimulation(accountId, contact?.id)
+  const due = new Date()
+  due.setUTCHours(3, 0, 0, 0)
+  due.setUTCDate(due.getUTCDate() + 1)
+  return { accountId, contactId: contact?.id, action, due }
+}
+
+async function confirmCommitmentReceipt(actionId: string) {
+  const executor = simulationDatabase()
+  try {
+    await executeSimulation(executor, actionId)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId } }), 1)
+  } finally {
+    await executor.$disconnect()
+  }
+}
+
+test('commitments require a confirmed receipt and preserve its recipient across filters', async () => {
+  const { accountId, contactId, action, due } = await commitmentFixture(true)
+  const path = characterPath(a) + '/commitments'
+  const data = { actionId: action.id, title: 'Follow up with the recipient', dueAt: due.toISOString(), reason: 'Confirmed agreement' }
+
+  assert.equal((await request('POST', path, { key: 'unconfirmed-commitment', data })).status, 404)
+  await confirmCommitmentReceipt(action.id)
+  assert.equal((await request('POST', path, { actor: 'reviewer', key: 'reviewer-commitment', data })).status, 403)
+  assert.equal((await request('POST', characterPath(b) + '/commitments', {
+    actor: 'admin-b', key: 'foreign-commitment', data,
+  })).status, 404)
+  assert.equal((await request('POST', path, { key: 'forged-scope', data: { ...data, accountId: accountA } })).status, 422)
+
+  const result = await request('POST', path, { key: 'confirmed-commitment', data })
+  assert.equal(result.status, 201, JSON.stringify(result.body))
+  assert.equal((await request('POST', path, { key: 'confirmed-commitment', data })).body.id, result.body.id)
+  assert.equal((await request('POST', path, { key: 'duplicate-receipt', data })).status, 409)
+  const list = await request('GET', path + '?accountId=' + accountId + '&contactId=' + contactId)
+  assert.equal(list.status, 200)
+  assert.equal(list.body.items.length, 1)
+  const [commitment] = list.body.items
+  assert.equal(commitment.actionId, action.id)
+  assert.equal(commitment.contactId, contactId)
+  assert.deepEqual((await request('GET', path + '?accountId=' + accountA)).body.items, [])
+
+  const schedulePath = characterPath(a) + '/schedules/' + commitment.scheduleId
+  assert.equal((await request('PUT', schedulePath, {
+    ifMatch: '"1"', data: { zone: 'UTC', enabled: false, rule: { kind: 'REMINDER', dueAt: data.dueAt } },
+  })).status, 409)
+  const fulfilled = await request('PUT', path + '/' + result.body.id, {
+    ifMatch: '"1"', data: { operation: 'FULFILL', reason: 'Agreement completed' },
+  })
+  assert.equal(fulfilled.body.status, 'FULFILLED')
+  assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id: commitment.scheduleId } })).nextAt, null)
+  assert.equal(await owner.simulationSchedule.count({
+    where: { scheduleKey: 'commitment:' + result.body.id },
+  }), 1)
+})
+
+test('a commitment reminder catches up once, and defer or cancel invalidates its pending runs', async () => {
+  const { action, due } = await commitmentFixture()
+  await confirmCommitmentReceipt(action.id)
+  await owner.character.update({ where: { id: a }, data: { timezone: 'UTC' } })
+  const path = characterPath(a) + '/commitments'
+  const result = await request('POST', path, {
+    key: 'commitment-catchup',
+    data: { actionId: action.id, title: 'Deadline reminder', dueAt: due.toISOString(), reason: 'Follow-up agreement' },
+  })
+  assert.equal(result.status, 201, JSON.stringify(result.body))
+  const id = result.body.id
+  const { scheduleId } = await owner.simulationCommitment.findUniqueOrThrow({ where: { id } })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    const overnight = new Date(due.getTime() + 86_400_000)
+    const morning = new Date(overnight.getTime() + 5 * 3_600_000)
+    await scanSimulationSchedules(runtime, null, overnight)
+    assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId } }), 0)
+    assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id: scheduleId } })).nextAt?.toISOString(),
+      morning.toISOString())
+    await Promise.all([scanSimulationSchedules(runtime, null, morning), scanSimulationSchedules(runtime, null, morning)])
+    const [first] = await owner.scheduleOccurrence.findMany({ where: { scheduleId } })
+    assert.equal(first.scheduledAt.toISOString(), due.toISOString())
+    assert.equal(await owner.outboxEvent.count({ where: { runId: first.runId, type: runQueuedEvent } }), 1)
+
+    const newDue = new Date(morning.getTime() + 86_400_000 + 3_600_000)
+    const deferred = await request('PUT', path + '/' + id, {
+      ifMatch: '"1"', data: { operation: 'DEFER', dueAt: newDue.toISOString(), reason: 'Recipient requested more time' },
+    })
+    assert.equal(deferred.status, 200, JSON.stringify(deferred.body))
+    assert.equal(deferred.body.status, 'DEFERRED')
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: first.runId } })).stateReason, 'SCHEDULE_CHANGED')
+    await scanSimulationSchedules(runtime, null, newDue)
+    const occurrences = await owner.scheduleOccurrence.findMany({ where: { scheduleId }, orderBy: { scheduledAt: 'asc' } })
+    assert.equal(occurrences.length, 2)
+    assert.equal(occurrences[1].scheduleVersion, 2)
+
+    const canceled = await request('PUT', path + '/' + id, {
+      ifMatch: '"2"', data: { operation: 'CANCEL', reason: 'Recipient canceled' },
+    })
+    assert.equal(canceled.body.status, 'CANCELED')
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: occurrences[1].runId } })).state, 'CANCELED')
+    assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id: scheduleId } })).nextAt, null)
+    assert.deepEqual((await owner.commitmentRevision.findMany({
+      where: { commitmentId: id }, orderBy: { version: 'asc' },
+    })).map(({ state, reason }) => [state, reason]), [
+      ['OPEN', 'Follow-up agreement'], ['DEFERRED', 'Recipient requested more time'], ['CANCELED', 'Recipient canceled'],
+    ])
   } finally {
     await runtime.$disconnect()
   }
