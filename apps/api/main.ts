@@ -6,9 +6,11 @@ import { loadManagementConfig } from './admin-auth.js'
 import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
+import { startSimulationPlatforms } from '../runtime-plugins.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
+const platforms = managementConfig ? await startSimulationPlatforms(process.env, 'api') : undefined
 const managementDb = managementConfig ? createDatabase(managementConfig.databaseUrl) : null
 const db = createDatabase(config.databaseUrl)
 const redis = new Redis(config.redisUrl, {
@@ -22,8 +24,9 @@ redis.on('error', () => {})
 void redis.connect().catch(() => {})
 
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
-const management = managementConfig && managementDb && auth ? createManagementApp({
+const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
+  platformVersion: platforms.version,
 }) : undefined
 
 const app = createApp({
@@ -39,8 +42,9 @@ console.info(JSON.stringify({ service: 'api', event: 'started', port: config.por
 function shutdown() {
   server.close(() => {
     redis.disconnect()
-    void db.$disconnect()
-    void managementDb?.$disconnect()
+    void Promise.all([platforms?.stop(), db.$disconnect(), managementDb?.$disconnect()]).catch(() => {
+      process.exitCode = 1
+    })
   })
 }
 process.once('SIGINT', shutdown)

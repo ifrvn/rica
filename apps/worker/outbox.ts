@@ -8,7 +8,8 @@ import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEve
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
 import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
-import { simulatedModelPlugin, type ModelProvider } from '../../packages/runtime/model-provider.js'
+import type { ModelProvider } from '../../packages/runtime/model-provider.js'
+import type { SimulationPlatformVersion } from '../../packages/contracts/simulation-platform.js'
 import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
@@ -23,7 +24,7 @@ export class WorkerDependencyUnavailable extends Error {
 }
 
 export async function startOutboxWorker(
-  databaseUrl: string, redisUrl: string, model: Plugin<ModelProvider> = simulatedModelPlugin,
+  databaseUrl: string, redisUrl: string, model: Plugin<ModelProvider>, platformVersion: SimulationPlatformVersion,
 ) {
   const db = createDatabase(databaseUrl)
   const producer = new Redis(redisUrl, {
@@ -59,7 +60,7 @@ export async function startOutboxWorker(
       if (name === runQueuedEvent) {
         await prepareSimulatedRun(db, eventId, attempt)
       } else if (name === draftQueuedEvent) {
-        await processSimulatedDraft(db, eventId, model, attempt)
+        await processSimulatedDraft(db, eventId, platformVersion, model, attempt)
       } else {
         await db.$executeRaw`
           UPDATE public.outbox SET processed_at = clock_timestamp()

@@ -1,6 +1,6 @@
 import type { z } from '@hono/zod-openapi'
 import { reviewTarget, type ActionView, type actionDecision } from '../contracts/action-review.js'
-import { resolveSimulatedPlatform } from '../runtime/simulated-platforms.js'
+import type { SimulationPlatformVersion } from '../contracts/simulation-platform.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
 
@@ -53,7 +53,7 @@ async function proposalRows(
   `
 }
 
-async function inspect(tx: Prisma.TransactionClient, characterId: string, proposal: Proposal, readContent = true) {
+async function inspect(tx: Prisma.TransactionClient, characterId: string, proposal: Proposal, platformVersion: SimulationPlatformVersion, readContent = true) {
   const target = reviewTarget.parse(proposal.target)
   if (!reviewStates.includes(proposal.state)) notFound()
   if (proposal.state !== 'WAITING_APPROVAL' && proposal.state !== 'READY') {
@@ -61,7 +61,7 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
   }
   if (proposal.expired) return { target, state: 'EXPIRED' as const, content: null }
   if (proposal.policyVersion !== simulationReviewPolicyVersion
-    || proposal.adapterVersion !== resolveSimulatedPlatform(target.platform).version) {
+    || proposal.adapterVersion !== platformVersion(target.platform)) {
     return { target, state: 'CANCELED' as const, content: null }
   }
   const [payload] = await tx.$queryRaw<{ content: string | null; valid: boolean }[]>`
@@ -76,7 +76,7 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
 }
 
 export async function listReviewActions(
-  db: PrismaClient, scope: Scope, actionId?: string, limit = 25, cursor?: string,
+  db: PrismaClient, scope: Scope, platformVersion: SimulationPlatformVersion, actionId?: string, limit = 25, cursor?: string,
 ) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['REVIEWER'])
@@ -84,7 +84,7 @@ export async function listReviewActions(
     if (actionId && !rows.length) notFound()
     const actions: ActionView[] = []
     for (const row of rows.slice(0, limit)) {
-      const { target, state, content } = await inspect(tx, scope.characterId, row, Boolean(actionId))
+      const { target, state, content } = await inspect(tx, scope.characterId, row, platformVersion, Boolean(actionId))
       actions.push({
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
@@ -100,7 +100,7 @@ export async function listReviewActions(
 
 export async function decideReviewAction(
   tx: Prisma.TransactionClient, scope: Scope, actionId: string, version: number,
-  input: z.infer<typeof actionDecision>,
+  input: z.infer<typeof actionDecision>, platformVersion: SimulationPlatformVersion,
 ) {
   const [proposal] = await proposalRows(tx, scope.characterId, actionId)
   if (!proposal) notFound()
@@ -110,7 +110,7 @@ export async function decideReviewAction(
     throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
   }
 
-  const { state } = await inspect(tx, scope.characterId, proposal)
+  const { state } = await inspect(tx, scope.characterId, proposal, platformVersion)
   const valid = state === 'WAITING_APPROVAL'
   const nextState = valid ? (input.decision === 'APPROVE' ? 'READY' : 'REJECTED') : state
   const [transition] = await tx.$queryRaw<{ version: number | null }[]>`

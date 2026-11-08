@@ -33,15 +33,6 @@ function indexPlugins<T extends PluginIdentity>(kind: string, plugins: readonly 
   return registered
 }
 
-export function registerPlugins<T>(kind: string, plugins: readonly Plugin<T>[]) {
-  const registered = indexPlugins(kind, plugins)
-  return (id: string) => {
-    const plugin = registered.get(id)
-    if (!plugin) throw new Error('Unknown ' + kind + ' plugin: ' + id)
-    return plugin
-  }
-}
-
 export async function startPluginHost<T>(
   kind: string, definitions: readonly PluginDefinition<T>[], selections: readonly Selection[],
   options: { services?: ReadonlySet<string>; report?: (diagnostic: Diagnostic) => void } = {},

@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { reviewTarget } from '../contracts/action-review.js'
-import { resolveSimulatedPlatform } from '../runtime/simulated-platforms.js'
+import type { SimulationPlatformVersion } from '../contracts/simulation-platform.js'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
-import { maxSimulatedTextLength, simulatedModel, simulatedModelPlugin } from '../runtime/model-provider.js'
+import { maxSimulatedTextLength } from '../runtime/model-provider.js'
 import type { Plugin } from '../runtime/plugin-registry.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { captureMemorySnapshot, captureSelfModelSnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
@@ -128,7 +128,7 @@ async function recheckDraft(
 
 export async function generateSimulatedDraft(
   db: PrismaClient, runId: string, text: string, request: WritingRequest,
-  provider: ModelProvider = simulatedModel, signal: AbortSignal = AbortSignal.timeout(5_000),
+  provider: ModelProvider, signal: AbortSignal = AbortSignal.timeout(5_000),
 ) {
   const candidate = await buildSimulatedDraft(db, runId, text, request, provider, signal)
   if (!candidate || !await db.$transaction((tx) => recheckDraft(tx, runId, request, candidate))) return null
@@ -137,7 +137,7 @@ export async function generateSimulatedDraft(
 }
 
 export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, model: Plugin<ModelProvider> = simulatedModelPlugin, attempt?: OutboxAttempt,
+  db: PrismaClient, eventId: string, platformVersion: SimulationPlatformVersion, model: Plugin<ModelProvider>, attempt?: OutboxAttempt,
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
@@ -148,14 +148,19 @@ export async function processSimulatedDraft(
   })
   const run = event?.run
   if (!run) return
-
+  const inbound = run.inboundEvent
   const input = await db.$transaction(async (tx) => {
     const scope = await loadMemoryReadScope(tx, run.id, decisionRequest)
     if (!scope) return null
+    const platform = inbound.adapterId ?? (await tx.$queryRaw<{ platform: string | null }[]>`
+      SELECT public.rica_simulated_review_target(${run.id}::uuid)->>'platform' AS platform
+    `)[0]?.platform
+    const adapterVersion = platform ? platformVersion(platform) : undefined
+    if (!adapterVersion || (inbound.adapterId !== null && inbound.adapterVersion !== adapterVersion)) return null
     const { messageText } = await tx.inboundEvent.findUniqueOrThrow({
       where: { id: run.inboundEventId }, select: { messageText: true },
     })
-    return { scope, text: messageText }
+    return { scope, text: messageText, platform, adapterVersion }
   })
   const scope = input?.scope
   const request: WritingRequest | null = scope?.channel === 'PRIVATE'
@@ -188,13 +193,11 @@ export async function processSimulatedDraft(
           public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
       ` : []
       const target = bound?.target ? reviewTarget.parse(bound.target) : null
-      const adapterVersion = target ? resolveSimulatedPlatform(target.platform).version : null
-      const inbound = run.inboundEvent
-      const currentAdapter = inbound.adapterId === null
-        || (inbound.adapterId === target?.platform && inbound.adapterVersion === adapterVersion)
       const content = accepted && bound?.disclosure
         ? candidate.draft.text + '\n\nAI 披露：' + bound.disclosure : null
-      const proposed = accepted && target && adapterVersion && currentAdapter && content
+      const adapterVersion = target ? platformVersion(target.platform) : undefined
+      const proposed = accepted && target && target.platform === input?.platform
+        && adapterVersion && adapterVersion === input.adapterVersion && content
         && content.length <= maxSimulatedTextLength
       if (proposed) {
         const expiresAt = new Date(Date.now() + 86_400_000)

@@ -1,19 +1,6 @@
 import { maxSimulatedTextLength } from './model-provider.js'
-import { registerPlugins } from './plugin-registry.js'
-
-export type NormalizedPlatformEvent = Readonly<{
-  remoteAccountId: string
-  remoteConversationKey: string
-  remoteContactKey?: string
-  sourceKey: string
-  messageText: string
-  kind: 'POST' | 'REPLY' | 'MENTION'
-  occurredAt: Date
-}>
-
-type PlatformAdapter = Readonly<{
-  normalize(payload: unknown): NormalizedPlatformEvent
-}>
+import type { NormalizedPlatformEvent, PlatformAdapter } from '../contracts/simulation-platform.js'
+import type { PluginDefinition } from './plugin-registry.js'
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -77,7 +64,7 @@ function mockB(payload: unknown): NormalizedPlatformEvent {
   }
 }
 
-export const resolveSimulatedPlatform = registerPlugins<PlatformAdapter>('platform', [
-  { id: 'mock-a', version: '1.0.0', contractVersion: 1, implementation: { normalize: mockA } },
-  { id: 'mock-b', version: '1.0.0', contractVersion: 1, implementation: { normalize: mockB } },
-])
+export const simulatedPlatformDefinitions: readonly PluginDefinition<PlatformAdapter>[] = [
+  { id: 'mock-a', version: '1.0.0', contractVersion: 1, create: () => ({ implementation: { normalize: mockA } }) },
+  { id: 'mock-b', version: '1.0.0', contractVersion: 1, create: () => ({ implementation: { normalize: mockB } }) },
+]

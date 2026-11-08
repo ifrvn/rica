@@ -1,6 +1,5 @@
 import { maxSimulatedTextLength } from '../runtime/model-provider.js'
-import { registerPlugins } from '../runtime/plugin-registry.js'
-import { resolveSimulatedPlatform, type NormalizedPlatformEvent } from '../runtime/simulated-platforms.js'
+import type { NormalizedPlatformEvent, ResolveSimulationPlatform } from '../contracts/simulation-platform.js'
 import type { InboundKind, PrismaClient } from './generated/client.js'
 import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
 import { scheduleSourcePrefix } from './simulation-schedules.js'
@@ -28,11 +27,10 @@ type PlatformSource = Readonly<{
 }>
 
 // Only trusted simulation ingress calls this entry. The host supplies the verified subject independently of the payload.
-export function createSimulatedPlatformIngress(db: PrismaClient, enabled = ['mock-a', 'mock-b']) {
-  const resolveAdapter = registerPlugins('enabled platform', enabled.map(resolveSimulatedPlatform))
-
+export function createSimulatedPlatformIngress(db: PrismaClient, resolveAdapter: ResolveSimulationPlatform) {
   return (source: PlatformSource, payload: unknown) => {
     const adapter = resolveAdapter(source.platform)
+    if (!adapter) throw new Error('Unknown enabled platform plugin: ' + source.platform)
     const normalized = adapter.implementation.normalize(payload)
     if (source.verifiedRemoteAccountId !== normalized.remoteAccountId) {
       return Promise.resolve({ status: 'ACCOUNT_UNAVAILABLE' } as const)

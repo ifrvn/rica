@@ -8,6 +8,7 @@ import { Redis } from 'ioredis'
 import { outboxQueueName, smokeEvent, startOutboxWorker } from '../apps/worker/outbox.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { loadConfig } from '../packages/runtime/config.js'
+import { startCognitionPlugins } from '../apps/runtime-plugins.js'
 
 const config = loadConfig()
 const db = createDatabase(config.databaseUrl)
@@ -92,7 +93,8 @@ try {
     await queue.resume()
   }
 
-  const worker = await startOutboxWorker(runtimeUrl.toString(), config.redisUrl)
+  const plugins = await startCognitionPlugins({})
+  const worker = await startOutboxWorker(runtimeUrl.toString(), config.redisUrl, plugins.model, plugins.platformVersion)
   try {
     await waitFor(async () => await db.outboxEvent.count({
       where: { eventId: { in: ids }, enqueuedAt: { not: null }, processedAt: { not: null } },
@@ -100,6 +102,7 @@ try {
     console.info('Outbox crash recovery and worker readiness passed')
   } finally {
     await worker.close()
+    await plugins.stop()
   }
 } finally {
   try {

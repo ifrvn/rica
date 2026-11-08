@@ -1,3 +1,4 @@
+import { startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -7,7 +8,7 @@ import { createNewbiClient } from '../packages/runtime/newbi-client.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { simulatedModelPlugin } from '../packages/runtime/model-provider.js'
+import { simulatedModelPlugin } from '../packages/runtime/simulated-model.js'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { dailyScheduleSlot, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
@@ -18,6 +19,7 @@ import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
+import { listReviewActions } from '../packages/persistence/action-review.js'
 import { sweepSimulationRetention } from '../packages/persistence/simulation-retention.js'
 import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
@@ -29,6 +31,7 @@ import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimul
 import { loadConfig } from '../packages/runtime/config.js'
 
 const config = loadConfig()
+const simulationPlatforms = await startSimulationPlatforms({})
 const owner = createDatabase(config.databaseUrl)
 const adminUrl = new URL(config.databaseUrl)
 adminUrl.searchParams.set('options', '-c role=rica_admin_api')
@@ -38,7 +41,7 @@ const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
 const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
   db: management,
-  origin: fixtureOrigin, cookie: 'fixture-session',
+  origin: fixtureOrigin, cookie: 'fixture-session', platformVersion: simulationPlatforms.version,
   authenticate: async (request) => {
     const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
     return subject && subjects.has(subject) ? {
@@ -163,7 +166,10 @@ test('local authentication migrates the principal, enforces origin and revokes s
   const redis = new Redis(config.redisUrl)
   const auth = createAdminAuth(management, redis, authConfig)
   const local = createApp({ postgres: async () => true, redis: async () => true },
-    createManagementApp({ db: management, authenticate: auth.authenticate, origin: fixtureOrigin, cookie: authConfig.cookie }),
+    createManagementApp({
+      db: management, authenticate: auth.authenticate, origin: fixtureOrigin, cookie: authConfig.cookie,
+      platformVersion: simulationPlatforms.version,
+    }),
     auth.app,
   )
   const suffix = randomUUID()
@@ -351,7 +357,7 @@ async function proposeReview(accountId = accountA, contactId?: string, model = s
     const runJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, runJob.eventId)
     const draftJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, draftJob.eventId, model)
+    await processSimulatedDraft(runtime, draftJob.eventId, simulationPlatforms.version, model)
     const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: result.runId } })
     return { action, grant, proposalText }
   } finally {
@@ -486,6 +492,47 @@ function simulationZone(hour: number) {
   return shift === 0 ? 'UTC' : 'Etc/GMT' + (shift > 0 ? '-' : '+') + Math.abs(shift)
 }
 
+test('disabled platform prevents drafting, review preview and execution permission', async () => {
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+  await owner.platformAccount.update({ where: { id: accountA }, data: { status: 'ACTIVE' } })
+  const enabled = await approveSimulation()
+  const disabled = await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-b' })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    const scope = { characterId: a, actor: { issuer, subject: 'reviewer', id: actorId(issuer, 'reviewer') } }
+    const { items: [preview] } = await listReviewActions(management, scope, disabled.version, enabled.action.id)
+    assert.equal(preview.state, 'CANCELED')
+    assert.equal(preview.content, null)
+
+    await executeSimulation(executor, enabled.action.id, disabled.version, async () => assert.fail('Disabled platform reached the adapter'))
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: enabled.action.runId } })).state, 'BLOCKED')
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: enabled.action.id } }), 0)
+
+    const { conversationId } = reviewTarget.parse(enabled.action.target)
+    const incoming = await ingestSimulatedEvent(runtime, {
+      accountId: accountA, conversationId, sourceKey: randomUUID(), kind: 'REPLY',
+      occurredAt: new Date(), messageText: 'Disabled platform draft fixture',
+    })
+    assert.equal(incoming.status, 'ACCEPTED')
+    const job = await owner.outboxEvent.findFirstOrThrow({ where: { runId: incoming.runId, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, job.eventId)
+    const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: incoming.runId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, draft.eventId, disabled.version, {
+      ...simulatedModelPlugin,
+      implementation: {
+        async decide() { assert.fail('Disabled platform called the model') },
+        async write() { assert.fail('Disabled platform called the model') },
+      },
+    })
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: incoming.runId } })).state, 'CANCELED')
+    assert.equal(await owner.actionProposal.count({ where: { runId: incoming.runId } }), 0)
+  } finally {
+    await Promise.all([disabled.stop(), runtime.$disconnect(), executor.$disconnect()])
+  }
+})
+
 test('receipt rechecks an ordinary writing grant after execution is permitted', async () => {
   await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
   await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
@@ -493,7 +540,7 @@ test('receipt rechecks an ordinary writing grant after execution is permitted', 
   const executor = simulationDatabase()
   try {
     let permitted = false
-    await executeSimulation(executor, action.id, async (db, id) => {
+    await executeSimulation(executor, action.id, simulationPlatforms.version, async (db, id) => {
       permitted = true
       const now = await databaseNow()
       await owner.memoryGrant.update({
@@ -514,7 +561,7 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
   try {
     const quiet = await approveSimulation()
     await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(1) } })
-    assert.equal(await reserveSimulation(executor, quiet.action.id), false)
+    assert.equal(await reserveSimulation(executor, quiet.action.id, simulationPlatforms.version), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: quiet.action.runId } })).state, 'READY')
     await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
 
@@ -523,7 +570,7 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     await owner.memoryGrant.update({
       where: { id: stale.grant.id }, data: { validFrom: new Date(now - 60_000), validUntil: new Date(now - 1000) },
     })
-    assert.equal(await reserveSimulation(executor, stale.action.id), false)
+    assert.equal(await reserveSimulation(executor, stale.action.id, simulationPlatforms.version), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: stale.action.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: stale.action.id } }), 0)
 
@@ -532,7 +579,7 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
       key: 'revoke-before-permit', data: { reason: 'Withdraw evidence after approval' },
     })
     assert.equal(revokedGrant.status, 200)
-    await executeSimulation(executor, revoked.action.id, async () => assert.fail('Revoked proposal reached the adapter'))
+    await executeSimulation(executor, revoked.action.id, simulationPlatforms.version, async () => assert.fail('Revoked proposal reached the adapter'))
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: revoked.action.runId } })).state, 'CANCELED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: revoked.action.id } }), 0)
 
@@ -545,18 +592,18 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     await owner.actionProposal.update({
       where: { id: undisclosed.action.id }, data: { payloadHash: createHash('sha256').update(content).digest('hex') },
     })
-    assert.equal(await reserveSimulation(executor, undisclosed.action.id), false)
+    assert.equal(await reserveSimulation(executor, undisclosed.action.id, simulationPlatforms.version), false)
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: undisclosed.action.id } }), 0)
 
     const paused = await approveSimulation(await newSimulationAccount())
-    await executeSimulation(executor, paused.action.id, async (db, id) => {
+    await executeSimulation(executor, paused.action.id, simulationPlatforms.version, async (db, id) => {
       await owner.character.update({ where: { id: a }, data: { status: 'PAUSED', authEpoch: { increment: 1 } } })
       return recordSimulationReceipt(db, id)
     })
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: paused.action.id } }), 0)
     assert.equal((await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: paused.action.id } })).status, 'NOT_SENT')
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: paused.action.runId } })).state, 'BLOCKED')
-    assert.equal(await reserveSimulation(executor, quiet.action.id), false)
+    assert.equal(await reserveSimulation(executor, quiet.action.id, simulationPlatforms.version), false)
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: quiet.action.id } }), 0)
   } finally {
     await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
@@ -574,13 +621,13 @@ test('duplicate delivery uses one local receipt and the daily reservation cannot
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: first.id } }), 0)
 
     let calls = 0
-    await Promise.all(Array.from({ length: 6 }, () => executeSimulation(executor, first.id, async (db, id) => {
+    await Promise.all(Array.from({ length: 6 }, () => executeSimulation(executor, first.id, simulationPlatforms.version, async (db, id) => {
       calls++
       return recordSimulationReceipt(db, id)
     })))
     assert.equal(calls, 1)
     for (let round = 0; round < 5; round++) {
-      await Promise.all(proposals.slice(1).map(({ id }) => executeSimulation(executor, id)))
+      await Promise.all(proposals.slice(1).map(({ id }) => executeSimulation(executor, id, simulationPlatforms.version)))
     }
 
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: proposals.map(({ id }) => id) } } }), 5)
@@ -607,16 +654,16 @@ test('simulation rate limits the same contact across conversations for a rolling
     const first = (await approveSimulation(accountId, firstContact)).action
     const second = (await approveSimulation(accountId, firstContact)).action
     const other = (await approveSimulation(accountId, await contact())).action
-    await executeSimulation(executor, first.id)
-    await executeSimulation(executor, second.id)
-    await executeSimulation(executor, other.id)
+    await executeSimulation(executor, first.id, simulationPlatforms.version)
+    await executeSimulation(executor, second.id, simulationPlatforms.version)
+    await executeSimulation(executor, other.id, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [first.id, other.id] } } }), 2)
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: second.id } }), 0)
 
     await owner.simulationReceipt.update({
       where: { actionId: first.id }, data: { createdAt: new Date((await databaseNow()) - 3_601_000) },
     })
-    await executeSimulation(executor, second.id)
+    await executeSimulation(executor, second.id, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: second.id } }), 1)
   } finally {
     await executor.$disconnect()
@@ -627,9 +674,11 @@ async function crashSimulationProcess(actionId: string, checkpoint: 'permit' | '
   const program = `
     import { createDatabase } from './packages/persistence/client.ts'
     import { reserveSimulation, recordSimulationReceipt } from './packages/persistence/simulation-execution.ts'
+    import { startSimulationPlatforms } from './apps/runtime-plugins.ts'
+    const simulationPlatforms = await startSimulationPlatforms({})
     const [id, phase] = process.argv.slice(1)
     const db = createDatabase(process.env.RICA_TEST_SIMULATION_URL)
-    if (!await reserveSimulation(db, id)) throw new Error('Permit was not issued')
+    if (!await reserveSimulation(db, id, simulationPlatforms.version)) throw new Error('Permit was not issued')
     if (phase === 'receipt' && !await recordSimulationReceipt(db, id)) throw new Error('Receipt was not written')
     process.send(phase)
     process.on('message', () => {})
@@ -667,7 +716,7 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     await owner.actionProposal.updateMany({
       where: { id: { in: [lost.id, recorded.id, notSent.id] } }, data: { adapterVersion: '0.0.1' },
     })
-    await executeSimulation(executor, notSent.id, async () => assert.fail('Old approval reached the replacement adapter'))
+    await executeSimulation(executor, notSent.id, simulationPlatforms.version, async () => assert.fail('Old approval reached the replacement adapter'))
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: notSent.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: notSent.id } }), 0)
 
@@ -675,8 +724,8 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     await owner.simulationAttempt.updateMany({
       where: { actionId: { in: [lost.id, recorded.id] } }, data: { permitUntil: expired },
     })
-    await runSimulationBatch(executor, null)
-    await runSimulationBatch(executor, null)
+    await runSimulationBatch(executor, null, simulationPlatforms.version)
+    await runSimulationBatch(executor, null, simulationPlatforms.version)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: lost.runId } })).state, 'RECONCILING')
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: recorded.runId } })).state, 'SIMULATED')
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: waiting.runId } })).state, 'READY')
@@ -717,7 +766,7 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     assert.equal(attempt.resolutionReason, decision.reason)
     await assert.rejects(executor.simulationAttempt.findMany({ select: { resolutionReason: true } }), /permission denied/i)
 
-    await runSimulationBatch(executor, null)
+    await runSimulationBatch(executor, null, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: waiting.id } }), 1)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: lost.id } }), 0)
   } finally {
@@ -834,7 +883,7 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
     assert.equal(occurrences.length, 1)
     assert.equal(occurrences[0].scheduledAt.toISOString(), dueAt)
     assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id } })).nextAt, null)
-    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl)
+    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl, simulatedModelPlugin, simulationPlatforms.version)
     try {
       const runId = occurrences[0].runId
       const deadline = Date.now() + 10_000
@@ -891,7 +940,7 @@ async function commitmentFixture(privateRecipient = false) {
 async function confirmCommitmentReceipt(actionId: string) {
   const executor = simulationDatabase()
   try {
-    await executeSimulation(executor, actionId)
+    await executeSimulation(executor, actionId, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId } }), 1)
   } finally {
     await executor.$disconnect()
@@ -1052,7 +1101,7 @@ test('monitoring reports only the current character’s backlog without triggeri
   const executor = simulationDatabase()
   try {
     const { action } = await approveSimulation(await newSimulationAccount())
-    await assert.rejects(executeSimulation(executor, action.id, async () => {
+    await assert.rejects(executeSimulation(executor, action.id, simulationPlatforms.version, async () => {
       throw new Error('Outcome unknown')
     }), /Outcome unknown/)
     await proposeReview(await newSimulationAccount())
@@ -1133,7 +1182,7 @@ test('grant and account management enforce bound references and revoke access wi
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executor = simulationDatabase()
   try {
-    const ingest = createSimulatedPlatformIngress(runtime)
+    const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
     const payload = {
       id: 'revoked-simulated-subject', account: bound.remoteAccountId, thread: audience.remoteKey,
       kind: 'REPLY', occurredAt: new Date().toISOString(), text: 'Reply after revocation',
@@ -1141,7 +1190,7 @@ test('grant and account management enforce bound references and revoke access wi
     assert.deepEqual(await ingest({ accountId: bound.id, platform: bound.platform, instanceKey: bound.instanceKey, verifiedRemoteAccountId: bound.remoteAccountId }, payload),
       { status: 'ACCOUNT_UNAVAILABLE' })
     assert.equal(await owner.inboundEvent.count({ where: { accountId: bound.id, sourceKey: payload.id } }), 0)
-    await executeSimulation(executor, approved.id, async () => assert.fail('Revoked account reached the adapter'))
+    await executeSimulation(executor, approved.id, simulationPlatforms.version, async () => assert.fail('Revoked account reached the adapter'))
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: approved.id } }), 0)
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
@@ -1196,9 +1245,9 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executor = simulationDatabase()
   try {
-    const ingest = createSimulatedPlatformIngress(runtime)
+    const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
     let stopRunId: string | undefined
-    await executeSimulation(executor, inFlight.id, async (database, id) => {
+    await executeSimulation(executor, inFlight.id, simulationPlatforms.version, async (database, id) => {
       const result = await ingest({
         accountId, platform: account.platform, instanceKey: account.instanceKey, verifiedRemoteAccountId: account.remoteAccountId,
       }, {
@@ -1213,7 +1262,7 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
     const stopEvent = await owner.outboxEvent.findFirstOrThrow({ where: { runId: stopRunId, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, stopEvent.eventId)
     const stopDraft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: stopRunId, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, stopDraft.eventId)
+    await processSimulatedDraft(runtime, stopDraft.eventId, simulationPlatforms.version, simulatedModelPlugin)
     assert.equal(await owner.actionProposal.count({ where: { runId: stopRunId } }), 0)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: inFlight.id } }), 0)
     assert.equal((await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: inFlight.id } })).status, 'NOT_SENT')
@@ -1229,9 +1278,9 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
     assert.equal((await request('PUT', path, { ...options, actor: 'reviewer' })).status, 403)
     assert.equal((await request('PUT', path, { ...options, ifMatch: '"0"' })).status, 412)
     assert.equal((await request('PUT', path, options)).status, 200)
-    await executeSimulation(executor, old.id, async () => assert.fail('Old approval was revived'))
+    await executeSimulation(executor, old.id, simulationPlatforms.version, async () => assert.fail('Old approval was revived'))
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: old.id } }), 0)
-    await executeSimulation(executor, independent.id)
+    await executeSimulation(executor, independent.id, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: independent.id } }), 1)
     const fresh = (await approveSimulation(accountId, contact.id)).action
     const released = await owner.contact.findUniqueOrThrow({ where: { id: contact.id } })
@@ -1240,7 +1289,7 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
       where: { id: fresh.runId }, data: { createdAt: new Date(released.boundaryChangedAt.getTime() - 1000) },
     })
     assert.equal(backdated.contactBoundaryVersion, 2)
-    await executeSimulation(executor, fresh.id)
+    await executeSimulation(executor, fresh.id, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: fresh.id } }), 1)
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
@@ -1430,7 +1479,7 @@ test('daily reflection plans a bounded autonomous goal only with identity permis
   try {
     for (const [accountId, id] of [[account, identityId], [otherAccount, disabled]]) {
       const { action } = await approveSimulation(accountId, undefined, id)
-      await executeSimulation(executor, action.id)
+      await executeSimulation(executor, action.id, simulationPlatforms.version)
       assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: action.runId } })).state, 'SIMULATED')
       await owner.simulationReceipt.update({ where: { actionId: action.id }, data: { createdAt: date } })
     }
@@ -1558,7 +1607,7 @@ test('subjective belief projection stays inside decisions and expired references
   const executor = simulationDatabase()
   try {
     let permitted = false
-    await executeSimulation(executor, action.id, async (db, id) => {
+    await executeSimulation(executor, action.id, simulationPlatforms.version, async (db, id) => {
       permitted = true
       while ((await databaseNow()) < expiresAt.getTime()) await sleep(100)
       return recordSimulationReceipt(db, id)
@@ -1566,7 +1615,7 @@ test('subjective belief projection stays inside decisions and expired references
     assert.equal(permitted, true)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: action.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
-    assert.equal(await reserveSimulation(executor, waiting.action.id), false)
+    assert.equal(await reserveSimulation(executor, waiting.action.id, simulationPlatforms.version), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: waiting.action.runId } })).state, 'BLOCKED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: waiting.action.id } }), 0)
   } finally {
@@ -1662,7 +1711,7 @@ test('late state inputs replay with the rule configuration pinned to each event'
   })
   const runtime = createDatabase(scheduleRuntimeUrl())
   try {
-    const ingest = createSimulatedPlatformIngress(runtime)
+    const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
     const source = { accountId: account.id, platform: account.platform, instanceKey: account.instanceKey,
       verifiedRemoteAccountId: account.remoteAccountId }
     async function prepare(instant: number) {
@@ -1799,7 +1848,7 @@ async function prepareTopic(runtime: ReturnType<typeof createDatabase>, target: 
     delivery: sourceKey, recipient: account.remoteAccountId, action: 'post', timeMs: occurredAt.getTime(),
     message: { conversation: conversation.remoteKey, author: contact?.remoteKey, body: text },
   }
-  const result = await createSimulatedPlatformIngress(runtime)(source, payload)
+  const result = await createSimulatedPlatformIngress(runtime, simulationPlatforms.find)(source, payload)
   assert.equal(result.status, 'ACCEPTED')
   const runJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
   await prepareSimulatedRun(runtime, runJob.eventId)
@@ -1811,7 +1860,7 @@ async function topicProposal(runtime: ReturnType<typeof createDatabase>, target:
   text: string, model = simulatedModelPlugin,
 ) {
   const { runId, eventId } = await prepareTopic(runtime, target, text)
-  await processSimulatedDraft(runtime, eventId, model)
+  await processSimulatedDraft(runtime, eventId, simulationPlatforms.version, model)
   return owner.actionProposal.findUniqueOrThrow({ where: { runId } })
 }
 
@@ -1845,7 +1894,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
         },
       },
     }
-    const first = await startOutboxWorker(runtimeUrl, config.redisUrl, failing)
+    const first = await startOutboxWorker(runtimeUrl, config.redisUrl, failing, simulationPlatforms.version)
     try {
       await wait(({ attempts, attemptUntil }) => attempts === 3 && attemptUntil === null)
     } finally {
@@ -1853,7 +1902,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
     }
     assert.equal(failures, 3)
     await owner.outboxEvent.update({ where, data: { enqueuedAt: new Date(Date.now() - 15_000) } })
-    const restarted = await startOutboxWorker(runtimeUrl, config.redisUrl, failing)
+    const restarted = await startOutboxWorker(runtimeUrl, config.redisUrl, failing, simulationPlatforms.version)
     try {
       const held = await wait(({ quarantinedAt }) => quarantinedAt !== null)
       assert.equal(held.attempts, 4)
@@ -1880,7 +1929,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
       SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${draftQueuedEvent}, 0) AS ticket
     `
     assert.equal(stale.ticket, null)
-    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl)
+    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl, simulatedModelPlugin, simulationPlatforms.version)
     try {
       const processed = await wait(({ processedAt }) => processedAt !== null)
       assert.equal(processed.generation, 1)
@@ -1915,7 +1964,7 @@ test('a crashed outbox attempt consumes its ticket and a late failure cannot rel
     assert.equal(await claim(), 2)
     await runtime.$queryRaw`SELECT public.rica_fail_outbox_attempt(${eventId}::uuid, 0, 1)::text`
     assert.equal(await claim(), null)
-    await processSimulatedDraft(runtime, eventId, simulatedModelPlugin, { generation: 0, ticket: 1 })
+    await processSimulatedDraft(runtime, eventId, simulationPlatforms.version, simulatedModelPlugin, { generation: 0, ticket: 1 })
     assert.equal((await owner.outboxEvent.findUniqueOrThrow({ where: { eventId } })).processedAt, null)
     for (const ticket of [3, 4]) {
       await expireLease()
@@ -1950,7 +1999,7 @@ test('simulation retention removes bodies and references at separate cutoffs whi
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executor = simulationDatabase()
   try {
-    await executeSimulation(executor, archived.id)
+    await executeSimulation(executor, archived.id, simulationPlatforms.version)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: archived.id } }), 1)
     const inbound = await ageSimulationRun(archived.runId, 91)
     await ageSimulationRun(redacted.runId, 31)
@@ -2004,7 +2053,7 @@ test('retention preserves unknown-delivery reconciliation and stops an expired r
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executor = simulationDatabase()
   try {
-    await assert.rejects(executeSimulation(executor, unknown.id, async () => { throw new Error('synthetic lost outcome') }))
+    await assert.rejects(executeSimulation(executor, unknown.id, simulationPlatforms.version, async () => { throw new Error('synthetic lost outcome') }))
     await owner.simulationAttempt.update({
       where: { actionId: unknown.id }, data: { permitUntil: new Date((await databaseNow()) - 16 * 60_000) },
     })
@@ -2028,7 +2077,7 @@ test('retention preserves unknown-delivery reconciliation and stops an expired r
     })
     assert.equal(resolved.status, 200, JSON.stringify(resolved.body))
     assert.equal(resolved.body.status, 'BLOCKED')
-    await processSimulatedDraft(runtime, pending.eventId, {
+    await processSimulatedDraft(runtime, pending.eventId, simulationPlatforms.version, {
       ...simulatedModelPlugin,
       implementation: {
         ...simulatedModelPlugin.implementation,
@@ -2155,9 +2204,9 @@ test('M4 evaluates fourteen simulated days of scope, duplicate reviews, frequenc
       }
       await reviewTopic(characterId, action, 'APPROVE')
       if (day >= 7) await reviewTopic(characterId, duplicate, 'REJECT')
-      await executeSimulation(executor, action.id)
-      await executeSimulation(executor, action.id)
-      await executeSimulation(executor, duplicate.id)
+      await executeSimulation(executor, action.id, simulationPlatforms.version)
+      await executeSimulation(executor, action.id, simulationPlatforms.version)
+      await executeSimulation(executor, duplicate.id, simulationPlatforms.version)
       assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 1)
       assert.equal(await owner.simulationReceipt.count({ where: { actionId: duplicate.id } }), 0)
 
@@ -2229,7 +2278,7 @@ test('concurrent model calls share one enforced character budget and report the 
   }
   try {
     const runs = await Promise.all(['first budget input', 'second budget input'].map((text) => prepareTopic(runtime, target, text)))
-    await Promise.all(runs.map(({ eventId }) => processSimulatedDraft(runtime, eventId, model)))
+    await Promise.all(runs.map(({ eventId }) => processSimulatedDraft(runtime, eventId, simulationPlatforms.version, model)))
     assert.equal(decisions, 2)
     assert.equal(writes, 1)
     assert.equal(await owner.actionProposal.count({ where: { characterId } }), 1)
@@ -2615,7 +2664,7 @@ test('three identities on two platforms reach separate approved simulation recei
     await owner.character.update({
       where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) },
     })
-    const ingest = createSimulatedPlatformIngress(runtime)
+    const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
     const occurredAt = new Date()
     const runs = []
     const memoryCount = await owner.memory.count({ where: { characterId: a } })
@@ -2659,7 +2708,7 @@ test('three identities on two platforms reach separate approved simulation recei
     }
 
     const ids = runs.map(({ id }) => id)
-    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl)
+    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl, simulatedModelPlugin, simulationPlatforms.version)
     try {
       const deadline = Date.now() + 15_000
       while (Date.now() < deadline) {
@@ -2682,15 +2731,15 @@ test('three identities on two platforms reach separate approved simulation recei
       assert.equal(preview.body.target.conversationId, conversationId)
       assert.equal(preview.body.content.split('\n\nAI 披露：')[0], expected)
       assert.match(preview.body.content, /\n\nAI 披露：\S/)
-      await executeSimulation(executor, action.id)
+      await executeSimulation(executor, action.id, simulationPlatforms.version)
       assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
       const decision = await request('POST', path + '/decisions', {
         actor: 'reviewer', key: 'e2e-approve-' + id, ifMatch: preview.headers.get('etag') ?? '',
         data: { decision: 'APPROVE', reviewDigest: action.reviewDigest, reason: 'Approve bound simulation' },
       })
       assert.equal(decision.status, 200, JSON.stringify(decision.body))
-      await executeSimulation(executor, action.id)
-      await executeSimulation(executor, action.id)
+      await executeSimulation(executor, action.id, simulationPlatforms.version)
+      await executeSimulation(executor, action.id, simulationPlatforms.version)
       const receipts = await owner.simulationReceipt.findMany({
         where: { actionId: action.id }, select: { attempt: { select: { accountId: true } } },
       })

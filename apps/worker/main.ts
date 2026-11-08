@@ -1,14 +1,16 @@
 import { startOutboxWorker, WorkerDependencyUnavailable } from './outbox.js'
 import { loadConfig } from '../../packages/runtime/config.js'
-import { resolveModelProvider } from '../../packages/runtime/model-provider.js'
+import { startCognitionPlugins } from '../runtime-plugins.js'
 
 async function main() {
   const config = loadConfig()
-  const model = resolveModelProvider(process.env.RICA_MODEL_PROVIDER ?? 'simulated')
+  const plugins = await startCognitionPlugins(process.env, 'worker')
+  const { model, platformVersion } = plugins
   let worker: Awaited<ReturnType<typeof startOutboxWorker>>
   try {
-    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, model)
+    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, model, platformVersion)
   } catch (error) {
+    await plugins.stop()
     if (!(error instanceof WorkerDependencyUnavailable)) throw error
     console.error(JSON.stringify({
       service: 'worker', event: 'not_ready', modelId: model.id, dependencies: error.dependencies,
@@ -22,6 +24,8 @@ async function main() {
       await worker.close()
     } catch {
       process.exitCode = 1
+    } finally {
+      await plugins.stop()
     }
   }
   process.once('SIGINT', shutdown)

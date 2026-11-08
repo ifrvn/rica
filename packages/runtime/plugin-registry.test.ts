@@ -1,13 +1,22 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { resolveModelProvider, simulatedModelPlugin } from './model-provider.js'
-import { PluginHostError, registerPlugins, startPluginHost, type PluginDefinition } from './plugin-registry.js'
+import { startCognitionPlugins, startSimulationPlatforms } from '../../apps/runtime-plugins.js'
+import { PluginHostError, startPluginHost, type PluginDefinition } from './plugin-registry.js'
 
-test('registration rejects duplicate IDs, incompatible contracts and unknown model configuration', () => {
-  assert.equal(resolveModelProvider('simulated'), simulatedModelPlugin)
-  assert.throws(() => resolveModelProvider('missing'), /Unknown model plugin: missing/)
-  assert.throws(() => registerPlugins('model', [simulatedModelPlugin, simulatedModelPlugin]), /DUPLICATE_PLUGIN/)
-  assert.throws(() => registerPlugins('model', [{ ...simulatedModelPlugin, contractVersion: 2 }]), /INCOMPATIBLE_CONTRACT/)
+test('registration rejects duplicate IDs, incompatible contracts and unknown model configuration', async () => {
+  const enabled = await startCognitionPlugins({})
+  assert.equal(enabled.model.id, 'simulated')
+  assert.equal(enabled.platformVersion('mock-a'), '1.0.0')
+  assert.equal(enabled.platformVersion('mock-b'), '1.0.0')
+  await enabled.stop()
+  const selected = await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-b' })
+  assert.equal(selected.version('mock-a'), undefined)
+  assert.equal(selected.version('mock-b'), '1.0.0')
+  await selected.stop()
+  await assert.rejects(startCognitionPlugins({ RICA_MODEL_PROVIDER: 'unregistered' }), /UNKNOWN_PLUGIN/)
+  const builtin = definition('builtin')
+  await assert.rejects(startPluginHost('model', [builtin, builtin], []), /DUPLICATE_PLUGIN/)
+  await assert.rejects(startPluginHost('model', [{ ...builtin, contractVersion: 2 }], []), /INCOMPATIBLE_CONTRACT/)
 })
 
 function definition(id: string, overrides: Partial<PluginDefinition<string>> = {}): PluginDefinition<string> {

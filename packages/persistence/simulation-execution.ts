@@ -1,5 +1,5 @@
 import { reviewTarget } from '../contracts/action-review.js'
-import { resolveSimulatedPlatform } from '../runtime/simulated-platforms.js'
+import type { SimulationPlatformVersion } from '../contracts/simulation-platform.js'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 
@@ -59,7 +59,7 @@ async function lockBudgetClock(tx: Tx, characterId: string) {
   return clock
 }
 
-export async function reserveSimulation(db: PrismaClient, actionId: string) {
+export async function reserveSimulation(db: PrismaClient, actionId: string, platformVersion: SimulationPlatformVersion) {
   return db.$transaction(async (tx) => {
     const initial = await candidate(tx, actionId)
     if (initial?.state !== 'READY') return false
@@ -84,7 +84,7 @@ export async function reserveSimulation(db: PrismaClient, actionId: string) {
     `
     if (!payload?.allowed || approval?.decision !== 'APPROVE' || approval.reviewDigest !== action.reviewDigest
       || approval.expiresAt <= now || action.policyVersion !== simulationReviewPolicyVersion
-      || action.adapterVersion !== resolveSimulatedPlatform(target.platform).version) {
+      || action.adapterVersion !== platformVersion(target.platform)) {
       await transition(tx, action, 'BLOCKED')
       return false
     }
@@ -162,8 +162,10 @@ export async function reconcileSimulation(
   })
 }
 
-export async function executeSimulation(db: PrismaClient, actionId: string, send = recordSimulationReceipt) {
-  if (!await reserveSimulation(db, actionId)) return
+export async function executeSimulation(
+  db: PrismaClient, actionId: string, platformVersion: SimulationPlatformVersion, send = recordSimulationReceipt,
+) {
+  if (!await reserveSimulation(db, actionId, platformVersion)) return
   let outcome: 'UNKNOWN' | 'NOT_SENT' = 'UNKNOWN'
   try {
     if (!await send(db, actionId)) outcome = 'NOT_SENT'
@@ -173,7 +175,7 @@ export async function executeSimulation(db: PrismaClient, actionId: string, send
   }
 }
 
-export async function runSimulationBatch(db: PrismaClient, after: string | null) {
+export async function runSimulationBatch(db: PrismaClient, after: string | null, platformVersion: SimulationPlatformVersion) {
   const recovery = await db.$queryRaw<{ id: string }[]>`
     SELECT a.action_id AS id FROM public.simulation_attempts a
     WHERE a.status IN ('PERMITTED', 'UNKNOWN') AND (
@@ -193,6 +195,6 @@ export async function runSimulationBatch(db: PrismaClient, after: string | null)
     ORDER BY a.id
     LIMIT ${batchSize}
   `
-  for (const { id } of ready) await executeSimulation(db, id)
+  for (const { id } of ready) await executeSimulation(db, id, platformVersion)
   return ready.length === batchSize ? ready.at(-1)?.id ?? null : null
 }

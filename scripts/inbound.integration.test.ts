@@ -1,3 +1,4 @@
+import { startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
@@ -11,7 +12,7 @@ import { Prisma, type MemoryPurpose, type MemoryScope, type MemoryVisibility } f
 import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
-import { simulatedModel, simulatedModelPlugin } from '../packages/runtime/model-provider.js'
+import { simulatedModel, simulatedModelPlugin } from '../packages/runtime/simulated-model.js'
 import { generateSimulatedDraft, processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'
@@ -19,6 +20,7 @@ import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packages/persistence/run-context.js'
 
 const config = loadConfig()
+const simulationPlatforms = await startSimulationPlatforms({})
 const db = createDatabase(config.databaseUrl)
 const fixtureKey = `integration-${randomUUID()}`
 const occurredAt = new Date('2026-11-06T00:00:00.000Z')
@@ -126,7 +128,7 @@ after(async () => {
 })
 
 async function consumeRuns(runIds: string[], type = runQueuedEvent, model = simulatedModelPlugin) {
-  const worker = await startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl, model)
+  const worker = await startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl, model, simulationPlatforms.version)
   try {
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
@@ -861,7 +863,7 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   await testGrant(secret.id, personal, 'DECISION_SUPPORT')
   await testGrant(secret.id, personal, 'PUBLIC_REFERENCE', allowed.id)
 
-  const ingest = createSimulatedPlatformIngress(db, ['mock-b'])
+  const ingest = createSimulatedPlatformIngress(db, (await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-b' })).find)
   const platformSource = { accountId: personal.id, platform: personal.platform, instanceKey: personal.instanceKey, verifiedRemoteAccountId: personal.remoteAccountId }
   const payload = {
     delivery: randomUUID(), recipient: personal.remoteAccountId,
@@ -911,7 +913,7 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   assert.ok(!JSON.stringify(snapshots).includes(secretText))
   const runtime = testDatabaseRole('rica_runtime')
   try {
-    await Promise.all(jobs.map(({ eventId }) => processSimulatedDraft(runtime, eventId)))
+    await Promise.all(jobs.map(({ eventId }) => processSimulatedDraft(runtime, eventId, simulationPlatforms.version, simulatedModelPlugin)))
     await assert.rejects(runtime.simulatedDraft.count())
   } finally {
     await runtime.$disconnect()
@@ -967,7 +969,7 @@ test('revocation during private writing prevents the draft from committing', asy
   try {
     await prepareSimulatedRun(runtime, prepare.eventId)
     const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, job.eventId, {
+    await processSimulatedDraft(runtime, job.eventId, simulationPlatforms.version, {
       ...simulatedModelPlugin,
       implementation: {
         ...simulatedModel,
@@ -1004,14 +1006,14 @@ test('a failed drafting job stays pending and concurrent retries commit it once'
     const queued = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, queued.eventId)
     const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
-    await assert.rejects(processSimulatedDraft(runtime, job.eventId, {
+    await assert.rejects(processSimulatedDraft(runtime, job.eventId, simulationPlatforms.version, {
       ...simulatedModelPlugin,
       implementation: { ...simulatedModel, async write() { throw new Error('transient provider failure') } },
     }), /transient provider failure/)
     assert.equal((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt, null)
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 0)
 
-    await Promise.all([processSimulatedDraft(runtime, job.eventId), processSimulatedDraft(runtime, job.eventId)])
+    await Promise.all([processSimulatedDraft(runtime, job.eventId, simulationPlatforms.version, simulatedModelPlugin), processSimulatedDraft(runtime, job.eventId, simulationPlatforms.version, simulatedModelPlugin)])
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 1)
     assert.equal((await db.agentRun.findUniqueOrThrow({ where: { id: result.runId } })).stateVersion, 3)
     assert.ok((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt)
@@ -1026,7 +1028,7 @@ test('registered platform payloads produce separate drafts for three identities 
   await db.platformAccount.update({ where: { id: accounts[2].id }, data: { status: 'ACTIVE' } })
   const runtime = testDatabaseRole('rica_runtime')
   try {
-    const ingest = createSimulatedPlatformIngress(runtime)
+    const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
     const expectedDrafts = new Map<string, string>()
     const styles = [
       { account: accounts[0], style: 'formal', expected: '感谢您的来信，我会认真考虑。' },
@@ -1105,7 +1107,7 @@ test('platform ingress rejects mismatched source and private recipient before cr
   }
   const runtime = testDatabaseRole('rica_runtime')
   try {
-    const ingest = createSimulatedPlatformIngress(runtime, ['mock-a'])
+    const ingest = createSimulatedPlatformIngress(runtime, (await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-a' })).find)
     assert.throws(() => ingest({ ...source, platform: 'mock-b' }, payload), /Unknown enabled platform/)
     assert.throws(() => ingest(source, { ...payload, occurredAt: '2026-02-31T00:00:00.000Z' }),
       /Invalid mock-a event timestamp/)
@@ -1187,7 +1189,7 @@ test('private and public prompt injection cannot switch account or leak evidence
   const queue = new Queue(outboxQueueName, { connection: redis })
   const runs: { id: string; conversationId: string; contactId: string | null; message: string }[] = []
   try {
-    const ingest = createSimulatedPlatformIngress(runtime)
+    const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
     const scope = await privateThread(personal)
     const contact = await db.contact.findUniqueOrThrow({ where: { id: scope.contactId } })
     const privateConversation = await db.conversation.findUniqueOrThrow({ where: { id: scope.conversationId } })
@@ -1341,7 +1343,7 @@ test('identity state replays late events, ignores retries and decays only within
     }))
   }
   const runtime = testDatabaseRole('rica_runtime')
-  const ingest = createSimulatedPlatformIngress(runtime)
+  const ingest = createSimulatedPlatformIngress(runtime, simulationPlatforms.find)
   const start = Date.now() - 72 * 3_600_000
   const inputs = [
     { kind: 'POST', hours: 0 },

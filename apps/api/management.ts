@@ -7,6 +7,7 @@ import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/cont
 import { dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
+import type { SimulationPlatformVersion } from '../../packages/contracts/simulation-platform.js'
 import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
@@ -16,7 +17,9 @@ import { readSimulationReconciliation, resolveSimulationReconciliation } from '.
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 
-type Options = { db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string }
+type Options = {
+  db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; platformVersion: SimulationPlatformVersion
+}
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
 const json = <S extends z.ZodType>(schema: S) => ({ 'application/json': { schema } })
@@ -54,7 +57,7 @@ function runVersion(header: string) {
   return value
 }
 
-export function createManagementApp({ db, authenticate, origin, cookie }: Options) {
+export function createManagementApp({ db, authenticate, origin, cookie, platformVersion }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -532,7 +535,7 @@ export function createManagementApp({ db, authenticate, origin, cookie }: Option
   }), async (c) => {
     const { limit, cursor } = management.parsePage(c.req.valid('query'))
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    return c.json(await listReviewActions(db, scope, undefined, limit, cursor), 200)
+    return c.json(await listReviewActions(db, scope, platformVersion, undefined, limit, cursor), 200)
   })
 
   app.openapi(createRoute({
@@ -542,7 +545,7 @@ export function createManagementApp({ db, authenticate, origin, cookie }: Option
   }), async (c) => {
     const { characterId, actionId } = c.req.valid('param')
     const scope = { characterId, actor: c.get('actor') }
-    const { items: [proposal] } = await listReviewActions(db, scope, actionId)
+    const { items: [proposal] } = await listReviewActions(db, scope, platformVersion, actionId)
     c.header('ETag', `"run-v${proposal.version}"`)
     return c.json(proposal, 200)
   })
@@ -561,7 +564,7 @@ export function createManagementApp({ db, authenticate, origin, cookie }: Option
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'action.review', targetScope: characterId + '/' + actionId,
       input: { input, expected }, requestId, key: headers['idempotency-key'], roles: ['REVIEWER'],
-    }, (tx) => decideReviewAction(tx, scope, actionId, expected, input))
+    }, (tx) => decideReviewAction(tx, scope, actionId, expected, input, platformVersion))
     if (result.status === 'CANCELED' || result.status === 'EXPIRED') {
       return c.json(error(requestId, 'STALE_REVIEW', 'Proposal is no longer eligible for review'), 409)
     }
