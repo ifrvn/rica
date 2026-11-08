@@ -244,6 +244,8 @@ model PlatformAccount {
   identity        Identity       @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   inboundEvents   InboundEvent[]
   newbiReplies    NewbiReply[]
+  newbiCheckpoint NewbiEventCheckpoint?
+  newbiEvents     NewbiEvent[]
   memories        Memory[]
   memorySources   SourceRecord[]
   memoryGrants    MemoryGrant[]
@@ -253,6 +255,34 @@ model PlatformAccount {
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
   @@map("platform_accounts")
+}
+
+model NewbiEventCheckpoint {
+  accountId         String          @id @map("account_id") @db.Uuid
+  cursor            String?         @db.VarChar(2048)
+  nextPollAt        DateTime        @default(now()) @map("next_poll_at") @db.Timestamptz
+  ticket            String?         @db.Uuid
+  leaseUntil        DateTime?       @map("lease_until") @db.Timestamptz
+  historyLostCount  Int             @default(0) @map("history_lost_count")
+  lastHistoryLostAt DateTime?       @map("last_history_lost_at") @db.Timestamptz
+  account           PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("newbi_event_checkpoints")
+}
+
+model NewbiEvent {
+  accountId  String          @map("account_id") @db.Uuid
+  seq        String          @db.VarChar(40)
+  type       String
+  postId     String          @map("post_id") @db.Uuid
+  commentId  String?         @map("comment_id") @db.Uuid
+  occurredAt DateTime        @map("occurred_at") @db.Timestamptz
+  account    PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([accountId, seq])
+  @@index([accountId, occurredAt])
+  @@index([occurredAt])
+  @@map("newbi_events")
 }
 
 model NewbiReply {

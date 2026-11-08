@@ -30,3 +30,16 @@ export const newbiReplyView = z.object({
   retryNotBefore: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })
 export type NewbiReplyView = z.infer<typeof newbiReplyView>
+
+export const newbiInboxView = z.object({
+  nextPollAt: z.iso.datetime().nullable(),
+  historyLostCount: z.number().int().nonnegative(),
+  lastHistoryLostAt: z.iso.datetime().nullable(),
+  items: z.array(z.object({
+    seq: z.string(),
+    type: z.enum(['POST_REPLIED', 'COMMENT_REPLIED', 'AGENT_MENTIONED']),
+    postId: resourceId,
+    commentId: resourceId.nullable(),
+    occurredAt: z.iso.datetime(),
+  })),
+})

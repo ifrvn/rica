@@ -9,14 +9,35 @@ const comment = z.object({ id: uuid, author: z.object({ id: z.union([z.string(),
   content: z.string(), isHidden: z.boolean(), replyToCommentId: uuid.nullable() })
 const commentPage = z.object({ items: z.array(comment), nextCursor: z.string().nullable(), hasMore: z.boolean() })
 
+const eventCursor = z.string().min(1).max(2048)
+const eventPage = z.object({
+  items: z.array(z.object({
+    seq: z.string().regex(/^[1-9][0-9]{0,39}$/u),
+    type: z.enum(['POST_REPLIED', 'COMMENT_REPLIED', 'AGENT_MENTIONED']),
+    postId: uuid,
+    commentId: uuid.nullable(),
+    createdAt: z.iso.datetime({ offset: true }),
+  })).max(50),
+  nextCursor: eventCursor,
+  hasMore: z.boolean(),
+})
+const expiredCursor = z.object({
+  errorCode: z.literal('EVENT_CURSOR_EXPIRED'),
+  data: z.object({ resetCursor: eventCursor, historyLost: z.literal(true) }),
+})
+
+class NewbiEventCursorExpired extends Error {
+  constructor(readonly resetCursor: string) { super('Newbi event history was lost') }
+}
+
 export class NewbiRequestError extends Error {
-  constructor(readonly reason: 'CREDENTIAL_INVALID' | 'ACCESS_DENIED' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'POST_LOCKED',
+  constructor(readonly reason: 'CREDENTIAL_INVALID' | 'ACCESS_DENIED' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'COMMUNITY_CLOSED' | 'POST_LOCKED',
     readonly retrySeconds = 0) {
     super(reason)
   }
 }
 
-export function createNewbiClient(endpoint: string, credential: string) {
+export function createNewbiClient(endpoint: string, credential: string, stop?: AbortSignal) {
   const base = newbiEndpoint.parse(endpoint)
   if (!/^nbi_agent_[A-Za-z0-9_-]{43}$/u.test(credential)) throw new Error('Invalid Newbi credential format')
 
@@ -35,11 +56,13 @@ export function createNewbiClient(endpoint: string, credential: string) {
       connection.hostname = '127.0.0.1'
     }
     const response = await new Promise<unknown>((resolve, reject) => {
+      const timeout = AbortSignal.timeout(5000)
       const req = directRequest(connection, {
-        headers, agent: false, method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(5000),
+        headers, agent: false, method: body ? 'POST' : 'GET', signal: stop ? AbortSignal.any([stop, timeout]) : timeout,
       }, (res) => {
         const status = res.statusCode
-        if (status !== expected && status !== 409) {
+        const cursorExpired = status === 410 && path.startsWith('/events?')
+        if (status !== expected && status !== 409 && !cursorExpired) {
           res.resume()
           const retryAfter = res.headers['retry-after']
           const seconds = retryAfter && /^\d+$/u.test(retryAfter) ? Number(retryAfter) : 30
@@ -62,7 +85,10 @@ export function createNewbiClient(endpoint: string, credential: string) {
         res.once('end', () => {
           try {
             const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-            if (status === 409) {
+            if (cursorExpired) {
+              const failure = expiredCursor.safeParse(parsed)
+              reject(failure.success ? new NewbiEventCursorExpired(failure.data.data.resetCursor) : new Error('Invalid Newbi cursor reset'))
+            } else if (status === 409) {
               const lock = z.object({ errorCode: z.literal('POST_LOCKED') }).safeParse(parsed)
               reject(lock.success ? new NewbiRequestError('POST_LOCKED') : new Error('Newbi request conflict'))
             } else {
@@ -83,18 +109,32 @@ export function createNewbiClient(endpoint: string, credential: string) {
     async verify(writing: boolean) {
       const status = z.object({ state: z.enum(['OPEN', 'READ_ONLY', 'CLOSED']), protocolVersion: z.literal(1) })
         .parse(await request('/status', 200))
-      if (status.state === 'CLOSED' || (writing && status.state !== 'OPEN')) throw new Error('Newbi is unavailable for this operation')
+      if (status.state === 'CLOSED') throw new NewbiRequestError('COMMUNITY_CLOSED')
+      if (writing && status.state !== 'OPEN') throw new Error('Newbi is unavailable for this operation')
       const identity = agent.parse(await request('/me', 200))
       if (identity.accessStatus !== 'ACTIVE' && (writing || identity.accessStatus !== 'LIMITED')) {
         throw new NewbiRequestError('ACCESS_DENIED')
       }
-      const rules = z.object({ idempotencyDays: z.number().int().positive() }).parse(await request('/rules', 200))
+      const rules = z.object({
+        idempotencyDays: z.number().int().positive(),
+        pollIntervalSeconds: z.number().int().positive().max(2_147_483_647).default(30),
+      }).parse(await request('/rules', 200))
       const quota = z.object({ comments: z.array(z.object({ remaining: z.number().int().nonnegative() })).min(1) })
         .parse(await request('/quota', 200))
       if (writing && (rules.idempotencyDays < 1 || quota.comments.some(({ remaining }) => remaining === 0))) {
         throw new Error('Newbi comment budget is unavailable')
       }
-      return identity
+      return { ...identity, pollIntervalSeconds: Math.max(30, rules.pollIntervalSeconds) }
+    },
+    async readEvents(cursor: string | null) {
+      try {
+        const page = eventPage.parse(await request('/events?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), 200))
+        if (page.hasMore && page.nextCursor === cursor) throw new Error('Newbi event cursor did not advance')
+        return { ...page, historyLost: false }
+      } catch (error) {
+        if (!(error instanceof NewbiEventCursorExpired) || error.resetCursor === cursor) throw error
+        return { items: [], nextCursor: error.resetCursor, hasMore: false, historyLost: true }
+      }
     },
     async readThread(postId: string) {
       const id = uuid.parse(postId)

@@ -7,8 +7,8 @@ import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/cont
 import { dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
-import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiReply } from '../../packages/persistence/newbi-management.js'
+import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -800,6 +800,15 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
       key: c.req.valid('header')['idempotency-key'],
     }, (tx) => closeNewbiReply(tx, scope, replyId, input))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${newbi}/accounts/{accountId}/events`, security,
+    request: { params: z.object({ characterId: schema.resourceId, accountId: schema.resourceId }) },
+    responses: { ...errors, 200: success(newbiInboxView) },
+  }), async (c) => {
+    const { characterId, accountId } = c.req.valid('param')
+    return c.json(await getNewbiInbox(db, { characterId, actor: c.get('actor') }, accountId), 200)
   })
 
   app.doc31('/openapi.json', {

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { coreProfile } from '../contracts/management.js'
-import { newbiReplyView, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
+import { newbiInboxView, newbiReplyView, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
 
@@ -90,4 +90,23 @@ export async function closeNewbiReply(tx: Prisma.TransactionClient, scope: Scope
   `
   if (!result.closed) conflict()
   return { id, status: 'CLOSED' }
+}
+
+export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN'])
+    const account = await tx.platformAccount.findFirst({ where: { id, characterId: scope.characterId, platform: 'newbi' },
+      select: { newbiCheckpoint: { select: { nextPollAt: true, historyLostCount: true, lastHistoryLostAt: true } },
+        newbiEvents: { orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 50,
+          select: { seq: true, type: true, postId: true, commentId: true, occurredAt: true } } },
+    })
+    if (!account) missing()
+    const checkpoint = account.newbiCheckpoint
+    return newbiInboxView.parse({
+      nextPollAt: checkpoint?.nextPollAt.toISOString() ?? null,
+      historyLostCount: checkpoint?.historyLostCount ?? 0,
+      lastHistoryLostAt: checkpoint?.lastHistoryLostAt?.toISOString() ?? null,
+      items: account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })),
+    })
+  }, { isolationLevel: 'RepeatableRead' })
 }

@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createNewbiClient } from '../packages/runtime/newbi-client.js'
+import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { simulatedModelPlugin } from '../packages/runtime/model-provider.js'
@@ -2367,6 +2368,160 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(writes, 7)
   } finally {
     await executor.$disconnect()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test('Newbi event polling checkpoints empty and replayed pages, backs off, and fences revoked work', { timeout: 30_000 }, async () => {
+  const agentId = randomUUID()
+  const postId = randomUUID()
+  const commentId = randomUUID()
+  const secret = 'nbi_agent_' + 'z'.repeat(43)
+  const cursors: (string | null)[] = []
+  const opaque = 'cursor/? +&=汉'
+  const seq = '9007199254740993'
+  const event = { seq, type: 'COMMENT_REPLIED', postId, commentId, createdAt: new Date().toISOString() }
+  let mode: 'PAGES' | 'LIMIT' | 'EXPIRED' | 'RESUME' | 'PAUSE' = 'PAGES'
+  let releasePage!: () => void
+  const holdPage = new Promise<void>((resolve) => { releasePage = resolve })
+  let confirmRequest!: () => void
+  const requestEntered = new Promise<void>((resolve) => { confirmRequest = resolve })
+  let calls = 0
+  let writes = 0
+  const server = createServer(async (req, res) => {
+    calls++
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    const json = (data: unknown, status = 200) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
+    const reply = (data: unknown) => json({ code: 0, data })
+    if (req.method !== 'GET') { writes++; return res.writeHead(405).end() }
+    if (url.pathname.endsWith('/status')) return reply({ state: 'READ_ONLY', protocolVersion: 1 })
+    if (req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
+    if (url.pathname.endsWith('/me')) return reply({ id: agentId, username: 'fixture-events', accessStatus: 'ACTIVE' })
+    if (url.pathname.endsWith('/rules')) return reply({ idempotencyDays: 7, pollIntervalSeconds: 30 })
+    if (url.pathname.endsWith('/quota')) return reply({ comments: [{ remaining: 0 }] })
+    if (!url.pathname.endsWith('/events')) return res.writeHead(404).end()
+    const cursor = url.searchParams.get('cursor')
+    cursors.push(cursor)
+    if (mode === 'LIMIT') return res.writeHead(429, { 'Retry-After': '30' }).end()
+    if (mode === 'EXPIRED') return json({ errorCode: 'EVENT_CURSOR_EXPIRED', data: { historyLost: true, resetCursor: 'reset' } }, 410)
+    if (mode === 'RESUME') return reply({ items: [], nextCursor: 'after-reset', hasMore: false })
+    if (mode === 'PAUSE') {
+      confirmRequest()
+      await holdPage
+      return reply({ items: [{ ...event, seq: '9007199254740999' }], nextCursor: 'discarded', hasMore: false })
+    }
+    if (cursor === null) return reply({ items: [], nextCursor: opaque, hasMore: true })
+    if (cursor === opaque) return reply({ items: [event], nextCursor: 'next-page', hasMore: true })
+    if (cursor === 'next-page') return reply({ items: [event, { ...event, seq: '9007199254740995' }], nextCursor: 'tail', hasMore: false })
+    return res.writeHead(400).end()
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const { port } = server.address() as { port: number }
+  const endpoint = 'http://localhost:' + port + '/agent-api/v1'
+  const url = new URL(config.databaseUrl)
+  url.searchParams.set('options', '-c role=rica_newbi_poller')
+  const db = createDatabase(url.toString())
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  let worker: ReturnType<typeof spawn> | undefined
+  try {
+    const identityId = await reflectionIdentity()
+    const character = characterPath(a)
+    const bind = await request('POST', character + '/newbi/accounts', { key: 'newbi-events-bind', data: { identityId, agentId, endpoint } })
+    assert.equal(bind.status, 201, JSON.stringify(bind.body))
+    const accountId: string = bind.body.id
+    const client = createNewbiClient(endpoint, secret)
+    const poll = () => pollNewbiEvents(db, client, accountId)
+    const account = () => owner.newbiEventCheckpoint.findUniqueOrThrow({ where: { accountId } })
+    const dueNow = () => owner.newbiEventCheckpoint.update({ where: { accountId }, data: { nextPollAt: new Date(0) } })
+    const control = (operation: 'PAUSE' | 'RESUME') => request('POST', character + '/controls', { key: randomUUID(),
+      data: { scope: 'ACCOUNT', scopeId: accountId, operation, reason: 'Event polling fixture' } })
+    const inbox = '/newbi/accounts/' + accountId + '/events'
+
+    assert.deepEqual(await poll(), { status: 'STOPPED' })
+    assert.equal(calls, 0)
+    assert.equal((await control('RESUME')).status, 200)
+    const badClient = createNewbiClient(endpoint, 'nbi_agent_' + 'x'.repeat(43))
+    await assert.rejects(pollNewbiEvents(db, badClient, accountId), /CREDENTIAL_INVALID/)
+    assert.equal((await account()).cursor, null)
+    assert.deepEqual(cursors, [])
+    assert.equal((await poll()).status, 'READ')
+    assert.equal((await account()).cursor, opaque)
+    assert.deepEqual(cursors, [null])
+
+    worker = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'events', accountId, '--for-seconds', '5'], {
+      env: { ...process.env, RICA_NEWBI_POLL_DATABASE_URL: url.toString(), RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret },
+      stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    })
+    let output = ''
+    worker.stdout?.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
+    worker.stderr?.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
+    const [exit] = await once(worker, 'close')
+    assert.equal(exit, 0, output)
+    assert.deepEqual(cursors, [null, opaque, 'next-page'])
+    const caughtUp = await account()
+    assert.equal(caughtUp.cursor, 'tail')
+    assert.ok(caughtUp.nextPollAt.getTime() > Date.now() + 20_000)
+    const firstInbox = await request('GET', character + inbox)
+    assert.equal(firstInbox.status, 200, JSON.stringify(firstInbox.body))
+    assert.deepEqual(firstInbox.body.items.map((item: { seq: string }) => item.seq).sort(), [seq, '9007199254740995'])
+    assert.equal(firstInbox.body.cursor, undefined)
+    await assert.rejects(management.$queryRaw`SELECT cursor FROM public.newbi_event_checkpoints`, /permission denied/i)
+    assert.equal((await request('GET', character + inbox, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', characterPath(b) + inbox, { actor: 'admin-b' })).status, 404)
+    await assert.rejects(db.newbiEvent.count(), /permission denied/i)
+    await assert.rejects(db.$queryRaw`SELECT public.rica_claim_newbi_reply(null,false,null,null)`, /permission denied/i)
+
+    await dueNow()
+    mode = 'LIMIT'
+    const atLimit = Date.now()
+    const limited = await poll()
+    assert.equal(limited.status, 'WAITING')
+    assert.ok('reason' in limited && limited.reason === 'RATE_LIMITED')
+    const checkpoint = await account()
+    assert.equal(checkpoint.cursor, 'tail')
+    assert.ok(checkpoint.nextPollAt.getTime() >= atLimit + 30_000)
+    const requestsAtLimit = calls
+    assert.deepEqual(await poll(), { status: 'WAITING', nextAt: checkpoint.nextPollAt.toISOString() })
+    assert.equal(calls, requestsAtLimit)
+
+    await dueNow()
+    mode = 'EXPIRED'
+    const reset = await poll()
+    assert.ok(reset.status === 'READ' && reset.historyLost && reset.saved === 0)
+    assert.equal((await account()).cursor, 'reset')
+    const gap = await request('GET', character + inbox)
+    assert.equal(gap.body.historyLostCount, 1)
+    assert.ok(gap.body.lastHistoryLostAt)
+    assert.equal(gap.body.items.length, 2)
+
+    await dueNow()
+    mode = 'RESUME'
+    assert.equal((await poll()).status, 'READ')
+    assert.equal(cursors.at(-1), 'reset')
+    assert.equal((await account()).cursor, 'after-reset')
+
+    await dueNow()
+    mode = 'PAUSE'
+    const pending = poll()
+    await Promise.race([requestEntered, pending.then(() => { throw new Error('No event read reached the fixture') })])
+    assert.equal((await poll()).status, 'WAITING')
+    assert.equal((await control('PAUSE')).status, 200)
+    releasePage()
+    assert.deepEqual(await pending, { status: 'STOPPED' })
+    assert.equal((await account()).cursor, 'after-reset')
+    assert.equal(await owner.newbiEvent.count({ where: { accountId } }), 2)
+    assert.equal(writes, 0)
+
+    await owner.newbiEvent.updateMany({ where: { accountId }, data: { occurredAt: new Date(0) } })
+    await sweepSimulationRetention(runtime)
+    assert.equal(await owner.newbiEvent.count({ where: { accountId } }), 0)
+    assert.equal((await account()).historyLostCount, 1)
+  } finally {
+    releasePage()
+    if (worker && worker.exitCode === null) worker.kill()
+    await Promise.all([db.$disconnect(), runtime.$disconnect()])
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
