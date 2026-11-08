@@ -11,7 +11,9 @@ import { simulatedModelPlugin } from '../packages/runtime/model-provider.js'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { dailyScheduleSlot, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
-import { introspectionAuthenticator } from '../apps/api/admin-auth.js'
+import { actorId, loadManagementConfig, localIssuer } from '../apps/api/admin-auth.js'
+import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
+import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
@@ -32,20 +34,17 @@ const adminUrl = new URL(config.databaseUrl)
 adminUrl.searchParams.set('options', '-c role=rica_admin_api')
 const management = createDatabase(adminUrl.toString())
 const issuer = 'https://identity.example.test'
-const audience = 'rica-management'
+const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
 const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
   db: management,
-  creatorSubjects: ['admin-a', 'admin-b'],
-  authenticate: introspectionAuthenticator({
-    endpoint: issuer + '/introspect', issuer, audience, clientId: 'rica', clientSecret: 'test-secret',
-  }, async (_url, init) => {
-    const token = new URLSearchParams(String(init?.body)).get('token') ?? ''
-    return Response.json({
-      active: subjects.has(token), iss: issuer, aud: audience, sub: token,
-      exp: Math.floor(Date.now() / 1000) + 60, roles: ['ADMIN'],
-    })
-  }),
+  origin: fixtureOrigin, cookie: 'fixture-session',
+  authenticate: async (request) => {
+    const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
+    return subject && subjects.has(subject) ? {
+      issuer, subject, id: actorId(issuer, subject), canCreate: subject.startsWith('admin-'),
+    } : null
+  },
 }))
 
 const prefix = 'management-' + randomUUID()
@@ -60,7 +59,8 @@ type RequestOptions = { actor?: string | null; key?: string; ifMatch?: string; d
 async function request(method: string, path: string, options: RequestOptions = {}) {
   const { actor = 'admin-a', data, key, ifMatch } = options
   const headers = new Headers()
-  if (actor) headers.set('Authorization', 'Bearer ' + actor)
+  headers.set('Origin', fixtureOrigin)
+  if (actor) headers.set('Cookie', 'fixture-session=' + actor)
   if (data !== undefined) headers.set('Content-Type', 'application/json')
   if (key) headers.set('Idempotency-Key', key)
   if (ifMatch) headers.set('If-Match', ifMatch)
@@ -156,13 +156,93 @@ after(async () => {
   }
 })
 
+test('local authentication migrates the principal, enforces origin and revokes sessions', { timeout: 30_000 }, async () => {
+  const authConfig = loadManagementConfig({
+    RICA_MANAGEMENT_DATABASE_URL: adminUrl.toString(), RICA_ADMIN_ORIGIN: fixtureOrigin,
+  })!
+  const redis = new Redis(config.redisUrl)
+  const auth = createAdminAuth(management, redis, authConfig)
+  const local = createApp({ postgres: async () => true, redis: async () => true },
+    createManagementApp({ db: management, authenticate: auth.authenticate, origin: fixtureOrigin, cookie: authConfig.cookie }),
+    auth.app,
+  )
+  const suffix = randomUUID()
+  const username = 'local-' + suffix
+  const formerIssuer = 'https://legacy.example.test'
+  const formerSubject = 'old-' + suffix
+  const oldPassword = 'old fixture password'
+  const newPassword = 'new fixture password'
+  async function accountCommand(args: string[], password: string) {
+    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/admin-user.ts', ...args], {
+      env: { ...process.env, MIGRATION_DATABASE_URL: config.databaseUrl }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+    })
+    let output = ''
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
+    const closed = once(child, 'close')
+    child.stdin.end(password + '\n')
+    assert.equal((await closed)[0], 0, output)
+  }
+  const submit = (path: string, data: object, cookie = '', origin = fixtureOrigin) => local.request('/v1/auth/' + path, {
+    method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+  })
+  const session = (cookie: string) => local.request('/v1/auth/session', { headers: { Cookie: cookie } })
+  try {
+    await owner.managementMembership.create({ data: {
+      characterId: b, issuer: formerIssuer, subject: formerSubject, role: 'AUDITOR',
+    } })
+    await accountCommand(['add', username, '--creator', '--from', formerIssuer, formerSubject], oldPassword)
+    const user = await owner.adminUser.findUniqueOrThrow({ where: { username } })
+    assert.equal(user.actorId, actorId(formerIssuer, formerSubject))
+    assert.equal(user.canCreate, true)
+    assert.equal(await owner.managementMembership.count({ where: { issuer: formerIssuer, subject: formerSubject } }), 0)
+    assert.equal(await owner.managementMembership.count({ where: { issuer: localIssuer, subject: username, characterId: b } }), 1)
+    assert.equal((await submit('login', { username, password: oldPassword }, '', 'https://foreign.example.test')).status, 403)
+    assert.equal((await submit('login', { username, password: newPassword })).status, 401)
+    const login = await submit('login', { username, password: oldPassword })
+    assert.equal(login.status, 200)
+    const cookieHeader = login.headers.get('set-cookie')!
+    const cookie = cookieHeader.split(';')[0]
+    assert.match(cookieHeader, /HttpOnly/i)
+    assert.match(cookieHeader, /SameSite=Strict/i)
+    assert.equal((await session(cookie)).status, 200)
+    assert.equal((await local.request('/v1' + characterPath(b), { headers: { Cookie: cookie } })).status, 200)
+    assert.equal((await local.request('/v1' + characterPath(a), { headers: { Cookie: cookie } })).status, 404)
+    assert.equal((await local.request('/v1/characters', { method: 'POST', headers: { Cookie: cookie } })).status, 403)
+
+    assert.equal((await submit('passkeys/register/options', { password: oldPassword })).status, 401)
+    assert.equal((await submit('passkeys/register/options', { password: newPassword }, cookie)).status, 422)
+    const options = await submit('passkeys/register/options', { password: oldPassword }, cookie)
+    assert.equal(options.status, 200)
+    const { challengeId } = await options.json()
+    const second = await submit('login', { username, password: oldPassword })
+    const secondCookie = second.headers.get('set-cookie')!.split(';')[0]
+    const response = { id: 'fake', rawId: 'fake', type: 'public-key', clientExtensionResults: {},
+      response: { clientDataJSON: 'e30', attestationObject: 'AA' } }
+    assert.equal((await submit('passkeys/register/verify', { challengeId, response }, secondCookie)).status, 422)
+    assert.equal((await submit('passkeys/register/verify', { challengeId, response }, cookie)).status, 422)
+    assert.equal(await owner.adminPasskey.count({ where: { userId: user.id } }), 0)
+
+    assert.equal((await submit('logout', {}, cookie)).status, 200)
+    assert.equal((await session(cookie)).status, 401)
+    await accountCommand(['reset', username], newPassword)
+    assert.equal((await session(secondCookie)).status, 401)
+    assert.equal((await submit('login', { username, password: oldPassword })).status, 401)
+    const renewed = await submit('login', { username, password: newPassword })
+    assert.equal(renewed.status, 200)
+    await submit('logout', {}, renewed.headers.get('set-cookie')!.split(';')[0])
+  } finally {
+    await owner.managementMembership.deleteMany({ where: { subject: { in: [username, formerSubject] } } })
+    await owner.adminUser.deleteMany({ where: { username } })
+    await redis.quit()
+  }
+})
+
 test('authentication and membership distinguish unauthenticated, forbidden and foreign resources', async () => {
   const absent = await request('GET', characterPath(a), { actor: null })
   assert.equal(absent.status, 401)
-  assert.equal(absent.headers.get('www-authenticate'), 'Bearer')
   assert.equal((await app.request('/v1' + characterPath(a) + '/identities', {
-    method: 'POST', headers: { Cookie: 'session=admin-a' },
-  })).status, 401)
+    method: 'POST', headers: { Cookie: 'fixture-session=admin-a', Origin: 'http://other.example' },
+  })).status, 403)
   assert.equal(absent.body.error.requestId, absent.headers.get('x-request-id'))
   assert.equal((await request('GET', characterPath(b))).status, 404)
   assert.equal((await request('GET', characterPath(a), { actor: 'reviewer' })).status, 200)

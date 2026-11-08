@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
@@ -7,8 +8,11 @@ type Character = { id: string; slug: string; profile: { name?: string } | null }
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Decision = 'APPROVE' | 'REJECT'
 
-const tokenInput = ref('')
-const token = ref('')
+const usernameInput = ref('')
+const password = ref('')
+const username = ref('')
+const passkeyPassword = ref('')
+const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
 const characterId = ref('')
 const actions = ref<ActionView[]>([])
@@ -38,13 +42,21 @@ class RequestError extends Error {
   constructor(readonly status: number) { super() }
 }
 
-async function request<T>(url: string, accessToken = token.value, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  headers.set('Authorization', 'Bearer ' + accessToken)
-  const response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(10_000) })
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...init, credentials: 'same-origin', signal: AbortSignal.timeout(10_000) })
   if (!response.ok) throw new RequestError(response.status)
   return response.json()
 }
+
+function authPost<T>(path: string, data: object = {}) {
+  return request<T>('/v1/auth/' + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+  })
+}
+
+type Session = { username: string }
+type AuthenticationOptions = { challengeId: string; options: Parameters<typeof startAuthentication>[0]['optionsJSON'] }
+type RegistrationOptions = { challengeId: string; options: Parameters<typeof startRegistration>[0]['optionsJSON'] }
 
 async function run(task: () => Promise<void>) {
   if (busy.value) return
@@ -55,10 +67,14 @@ async function run(task: () => Promise<void>) {
     await task()
   } catch (cause) {
     const status = cause instanceof RequestError ? cause.status : 0
+    const wasSignedIn = !!username.value
+    if (status === 401 && wasSignedIn) resetSession()
     error.value = ({
-      401: '令牌无效或已过期。', 403: '你没有此角色的审批权限。', 404: '找不到该提案或审批服务。',
-      409: '提案已失效，请重新打开后核对。', 412: '提案已更新，请重新打开后核对。',
-    } as Record<number, string>)[status] ?? '请求失败，请重试。'
+      401: wasSignedIn ? '登录已过期，请重新登录。' : '登录失败，请核对账号信息或 Passkey。',
+      403: '当前操作未获授权。', 404: '找不到该资源或管理服务。',
+      409: '当前操作无法完成，请刷新后重试。', 412: '提案已更新，请重新打开后核对。',
+      422: '提交的信息无法验证。', 429: '尝试次数过多，请稍后再试。', 503: '管理服务暂时不可用。',
+    } as Record<number, string>)[status] ?? '操作未完成，请重试。'
     if ([401, 403, 404, 409, 412].includes(status) && selected.value) {
       selected.value = { ...selected.value, content: null }
     }
@@ -68,14 +84,43 @@ async function run(task: () => Promise<void>) {
   }
 }
 
+async function openSession(session: Session) {
+  username.value = session.username
+  password.value = ''
+  characters.value = (await request<Page<Character>>('/v1/characters?limit=100')).items
+}
+
+onMounted(() => run(async () => {
+  const session = await request<Session>('/v1/auth/session').catch((cause: unknown) => {
+    if (cause instanceof RequestError && (cause.status === 401 || cause.status === 404)) return null
+    throw cause
+  })
+  if (session) await openSession(session)
+}))
+
 async function connect() {
-  const candidate = tokenInput.value.trim()
-  if (!candidate) return
+  await run(async () => openSession(await authPost<Session>('login', {
+    username: usernameInput.value, password: password.value,
+  })))
+}
+
+async function passkeyLogin() {
   await run(async () => {
-    const result = await request<Page<Character>>('/v1/characters?limit=100', candidate)
-    token.value = candidate
-    tokenInput.value = ''
-    characters.value = result.items
+    const { challengeId, options } = await authPost<AuthenticationOptions>('passkeys/login/options')
+    const response = await startAuthentication({ optionsJSON: options })
+    await openSession(await authPost<Session>('passkeys/login/verify', { challengeId, response }))
+  })
+}
+
+async function registerPasskey() {
+  await run(async () => {
+    const { challengeId, options } = await authPost<RegistrationOptions>('passkeys/register/options', {
+      password: passkeyPassword.value,
+    })
+    passkeyPassword.value = ''
+    const response = await startRegistration({ optionsJSON: options })
+    await authPost('passkeys/register/verify', { challengeId, response })
+    notice.value = '已添加 Passkey。'
   })
 }
 
@@ -92,10 +137,18 @@ function resetNewbi() {
   newbiPending = undefined
 }
 
-function disconnect() {
+async function disconnect() {
+  await run(async () => {
+    await authPost('logout')
+    resetSession()
+  })
+}
+
+function resetSession() {
   resetNewbi()
-  token.value = ''
-  tokenInput.value = ''
+  username.value = ''
+  password.value = ''
+  passkeyPassword.value = ''
   characters.value = []
   characterId.value = ''
   actions.value = []
@@ -144,7 +197,7 @@ async function decide(decision: Decision) {
   const { key } = pending
   await run(async () => {
     const outcome = await request<{ status: 'READY' | 'REJECTED'; version: number }>(
-      path.value + '/' + proposal.id + '/decisions', token.value, {
+      path.value + '/' + proposal.id + '/decisions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'If-Match': '"run-v' + proposal.version + '"',
           'Idempotency-Key': key },
@@ -179,7 +232,7 @@ async function decideNewbi(decision: Decision) {
   const { key } = newbiPending
   await run(async () => {
     const result = await request<{ status: 'READY' | 'REJECTED' }>(
-      newbiPath.value + '/' + encodeURIComponent(reply.id) + '/decision', token.value, {
+      newbiPath.value + '/' + encodeURIComponent(reply.id) + '/decision', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
         body: JSON.stringify(data),
       },
@@ -196,16 +249,30 @@ async function decideNewbi(decision: Decision) {
   <section class="review-desk" aria-labelledby="review-heading">
     <div class="review-header">
       <h2 id="review-heading">人工审批</h2>
-      <button v-if="token" type="button" :disabled="busy" @click="disconnect">退出审批</button>
+      <button v-if="username" type="button" :disabled="busy" @click="disconnect">退出登录</button>
     </div>
 
-    <form v-if="!token" class="connect" @submit.prevent="connect">
-      <label for="review-token">身份提供方访问令牌</label>
-      <input id="review-token" v-model="tokenInput" type="password" autocomplete="off" required :disabled="busy" />
-      <button type="submit" :disabled="busy">打开待办</button>
+    <form v-if="!username" class="connect" @submit.prevent="connect">
+      <label for="review-username">用户名</label>
+      <input id="review-username" v-model="usernameInput" autocomplete="username" required :disabled="busy" />
+      <label for="review-password">密码</label>
+      <input id="review-password" v-model="password" type="password" autocomplete="current-password" required :disabled="busy" />
+      <div class="review-buttons">
+        <button type="submit" :disabled="busy">登录</button>
+        <button v-if="passkeysAvailable" type="button" :disabled="busy" @click="passkeyLogin">使用 Passkey</button>
+      </div>
     </form>
 
     <template v-else>
+      <details v-if="passkeysAvailable">
+        <summary>添加 Passkey</summary>
+        <form class="connect" @submit.prevent="registerPasskey">
+          <label for="review-passkey-password">确认密码</label>
+          <input id="review-passkey-password" v-model="passkeyPassword" type="password"
+            autocomplete="current-password" required :disabled="busy" />
+          <button type="submit" :disabled="busy">添加 Passkey</button>
+        </form>
+      </details>
       <div class="role-picker">
         <label for="review-character">角色</label>
         <select id="review-character" v-model="characterId" :disabled="busy" @change="changeCharacter">
@@ -300,6 +367,7 @@ async function decideNewbi(decision: Decision) {
 .review-header, .decision-buttons { display: flex; gap: .6rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .review-header :is(h2, h3) { margin: 0; }
 .connect, .proposal form { display: grid; gap: .5rem; margin-block-start: .9rem; }
+.review-buttons { display: flex; flex-wrap: wrap; gap: .5rem; }
 .role-picker { display: flex; gap: .6rem; align-items: center; margin-block: .9rem; }
 .review-layout { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
 .queue, .proposal { min-width: 0; padding: .9rem; border: 1px solid #d9e0e8; border-radius: .5rem; }

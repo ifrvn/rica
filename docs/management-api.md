@@ -1,22 +1,34 @@
 # 管理 API 启用与使用
 
-M1.3 提供管理 API 和受保护的 OpenAPI 契约。健康检查沿用现有路径。未配置管理连接和身份提供方时，服务不挂载管理路由。
+管理 API 提供角色配置、人工审批和受保护的 OpenAPI。启用管理数据库连接后，可使用本地用户名密码或 Passkey 登录。
 
 ## 启用
 
-1. 使用迁移账号执行 `pnpm run db:migrate`。
-2. 由数据库管理员创建独立登录并授予 `rica_admin_api`。该登录只用于 `RICA_MANAGEMENT_DATABASE_URL`。身份提供方的密钥和数据库凭据由部署环境注入。
-3. 配置示例环境文件中列出的 `RICA_IDP_*` 变量。身份提供方需为 Rica 签发专用受众的访问令牌，并提供 HTTPS 令牌自省端点。Rica 使用 `client_secret_basic` 访问自省端点，要求有效响应包含 `active`、`iss`、`aud`、`sub`、`exp`，并检查存在的 `nbf`。[OAuth 2.0 令牌自省规范](https://www.rfc-editor.org/rfc/rfc7662)
-4. 将获准创建角色的身份主体 `sub` 放入逗号分隔的 `RICA_ADMIN_CREATOR_SUBJECTS`。创建者自动获得所创建角色的 ADMIN 权限。已有角色可由数据库管理员按同一发行者及主体补充授权。
-5. 在身份提供方完成登录后，以 `Authorization: Bearer <access-token>` 调用管理 API。API 只从该请求头获取令牌，部署时经 HTTPS 代理访问。OpenAPI 文档位于 `GET /v1/openapi.json`。
-
-数据库登录使用普通权限。示例中的登录名称按部署替换。
+1. 使用迁移账号执行 `pnpm run db:migrate`。为管理 API 创建专用 PostgreSQL 登录并授予 `rica_admin_api`，将连接串设置为 `RICA_MANAGEMENT_DATABASE_URL`。
+2. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址完全相同。默认值为 `http://localhost:5173`。部署使用固定的 HTTPS 地址，Passkey 的 RP ID 使用该地址的主机名。
+3. 使用迁移数据库登录初始化本地账号。`--creator` 授予创建新角色的权限。新角色创建者自动成为该角色的 ADMIN。启动 API 后访问管理台登录。
 
 ```sql
 GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 ```
 
-给已有角色补充第一名管理员时，在同一事务中先锁定对应的 `characters` 行，再向 `management_memberships` 插入 `character_id`、`issuer`、`subject` 和 `role = 'ADMIN'`。后续可通过管理 API 授予或撤销权限。访问令牌中的角色声明不参与 Rica 授权。
+## 本地账号与会话
+
+以下 PowerShell 7 示例以交互方式读取密码，再通过标准输入传递给命令。用户名长度 3–64，允许小写字母、数字、点、下划线及连字符。密码长度 12–128，数据库只保存带盐的 scrypt 哈希。
+
+```powershell
+Read-Host -MaskInput 'Rica password' | pnpm run admin:user add admin --creator
+Read-Host -MaskInput 'Reviewer password' | pnpm run admin:user add reviewer
+Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
+```
+
+新增账号后，用成员接口将角色权限授予其本地用户名。重设密码会使该账号的所有会话失效并移除已登记的 Passkey。
+
+已有角色成员可用 `admin:user add <username> [--creator] --from <旧发行者> <旧主体>` 逐个迁移到本地账号，命令仍从标准输入读取新密码。它在同一事务迁移成员关系并保留原操作人标识。旧身份未映射前无法登录。应先迁移每个角色的管理员，再启用新的管理服务。手工补充既有角色的首名管理员时，在同一事务先锁定对应的 `characters` 行，再向 `management_memberships` 写入已存在的本地用户名、`issuer = 'rica:local'` 和 `role = 'ADMIN'`。
+
+- 网页登录后持有有效期 8 小时的 HttpOnly、SameSite=Strict 会话 Cookie。退出会撤销当前会话，HTTPS 下 Cookie 额外使用 Secure 属性。
+- 已登录用户可输入当前密码后登记 Passkey。登记和登录都验证浏览器来源、RP ID、一次性挑战和验证器的用户验证。已登记用户可直接选用 Passkey 登录。
+- 脚本可向 `POST /v1/auth/login` 提交 `username`、`password`，保存响应 Cookie，并在后续请求复用。所有写请求须附带与 `RICA_ADMIN_ORIGIN` 一致的 `Origin`。会话查询和退出使用 `GET /v1/auth/session` 与 `POST /v1/auth/logout`。管理接口的 OpenAPI 文档位于 `GET /v1/openapi.json`。
 
 ## 已开放的入口
 
@@ -41,7 +53,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `POST /c/identities/{identityId}/beliefs` | ADMIN 使用幂等键提交身份观点或偏好及其证据。 |
 | `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 或 AUDITOR 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
 | `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
-| `POST /c/memberships` | ADMIN 授予或撤销当前发行者下的角色权限。必须保留至少一名 ADMIN。 |
+| `POST /c/memberships` | ADMIN 授予或撤销本地用户名的角色权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
@@ -52,7 +64,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
 
-声明幂等键的 POST 请求带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无令牌或令牌无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
+声明幂等键的 POST 请求带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无会话或会话无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
 
 分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求把响应的 `nextCursor` 作为 `cursor` 传回。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
 
@@ -94,7 +106,7 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 ## 模拟审批
 
-使用 Vue 管理台的人工审批区，填入身份提供方签发的访问令牌，再选择角色。令牌仅保留在当前页面内存。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
+用本地账号登录 Vue 管理台，在人工审批区选择角色。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
 
 预览和决定都会复核绑定、正文摘要和授权证据。撤权或配置版本更新时，待审和已批准提案会随授权纪元变化失效。适配器或策略版本不匹配、证据过期以及正文变化时，预览会隐藏正文。提交决定时会记录失效或过期状态和审计。后台过期扫描随调度接入。迁移前生成的草稿没有审批摘要，保留为 DRAFTED。真实平台 OAuth、执行许可和回执按后续工作包交付。
 

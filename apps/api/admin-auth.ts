@@ -1,90 +1,91 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
+import type { Redis } from 'ioredis'
+import type { PrismaClient } from '../../packages/persistence/generated/client.js'
 
-const nonControlText = z.string().min(1).max(512).regex(/^[^\p{Cc}]+$/u)
-const httpsUrl = z.url().max(256).refine((value) => {
-  if (!URL.canParse(value)) return false
-  const url = new URL(value)
-  return url.protocol === 'https:' && !url.username && !url.password && !url.hash
-})
+export const localIssuer = 'rica:local'
+export const usernameInput = z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9._-]{2,63}$/u)
+export const passwordInput = z.string().min(12).max(128)
+export const sessionSeconds = 8 * 60 * 60
+export const sessionToken = /^[A-Za-z0-9_-]{43}$/u
+const dummyHash = '0'.repeat(32) + ':' + '0'.repeat(64)
 
-const settings = z.strictObject({
-  databaseUrl: z.url().refine((url) => URL.canParse(url) && ['postgres:', 'postgresql:'].includes(new URL(url).protocol)),
-  endpoint: httpsUrl,
-  issuer: httpsUrl,
-  audience: nonControlText,
-  clientId: nonControlText,
-  clientSecret: z.string().min(1).max(4096),
-  creatorSubjects: z.array(nonControlText).max(100),
-})
-
-type IntrospectionSettings = Pick<z.infer<typeof settings>, 'endpoint' | 'issuer' | 'audience' | 'clientId' | 'clientSecret'>
-export type Principal = Readonly<{ issuer: string; subject: string; id: string }>
-export type Authenticate = (authorization: string | undefined) => Promise<Principal | null>
-
-export class AuthenticationUnavailable extends Error {}
+export type Principal = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
+export type Authenticate = (request: Request) => Promise<Principal | null>
 
 export function loadManagementConfig(env = process.env) {
-  const variables = {
-    databaseUrl: env.RICA_MANAGEMENT_DATABASE_URL,
-    endpoint: env.RICA_IDP_INTROSPECTION_URL,
-    issuer: env.RICA_IDP_ISSUER,
-    audience: env.RICA_IDP_AUDIENCE,
-    clientId: env.RICA_IDP_CLIENT_ID,
-    clientSecret: env.RICA_IDP_CLIENT_SECRET,
+  if (!env.RICA_MANAGEMENT_DATABASE_URL && !env.RICA_ADMIN_ORIGIN) return null
+  const db = env.RICA_MANAGEMENT_DATABASE_URL
+  const value = env.RICA_ADMIN_ORIGIN ?? 'http://localhost:5173'
+  if (!db || !URL.canParse(db) || !['postgres:', 'postgresql:'].includes(new URL(db).protocol) || !URL.canParse(value)) {
+    throw new Error('Invalid Rica management configuration')
   }
-  if (Object.values(variables).every((value) => value === undefined)
-    && env.RICA_ADMIN_CREATOR_SUBJECTS === undefined) return null
-
-  const creatorSubjects = env.RICA_ADMIN_CREATOR_SUBJECTS === undefined ? []
-    : env.RICA_ADMIN_CREATOR_SUBJECTS.split(',').map((value) => value.trim())
-  const parsed = settings.safeParse({ ...variables, creatorSubjects })
-  if (!parsed.success) throw new Error('Invalid or incomplete Rica management configuration')
-  return parsed.data
+  const url = new URL(value)
+  if (value !== url.origin || (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === 'localhost'))) {
+    throw new Error('Rica admin origin must be HTTPS or HTTP on localhost')
+  }
+  const secure = url.protocol === 'https:'
+  return { databaseUrl: db, origin: url.origin, rpID: url.hostname, secure, cookie: secure ? '__Host-rica_session' : 'rica_session' }
 }
 
-const tokenClaims = z.object({
-  active: z.literal(true),
-  iss: nonControlText.max(256),
-  sub: nonControlText,
-  aud: z.union([nonControlText, z.array(nonControlText)]),
-  exp: z.number().int().positive(),
-  nbf: z.number().int().nonnegative().optional(),
-})
+export type ManagementConfig = NonNullable<ReturnType<typeof loadManagementConfig>>
 
-function formEncode(value: string) {
-  return new URLSearchParams([['v', value]]).toString().slice(2)
+export function actorId(issuer: string, subject: string) {
+  return createHash('sha256').update(JSON.stringify([issuer, subject])).digest('hex')
 }
 
-export function introspectionAuthenticator(config: IntrospectionSettings, fetcher = fetch): Authenticate {
-  const basic = Buffer.from(formEncode(config.clientId) + ':' + formEncode(config.clientSecret)).toString('base64')
+function derive(password: string, salt: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
+      (error, key) => error ? reject(error) : resolve(key))
+  })
+}
 
-  return async (authorization) => {
-    const token = /^Bearer ([a-z0-9._~+/=-]+)$/i.exec(authorization ?? '')?.[1]
-    if (!token || token.length > 4096) return null
+export async function hashPassword(password: string) {
+  const salt = randomBytes(16)
+  return salt.toString('hex') + ':' + (await derive(passwordInput.parse(password), salt)).toString('hex')
+}
 
-    let claims: unknown
-    try {
-      const response = await fetcher(config.endpoint, {
-        method: 'POST',
-        redirect: 'error',
-        signal: AbortSignal.timeout(3000),
-        headers: { Authorization: 'Basic ' + basic, Accept: 'application/json' },
-        body: new URLSearchParams({ token, token_type_hint: 'access_token' }),
-      })
-      if (!response.ok) throw new Error('Introspection failed')
-      claims = await response.json()
-    } catch {
-      throw new AuthenticationUnavailable()
-    }
+export async function verifyPassword(password: string, hash?: string) {
+  const [salt, key] = (hash ?? dummyHash).split(':')
+  const derived = await derive(password, Buffer.from(salt, 'hex'))
+  return timingSafeEqual(derived, Buffer.from(key, 'hex')) && hash !== undefined
+}
 
-    const parsed = tokenClaims.safeParse(claims)
-    if (!parsed.success) return null
-    const { iss, sub, aud, exp, nbf } = parsed.data
-    const audiences = typeof aud === 'string' ? [aud] : aud
-    const now = Math.floor(Date.now() / 1000)
-    if (iss !== config.issuer || !audiences.includes(config.audience) || exp <= now || (nbf ?? 0) > now) return null
+export function sessionKey(token: string) {
+  return 'rica:admin:session:' + createHash('sha256').update(token).digest('hex')
+}
 
-    return { issuer: iss, subject: sub, id: createHash('sha256').update(JSON.stringify([iss, sub])).digest('hex') }
+const sessionValue = z.object({ userId: z.uuid(), version: z.number().int() })
+
+export function createAdminSessions(db: PrismaClient, redis: Redis) {
+  return {
+    async create(user: { id: string; authVersion: number }) {
+      const token = randomBytes(32).toString('base64url')
+      await redis.set(sessionKey(token), JSON.stringify({ userId: user.id, version: user.authVersion }), 'EX', sessionSeconds)
+      return token
+    },
+    async read(token?: string) {
+      if (!token || !sessionToken.test(token)) return null
+      const value = await redis.get(sessionKey(token))
+      if (!value) return null
+      const session = sessionValue.parse(JSON.parse(value))
+      return db.adminUser.findFirst({ where: { id: session.userId, authVersion: session.version } })
+    },
+    async revoke(token?: string) {
+      if (token && sessionToken.test(token)) await redis.del(sessionKey(token))
+    },
   }
+}
+
+export function localPrincipal(user: { username: string; actorId: string; canCreate: boolean }): Principal {
+  return { issuer: localIssuer, subject: user.username, id: user.actorId, canCreate: user.canCreate }
+}
+
+export async function allowAuthAttempt(redis: Redis, category: 'password' | 'passkey', userId?: string) {
+  const key = 'rica:admin:attempt:' + category
+  const script = "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],60) end; return n"
+  const global = Number(await redis.eval(script, 1, key))
+  if (global > (category === 'password' ? 24 : 120)) return false
+  return !userId || Number(await redis.eval(script, 1, key + ':' + userId)) <= 8
 }

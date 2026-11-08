@@ -14,9 +14,9 @@ import { decideReviewAction, listReviewActions } from '../../packages/persistenc
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { AuthenticationUnavailable, type Authenticate, type Principal } from './admin-auth.js'
+import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 
-type Options = { db: PrismaClient; authenticate: Authenticate; creatorSubjects: readonly string[] }
+type Options = { db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
 const json = <S extends z.ZodType>(schema: S) => ({ 'application/json': { schema } })
@@ -25,7 +25,7 @@ const body = <S extends z.ZodType>(schema: S) => ({ required: true, content: jso
 const failure = { description: 'Management error', content: json(schema.errorResponse) }
 const errors = { 400: failure, 401: failure, 403: failure, 404: failure, 409: failure, 412: failure,
   413: failure, 422: failure, 428: failure, 500: failure, 503: failure } as const
-const security = [{ Bearer: [] }]
+const security = [{ SessionCookie: [] }]
 const character = '/characters/{characterId}' as const
 const characterParams = z.object({ characterId: schema.resourceId })
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
@@ -54,7 +54,7 @@ function runVersion(header: string) {
   return value
 }
 
-export function createManagementApp({ db, authenticate, creatorSubjects }: Options) {
+export function createManagementApp({ db, authenticate, origin, cookie }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -67,18 +67,20 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
       }
     },
   })
-  app.openAPIRegistry.registerComponent('securitySchemes', 'Bearer', { type: 'http', scheme: 'bearer' })
+  app.openAPIRegistry.registerComponent('securitySchemes', 'SessionCookie', { type: 'apiKey', in: 'cookie', name: cookie })
 
   app.use('*', async (c, next) => {
     const requestId = randomUUID()
     c.set('requestId', requestId)
     c.header('X-Request-Id', requestId)
     c.header('Cache-Control', 'no-store')
-    const actor = await authenticate(c.req.header('Authorization'))
-    if (!actor) {
-      c.header('WWW-Authenticate', 'Bearer')
-      return c.json(error(requestId, 'UNAUTHENTICATED', 'Authentication required'), 401)
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && c.req.header('Origin') !== origin) {
+      return c.json(error(requestId, 'ORIGIN_FORBIDDEN', 'Request origin is invalid'), 403)
     }
+    let actor: Principal | null
+    try { actor = await authenticate(c.req.raw) }
+    catch { return c.json(error(requestId, 'AUTH_UNAVAILABLE', 'Authentication is temporarily unavailable'), 503) }
+    if (!actor) return c.json(error(requestId, 'UNAUTHENTICATED', 'Authentication required'), 401)
     c.set('actor', actor)
     await next()
   })
@@ -88,9 +90,6 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
   }))
   app.onError((err, c) => {
     const requestId = c.get('requestId')
-    if (err instanceof AuthenticationUnavailable) {
-      return c.json(error(requestId, 'IDENTITY_PROVIDER_UNAVAILABLE', 'Authentication is temporarily unavailable'), 503)
-    }
     if (err instanceof management.ManagementError) return c.json(error(requestId, err.code, err.message), err.status)
     if (err instanceof HTTPException && err.status === 400) {
       return c.json(error(requestId, 'INVALID_BODY', 'Malformed request body'), 400)
@@ -117,7 +116,7 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     responses: { ...errors, 201: success(schema.commandResponse) },
   }), async (c) => {
     const actor = c.get('actor')
-    if (!creatorSubjects.includes(actor.subject)) management.denyPermission()
+    if (!actor.canCreate) management.denyPermission()
     const input = c.req.valid('json')
     const requestId = c.get('requestId')
     const result = await management.executeManagementCommand(db, {
@@ -516,7 +515,13 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'membership.change',
       targetScope: scope.characterId, input, requestId, key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.changeMembership(tx, scope, input))
+    }, async (tx) => {
+      if (scope.actor.issuer === localIssuer && input.action === 'GRANT'
+        && !await tx.adminUser.findUnique({ where: { username: input.subject }, select: { id: true } })) {
+        throw new management.ManagementError(422, 'UNKNOWN_USER', 'Create the local user before granting access')
+      }
+      return management.changeMembership(tx, scope, input)
+    })
     return c.json({ ...result, requestId }, 200)
   })
 

@@ -241,7 +241,7 @@ export async function changeMembership(tx: Tx, scope: Scope, input: Input<typeof
       select: { role: true },
     })
     if (!existing) unavailable()
-    if (input.role === 'ADMIN' && await tx.managementMembership.count({ where: { characterId, role: 'ADMIN' } }) <= 1) {
+    if (input.role === 'ADMIN' && await tx.managementMembership.count({ where: { characterId, issuer: actor.issuer, role: 'ADMIN' } }) <= 1) {
       throw new ManagementError(409, 'LAST_ADMIN', 'Character must retain an administrator')
     }
     await tx.managementMembership.delete({ where: { characterId_issuer_subject_role: where } })
