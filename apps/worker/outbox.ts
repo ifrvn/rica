@@ -15,7 +15,7 @@ import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 export const smokeEvent = 'BootstrapSmoke.v1'
 export const outboxQueueName = 'character-bootstrap'
 
-type OutboxJob = { eventId: string; generation?: number }
+type OutboxJob = { eventId: string; generation: number }
 
 export class WorkerDependencyUnavailable extends Error {
   constructor(readonly dependencies: ('postgres' | 'redis')[]) {
@@ -47,10 +47,11 @@ export async function startOutboxWorker(
   const consumer = new Redis(redisUrl, { maxRetriesPerRequest: null })
   const queue = new Queue<OutboxJob>(outboxQueueName, { connection: producer })
   const worker = new Worker<OutboxJob>(outboxQueueName, async ({ name, data }) => {
-    const { eventId, generation = 0 } = data
+    const { eventId, generation } = data
     let ticket: number | null = null
     try {
       if (name !== runQueuedEvent && name !== draftQueuedEvent && name !== smokeEvent) throw new Error('Unknown outbox job')
+      if (!Number.isSafeInteger(generation) || generation < 0) throw new Error('Invalid outbox generation')
       const [claim] = await db.$queryRaw<{ ticket: number | null }[]>`
         SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${name}, ${generation}::int) AS ticket
       `

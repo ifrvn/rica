@@ -16,9 +16,9 @@ export type PlatformAdapter = Readonly<{
 
 export type ResolveSimulationPlatform = (id: string) => Plugin<PlatformAdapter> | undefined
 type SimulationAdapterBinding = Readonly<{
-  adapterId: string | null
+  adapterId: string
   adapterVersion: string
-  adapterContractVersion: number | null
+  adapterContractVersion: number
 }>
 
 type ActiveSimulationAdapter = Readonly<{

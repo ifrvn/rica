@@ -19,9 +19,9 @@ type Proposal = {
   reviewDigest: string
   policyVersion: number
   crossPlatformDuplicate: boolean
-  adapterId: string | null
+  adapterId: string
   adapterVersion: string
-  adapterContractVersion: number | null
+  adapterContractVersion: number
   proposerId: string | null
   expiresAt: Date
   expired: boolean

@@ -161,7 +161,7 @@ after(async () => {
   }
 })
 
-test('local authentication migrates the principal, enforces origin and revokes sessions', { timeout: 30_000 }, async () => {
+test('local authentication enforces origin, membership and session revocation', { timeout: 30_000 }, async () => {
   const authConfig = loadManagementConfig({
     RICA_MANAGEMENT_DATABASE_URL: adminUrl.toString(), RICA_ADMIN_ORIGIN: fixtureOrigin,
   })!
@@ -176,8 +176,6 @@ test('local authentication migrates the principal, enforces origin and revokes s
   )
   const suffix = randomUUID()
   const username = 'local-' + suffix
-  const formerIssuer = 'https://legacy.example.test'
-  const formerSubject = 'old-' + suffix
   const oldPassword = 'old fixture password'
   const newPassword = 'new fixture password'
   async function accountCommand(args: string[], password: string) {
@@ -195,15 +193,13 @@ test('local authentication migrates the principal, enforces origin and revokes s
   })
   const session = (cookie: string) => local.request('/v1/auth/session', { headers: { Cookie: cookie } })
   try {
-    await owner.managementMembership.create({ data: {
-      characterId: b, issuer: formerIssuer, subject: formerSubject, role: 'AUDITOR',
-    } })
-    await accountCommand(['add', username, '--creator', '--from', formerIssuer, formerSubject], oldPassword)
+    await accountCommand(['add', username, '--creator'], oldPassword)
     const user = await owner.adminUser.findUniqueOrThrow({ where: { username } })
-    assert.equal(user.actorId, actorId(formerIssuer, formerSubject))
+    assert.equal(user.actorId, actorId(localIssuer, username))
     assert.equal(user.canCreate, true)
-    assert.equal(await owner.managementMembership.count({ where: { issuer: formerIssuer, subject: formerSubject } }), 0)
-    assert.equal(await owner.managementMembership.count({ where: { issuer: localIssuer, subject: username, characterId: b } }), 1)
+    await owner.managementMembership.create({ data: {
+      characterId: b, issuer: localIssuer, subject: username, role: 'AUDITOR',
+    } })
     assert.equal((await submit('login', { username, password: oldPassword }, '', 'https://foreign.example.test')).status, 403)
     assert.equal((await submit('login', { username, password: newPassword })).status, 401)
     const login = await submit('login', { username, password: oldPassword })
@@ -239,7 +235,7 @@ test('local authentication migrates the principal, enforces origin and revokes s
     assert.equal(renewed.status, 200)
     await submit('logout', {}, renewed.headers.get('set-cookie')!.split(';')[0])
   } finally {
-    await owner.managementMembership.deleteMany({ where: { subject: { in: [username, formerSubject] } } })
+    await owner.managementMembership.deleteMany({ where: { issuer: localIssuer, subject: username } })
     await owner.adminUser.deleteMany({ where: { username } })
     await redis.quit()
   }
@@ -291,12 +287,6 @@ test('management commands reject stale updates and commit idempotency and audit 
   ))
   assert.ok(results.every(({ status, body }) => status === 201 && body.id === results[0].body.id))
   assert.equal((await request('POST', path + '/identities', { key: 'same-key', data: { ...data, slug: 'different' } })).status, 409)
-  const legacy = await owner.identity.create({ data: { characterId: a, slug: 'legacy-without-version' } })
-  const legacyUpdate = await request('PUT', path + '/identities/' + legacy.id, {
-    ifMatch: '"0"', data: { roleProfile: { writingStyle: 'formal' }, reason: 'Configure legacy identity' },
-  })
-  assert.equal(legacyUpdate.status, 200)
-  assert.equal(legacyUpdate.body.version, 1)
   const id = results[0].body.id
   assert.equal((await owner.managementAudit.count({ where: { targetId: id } })), 1)
   await assert.rejects(management.managementAudit.deleteMany({ where: { targetId: id } }), /permission denied/i)
@@ -518,7 +508,7 @@ test('simulation approval and permit bind adapter ID, implementation and contrac
       assert.equal(preview.content, null)
       const { action } = await approveSimulation(await newSimulationAccount())
 
-      // A pre-cutover executor inserts a permit without the reviewed digest.
+      // A permit must include the digest from the approval.
       await assert.rejects(executor.$executeRaw`
         INSERT INTO public.simulation_attempts(character_id,action_id,account_id,window_start,permit_until)
         VALUES (${a}::uuid,${action.id}::uuid,${reviewTarget.parse(action.target).accountId}::uuid,
@@ -2447,12 +2437,9 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
     assert.equal((await approved.decide('APPROVE', 'admin-a')).status, 403)
     await assert.rejects(management.$executeRaw`
-      UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'legacy-reviewer' WHERE id = ${approved.id}::uuid
+      UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid
     `, /Approval must bind the reply executor/)
     assert.equal((await approved.decide('APPROVE')).status, 200)
-    await assert.rejects(executor.$queryRaw`
-      SELECT public.rica_claim_newbi_reply(${approved.id}::uuid,false,${agentId}::uuid,${endpoint})
-    `, /permission denied/i)
     const nextExecutor = newbiExecutorKey({ ...newbiExecutorIdentity, version: '2.0.0' })
     const readCount = reads
     assert.deepEqual(await executeNewbiReply(executor, client, nextExecutor, approved.id), { status: 'UNAVAILABLE' })
@@ -2710,7 +2697,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal((await request('GET', character + inbox, { actor: 'reviewer' })).status, 403)
     assert.equal((await request('GET', characterPath(b) + inbox, { actor: 'admin-b' })).status, 404)
     await assert.rejects(db.newbiEvent.count(), /permission denied/i)
-    await assert.rejects(db.$queryRaw`SELECT public.rica_claim_newbi_reply(null,false,null,null)`, /permission denied/i)
+    await assert.rejects(db.$queryRaw`SELECT public.rica_claim_newbi_reply(null,false,null,null,null)`, /permission denied/i)
 
     await dueNow()
     mode = 'LIMIT'

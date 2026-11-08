@@ -168,11 +168,13 @@ export async function updateIdentity(
   const { actor, characterId } = scope
   const identity = await tx.identity.findFirst({ where: { id, characterId }, select: { activeVersion: true } })
   if (!identity) unavailable()
+  if (identity.activeVersion === null) unavailable()
   checkVersion(identity.activeVersion, expected)
   const latest = await tx.identityVersion.findFirst({
     where: { characterId, identityId: id }, orderBy: { version: 'desc' }, select: { version: true },
   })
-  const version = (latest?.version ?? 0) + 1
+  if (!latest) unavailable()
+  const version = latest.version + 1
   await tx.identityVersion.create({
     data: { characterId, identityId: id, version, roleProfile: input.roleProfile, actorId: actor.id, reason: input.reason },
   })

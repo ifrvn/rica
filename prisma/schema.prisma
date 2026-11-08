@@ -295,7 +295,7 @@ model NewbiReply {
   postId          String @map("post_id") @db.Uuid
   content         String?
   reviewDigest    String @map("review_digest") @db.VarChar(64)
-  executorKey     String? @map("executor_key")
+  executorKey     String @map("executor_key")
   approvedExecutorKey String? @map("approved_executor_key")
   proposerId      String @map("proposer_id")
   reviewerId      String? @map("reviewer_id")
@@ -732,9 +732,9 @@ model ActionProposal {
   reviewDigest      String             @map("review_digest") @db.VarChar(64)
   policyVersion     Int                @map("policy_version")
   crossPlatformDuplicate Boolean      @default(false) @map("cross_platform_duplicate")
-  adapterId         String?            @map("adapter_id")
+  adapterId         String             @map("adapter_id")
   adapterVersion    String             @map("adapter_version")
-  adapterContractVersion Int?           @map("adapter_contract_version")
+  adapterContractVersion Int            @map("adapter_contract_version")
   proposerId        String?            @map("proposer_id")
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
@@ -791,7 +791,7 @@ model SimulationAttempt {
   resolutionReason   String?                 @map("resolution_reason")
   resolutionEvidence String?                 @map("resolution_evidence")
   status             SimulationAttemptStatus @default(PERMITTED)
-  reviewDigest       String?                 @map("review_digest") @db.VarChar(64)
+  reviewDigest       String                  @map("review_digest") @db.VarChar(64)
   windowStart        DateTime                @map("window_start") @db.Timestamptz
   permitUntil        DateTime                @map("permit_until") @db.Timestamptz
   createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz

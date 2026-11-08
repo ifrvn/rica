@@ -18,9 +18,9 @@ type Candidate = {
   target: unknown
   expiresAt: Date
   policyVersion: number
-  adapterId: string | null
+  adapterId: string
   adapterVersion: string
-  adapterContractVersion: number | null
+  adapterContractVersion: number
   reviewDigest: string
 }
 

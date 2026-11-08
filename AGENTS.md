@@ -2,11 +2,15 @@
 
 本文件适用于整个仓库。遵循全局 AGENTS.md。本文件将全局测试规范落实到 Rica 的工作流。业务行为和阶段验收以 [系统设计规范](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md) 为准。
 
+## 开发期数据和版本策略
+
+- 以当前代码和空数据库为开发基线。可更新初始化迁移和契约。移除为旧数据库、旧 API、旧队列载荷或混合应用版本保留的兼容代码。开发验证使用独立的空 PostgreSQL 和 Redis。重建已有环境的数据前须由用户明确授权。
+
 ## Git 提交规范
 
 - 开始前检查工作区和暂存区。保留他人改动。只暂存当前任务的文件或片段，提交前用 `git diff --cached` 核对内容，并运行 `git diff --cached --check`。
 - 每个提交围绕一个可独立说明和验证的变更。将功能及其必要的测试、迁移或文档放在一起，避免混入无关重构、格式化或依赖更新。
-- 新提交标题采用 `type(scope): summary`，scope 可省略。摘要用简洁英文动词短语，写清改了什么。常用类型为 `feat`、`fix`、`docs`、`refactor`、`test`、`build`、`ci` 和 `chore`。例如 `feat(worker): relay outbox events` 或 `chore(compose): upgrade Redis and PostgreSQL`。需要说明迁移、兼容性或回滚影响时，在提交正文记录原因和操作。
+- 新提交标题采用 `type(scope): summary`，scope 可省略。摘要用简洁英文动词短语，写清改了什么。常用类型为 `feat`、`fix`、`docs`、`refactor`、`test`、`build`、`ci` 和 `chore`。例如 `feat(worker): relay outbox events` 或 `chore(compose): upgrade Redis and PostgreSQL`。需要说明空库初始化或部署影响时，在提交正文记录原因和操作。
 - 将 `.env`、真实凭据、本地数据、依赖和生成产物留在提交之外。`.env.example` 只放示例值。依赖变更使用项目指定版本的 pnpm，并提交相应的 `pnpm-lock.yaml` 变更。
 - 用户授权提交或推送时，按授权范围执行。推送前核对目标分支及远程仓库。改写历史或强制推送须取得明确授权。
 - 每完成一组完整、已验证的功能模块改动，提交git commit。比较小的功能变动需要由用户确认不用再调整后再提交git。
@@ -34,7 +38,7 @@
 | --- | --- |
 | 纯文档或元数据 | 核对内容、链接、示例命令和差异。 |
 | TypeScript、Vue 或 API | 按影响运行 `pnpm run typecheck` 或 `pnpm test`。管理端构建相关变更运行 `pnpm run build`。 |
-| Prisma、数据模型或迁移 | 运行 `pnpm run db:generate`，在专用测试库运行 `pnpm run db:migrate`。涉及已有数据时，验证从受影响旧版本升级后的关键数据和约束。 |
+| Prisma、数据模型或迁移 | 运行 `pnpm run db:generate`，在空的专用测试库运行 `pnpm run db:migrate`，检查 Prisma 一致性和受影响的数据约束。 |
 | Worker、队列、出箱或数据库服务版本 | 用本地 Compose 测试环境启动 PostgreSQL 和 Redis、应用迁移，然后运行 `pnpm run test:integration`。 |
 | 依赖和锁文件 | 验证 `pnpm install --frozen-lockfile`，再运行受影响模块的检查。 |
 

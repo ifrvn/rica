@@ -10,6 +10,8 @@ Rica 是面向多平台、多身份 AI 虚拟角色的运行系统。同一个�
 
 需要 Node.js 22.12+（22.x）、24.x 或 26.x，**pnpm**（版本见 `package.json`），以及带 Compose 的 Docker。以下命令使用 PowerShell。克隆后，其余操作都在仓库根目录运行。已有 `.env` 时会保留现有配置。
 
+初始化前，请确认数据库连接指向空的开发数据库，Redis 使用独立的开发队列。
+
 ```powershell
 git clone https://github.com/ifrvn/rica.git
 Set-Location rica
@@ -53,7 +55,7 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
    ```
 
 3. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址一致，重启 API，然后在 [本地管理台](http://localhost:5173/) 用用户名和密码登录。登录后可在「添加 Passkey」中确认密码并登记设备。下次可直接点「使用 Passkey」。
-4. 需要审批人时，用 `pnpm run admin:user add <username>` 创建其本地账号，然后通过管理 API 授权。已有成员关系可显式迁移，保留历史审计中的操作人标识。[账号恢复与迁移](docs/management-api.md#本地账号与会话)
+4. 需要审批人时，用 `pnpm run admin:user add <username>` 创建其本地账号，然后通过管理 API 授权。[账号恢复](docs/management-api.md#本地账号与会话)
 
 本机开发使用 `http://localhost:5173`。部署时使用固定 HTTPS 地址。浏览器会话存入 HttpOnly Cookie。
 
@@ -101,7 +103,7 @@ $ricaCharacter.id
 | 返回 `403` 或角色列表为空 | 检查登录主体在 Rica 中是否已加入对应角色，以及是否具备操作所需权限。 |
 | 提案停在 `READY` | 检查独立模拟执行进程和静默时段。 |
 
-## 5. 验证、更新与部署
+## 5. 验证与部署
 
 ```powershell
 pnpm run typecheck
@@ -112,7 +114,7 @@ pnpm run test:integration
 
 集成测试使用独立的已迁移 PostgreSQL 和 Redis，运行自带的身份和平台夹具，可以验证审批及回执全链路。请为测试设置专用 `DATABASE_URL` 和 `REDIS_URL`。`pnpm run build` 生成管理台静态文件，位于 `apps/admin/dist`。
 
-更新时先备份 PostgreSQL，再安装锁定依赖、重新生成 Prisma Client、应用迁移并重启各进程。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供管理台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
+版本切换使用新的开发数据库和 Redis 队列，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供管理台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
 
 ## 代码入口
 

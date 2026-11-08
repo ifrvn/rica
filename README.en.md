@@ -10,6 +10,8 @@ Rica has passed M1–M4 simulation acceptance for ingestion, memory retrieval, h
 
 Use Node.js 22.12 or later in the 22.x line, Node.js 24, or Node.js 26. You also need the **pnpm** version pinned in `package.json` and Docker with Compose. These examples use PowerShell. After cloning, run the remaining commands from the repository root. The commands preserve an existing `.env` file.
 
+Before initialization, point the database connection at an empty development database and use a dedicated Redis queue.
+
 ```powershell
 git clone https://github.com/ifrvn/rica.git
 Set-Location rica
@@ -53,7 +55,7 @@ Open the [local admin UI](http://localhost:5173/) and check [API readiness](http
    ```
 
 3. Set `RICA_ADMIN_ORIGIN` to the browser's address and restart the API. Sign in to the [local admin UI](http://localhost:5173/) with your username and password. Open the Passkey section and confirm your password to register a device. Next time, use the Passkey sign-in button.
-4. Create local reviewer accounts with `pnpm run admin:user add <username>`, then grant their roles through the management API. You can explicitly migrate existing memberships while preserving the actor IDs in audit history. [Account recovery and migration (Chinese)](docs/management-api.md#本地账号与会话)
+4. Create local reviewer accounts with `pnpm run admin:user add <username>`, then grant their roles through the management API. [Account recovery (Chinese)](docs/management-api.md#本地账号与会话)
 
 Local development uses `http://localhost:5173`. Use a stable HTTPS origin for deployments. The browser stores its session in an HttpOnly cookie.
 
@@ -101,7 +103,7 @@ The browser covers service status and human review. Creation and configuration p
 | You see `403` or an empty character list | Check the signed-in subject's character membership and the role required by the operation. |
 | A proposal remains `READY` | Check the separate simulation executor and quiet hours. |
 
-## 5. Verify, update, and deploy
+## 5. Verify and deploy
 
 ```powershell
 pnpm run typecheck
@@ -112,7 +114,7 @@ pnpm run test:integration
 
 Integration tests use their own identity and platform fixtures to verify the approval and receipt flow. Point `DATABASE_URL` and `REDIS_URL` at dedicated test services and apply migrations before running them. `pnpm run build` writes the admin UI's static files to `apps/admin/dist`.
 
-Before updating, back up PostgreSQL. Then install the locked dependencies, regenerate Prisma Client, apply migrations, and restart the application processes. In a split deployment, give migration, runtime, management, and executor processes separate credentials. Serve the admin UI through an HTTPS reverse proxy that forwards same-origin `/v1` and `/health` requests to the API. The Compose credentials are for local development. [Database roles (Chinese)](docs/database-roles.md) · [Retention and recovery (Chinese)](docs/management-api.md#模拟数据保留期)
+Use a fresh development database and Redis queue when switching versions. Run the API, worker, and executor from the same version. In a split deployment, give migration, runtime, management, and executor processes separate credentials. Serve the admin UI through an HTTPS reverse proxy that forwards same-origin `/v1` and `/health` requests to the API. The Compose credentials are for local development. [Database roles (Chinese)](docs/database-roles.md) · [Retention and recovery (Chinese)](docs/management-api.md#模拟数据保留期)
 
 ## Project structure
 
