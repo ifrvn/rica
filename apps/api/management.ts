@@ -7,8 +7,8 @@ import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/cont
 import { dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
-import { newbiAccountInput, newbiDecisionInput, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, createNewbiReply, decideNewbiReply, getNewbiReply } from '../../packages/persistence/newbi-management.js'
+import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiReply } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -783,6 +783,22 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
       ...scope, operation: 'newbi.reply.review', targetScope: characterId + '/' + replyId, input, requestId,
       key: c.req.valid('header')['idempotency-key'], roles: ['REVIEWER'],
     }, (tx) => decideNewbiReply(tx, scope, replyId, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/replies/{replyId}/close`, security,
+    request: { params: newbiReplyParams, headers: schema.idempotencyHeader, body: body(newbiClosureInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, replyId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'newbi.reply.close', targetScope: characterId + '/' + replyId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => closeNewbiReply(tx, scope, replyId, input))
     return c.json({ ...result, requestId }, 200)
   })
 

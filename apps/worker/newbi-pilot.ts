@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { z } from '@hono/zod-openapi'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
-import { createNewbiClient } from '../../packages/runtime/newbi-client.js'
+import { createNewbiClient, NewbiRequestError } from '../../packages/runtime/newbi-client.js'
 
 async function main() {
   const [command, value, retry, ...extra] = process.argv.slice(2)
@@ -33,7 +33,11 @@ async function main() {
 
 try {
   await main()
-} catch {
-  console.error('Newbi pilot could not confirm the operation. Inspect the reply status before retrying.')
+} catch (error) {
+  if (error instanceof NewbiRequestError) {
+    console.error(JSON.stringify({ reason: error.reason, retryAfterSeconds: error.retrySeconds || undefined }))
+  } else {
+    console.error('Newbi pilot could not confirm the operation. Inspect the reply status before retrying.')
+  }
   process.exitCode = 1
 }

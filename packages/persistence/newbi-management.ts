@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { coreProfile } from '../contracts/management.js'
-import { newbiReplyView, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput } from '../contracts/newbi-pilot.js'
+import { newbiReplyView, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
 
@@ -58,6 +58,7 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
     if (!reply) missing()
     return newbiReplyView.parse({
       ...reply, agentId: reply.account.remoteAccountId, endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
+      retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
     })
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -79,4 +80,14 @@ export async function decideNewbiReply(tx: Prisma.TransactionClient, scope: Scop
   })
   if (count !== 1) conflict()
   return { id, status }
+}
+
+export async function closeNewbiReply(tx: Prisma.TransactionClient, scope: Scope, id: string, input: z.infer<typeof newbiClosureInput>) {
+  const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId }, select: { id: true } })
+  if (!reply) missing()
+  const [result] = await tx.$queryRaw<{ closed: boolean }[]>`
+    SELECT public.rica_close_newbi_reply(${id}::uuid, ${scope.characterId}::uuid, ${input.reason}) AS closed
+  `
+  if (!result.closed) conflict()
+  return { id, status: 'CLOSED' }
 }

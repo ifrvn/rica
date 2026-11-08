@@ -25,7 +25,7 @@ const newbiReason = ref('')
 let newbiPending: { signature: string; key: string } | undefined
 const newbiPath = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/newbi/replies')
 const newbiStatus: Record<NewbiReplyView['status'], string> = {
-  WAITING: '待审', READY: '已批准', REJECTED: '已拒绝', IN_FLIGHT: '发送中', UNKNOWN: '待核对', SENT: '已发送',
+  WAITING: '待审', READY: '已批准', REJECTED: '已拒绝', IN_FLIGHT: '发送中', UNKNOWN: '待核对', SENT: '已发送', CLOSED: '已结案',
 }
 
 const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/actions')

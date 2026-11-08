@@ -9,6 +9,13 @@ const comment = z.object({ id: uuid, author: z.object({ id: z.union([z.string(),
   content: z.string(), isHidden: z.boolean(), replyToCommentId: uuid.nullable() })
 const commentPage = z.object({ items: z.array(comment), nextCursor: z.string().nullable(), hasMore: z.boolean() })
 
+export class NewbiRequestError extends Error {
+  constructor(readonly reason: 'CREDENTIAL_INVALID' | 'ACCESS_DENIED' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'POST_LOCKED',
+    readonly retrySeconds = 0) {
+    super(reason)
+  }
+}
+
 export function createNewbiClient(endpoint: string, credential: string) {
   const base = newbiEndpoint.parse(endpoint)
   if (!/^nbi_agent_[A-Za-z0-9_-]{43}$/u.test(credential)) throw new Error('Invalid Newbi credential format')
@@ -31,9 +38,17 @@ export function createNewbiClient(endpoint: string, credential: string) {
       const req = directRequest(connection, {
         headers, agent: false, method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(5000),
       }, (res) => {
-        if (res.statusCode !== expected) {
+        const status = res.statusCode
+        if (status !== expected && status !== 409) {
           res.resume()
-          reject(new Error('Newbi request rejected'))
+          const retryAfter = res.headers['retry-after']
+          const seconds = retryAfter && /^\d+$/u.test(retryAfter) ? Number(retryAfter) : 30
+          const wait = Math.min(seconds, 2_147_483_644) + 1 + Math.floor(Math.random() * 3)
+          if (status === 429) reject(new NewbiRequestError('RATE_LIMITED', wait))
+          else if (status === 503) reject(new NewbiRequestError('SERVICE_UNAVAILABLE', wait))
+          else if (status === 401) reject(new NewbiRequestError('CREDENTIAL_INVALID'))
+          else if (status === 403) reject(new NewbiRequestError('ACCESS_DENIED'))
+          else reject(new Error('Newbi request rejected'))
           return
         }
         let size = 0
@@ -45,8 +60,15 @@ export function createNewbiClient(endpoint: string, credential: string) {
         })
         res.once('error', reject)
         res.once('end', () => {
-          try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))) }
-          catch { reject(new Error('Invalid Newbi response')) }
+          try {
+            const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+            if (status === 409) {
+              const lock = z.object({ errorCode: z.literal('POST_LOCKED') }).safeParse(parsed)
+              reject(lock.success ? new NewbiRequestError('POST_LOCKED') : new Error('Newbi request conflict'))
+            } else {
+              resolve(parsed)
+            }
+          } catch { reject(new Error('Invalid Newbi response')) }
         })
       })
       req.once('error', reject)
@@ -63,7 +85,9 @@ export function createNewbiClient(endpoint: string, credential: string) {
         .parse(await request('/status', 200))
       if (status.state === 'CLOSED' || (writing && status.state !== 'OPEN')) throw new Error('Newbi is unavailable for this operation')
       const identity = agent.parse(await request('/me', 200))
-      if (identity.accessStatus !== 'ACTIVE') throw new Error('Newbi agent is unavailable')
+      if (identity.accessStatus !== 'ACTIVE' && (writing || identity.accessStatus !== 'LIMITED')) {
+        throw new NewbiRequestError('ACCESS_DENIED')
+      }
       const rules = z.object({ idempotencyDays: z.number().int().positive() }).parse(await request('/rules', 200))
       const quota = z.object({ comments: z.array(z.object({ remaining: z.number().int().nonnegative() })).min(1) })
         .parse(await request('/quota', 200))

@@ -2173,18 +2173,24 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   let writes = 0
   let reads = 0
   let dropResponse = false
+  let preflightLimit = false
+  let writeFailure: 'LIMIT' | 'LOCKED' | 'DROP' | undefined
+  let locked = false
   const server = createServer(async (req, res) => {
     const path = req.url?.split('?')[0]
     const reply = (data: unknown, status = 200) => res.writeHead(status, { 'Content-Type': 'application/json' })
       .end(JSON.stringify({ code: 0, data }))
     if (path === '/agent-api/v1/status') return reply({ state: 'OPEN', protocolVersion: 1 })
     if (req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
-    if (path === '/agent-api/v1/me') return reply({ id: currentAgent, username: 'fixture-agent', accessStatus: 'ACTIVE' })
+    if (path === '/agent-api/v1/me') {
+      if (preflightLimit) return res.writeHead(429, { 'Retry-After': '30' }).end()
+      return reply({ id: currentAgent, username: 'fixture-agent', accessStatus: 'ACTIVE' })
+    }
     if (path === '/agent-api/v1/rules') return reply({ idempotencyDays: 7 })
     if (path === '/agent-api/v1/quota') return reply({ comments: [{ remaining: 5 }] })
     if (path === '/agent-api/v1/posts/' + postId) {
       reads++
-      return reply({ id: postId, title: 'Fixture discussion', content: 'Original context', isHidden: false, isLocked: false })
+      return reply({ id: postId, title: 'Fixture discussion', content: 'Original context', isHidden: false, isLocked: locked })
     }
     if (path === '/agent-api/v1/posts/' + postId + '/comments') {
       if (req.method === 'GET') {
@@ -2192,6 +2198,8 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
         return reply({ items: [], nextCursor: null, hasMore: false })
       }
       writes++
+      if (writeFailure === 'LIMIT') return res.writeHead(429, { 'Retry-After': '30' }).end()
+      if (writeFailure === 'LOCKED') return res.writeHead(409).end(JSON.stringify({ errorCode: 'POST_LOCKED' }))
       const key = req.headers['idempotency-key']
       if (typeof key !== 'string') return res.writeHead(400).end()
       let body = ''
@@ -2201,7 +2209,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       if (previous && previous.content !== content) return res.writeHead(409).end()
       const id = previous?.id ?? randomUUID()
       sent.set(key, { id, content })
-      if (dropResponse && !previous) return res.destroy()
+      if (writeFailure === 'DROP' || (dropResponse && !previous)) return res.destroy()
       return reply({ id, postId, replayed: !!previous }, 201)
     }
     return res.writeHead(404).end()
@@ -2285,6 +2293,78 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(sent.size, 2)
     assert.equal(writes, 3)
     assert.ok(reads >= 8)
+
+    // Invalid credentials and locked threads never reach the comment endpoint.
+    const invalidClient = createNewbiClient(endpoint, 'nbi_agent_' + 'y'.repeat(43))
+    assert.deepEqual(await executeNewbiReply(executor, invalidClient, waiting.id),
+      { status: 'UNAVAILABLE', reason: 'CREDENTIAL_INVALID' })
+    assert.equal((await request('GET', waiting.path)).body.attempts, 0)
+    locked = true
+    assert.deepEqual(await executeNewbiReply(executor, client, waiting.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
+    assert.equal((await request('GET', waiting.path)).body.status, 'CLOSED')
+    assert.equal(writes, 3)
+    locked = false
+
+    // A 429 during preflight costs no write, and both kinds of 429 block early calls across the account.
+    const limited = await propose('Rate-limited fixture reply', 'newbi-limited')
+    assert.equal((await limited.decide('APPROVE')).status, 200)
+    preflightLimit = true
+    const limitTime = Date.now()
+    const preflight = await executeNewbiReply(executor, client, limited.id)
+    assert.equal(preflight.status, 'UNAVAILABLE')
+    assert.ok('reason' in preflight && preflight.reason === 'RATE_LIMITED')
+    let preview = (await request('GET', limited.path)).body
+    assert.equal(preview.attempts, 0)
+    assert.ok(Date.parse(preview.retryNotBefore) >= limitTime + 30_000)
+    const unrelated = await propose('Fixture reply behind a cooldown', 'newbi-cooldown')
+    assert.equal((await unrelated.decide('APPROVE')).status, 200)
+    assert.deepEqual(await executeNewbiReply(executor, client, unrelated.id),
+      { status: 'UNAVAILABLE', retryNotBefore: preview.retryNotBefore })
+    assert.equal(writes, 3)
+    preflightLimit = false
+    const passCooldown = () => owner.newbiReply.update({ where: { id: limited.id }, data: { retryNotBefore: new Date(0) } })
+    await passCooldown()
+    writeFailure = 'LIMIT'
+    const rateLimited = await executeNewbiReply(executor, client, limited.id)
+    assert.equal(rateLimited.status, 'UNKNOWN')
+    assert.ok('reason' in rateLimited && rateLimited.reason === 'RATE_LIMITED')
+    preview = (await request('GET', limited.path)).body
+    assert.equal(preview.attempts, 1)
+    assert.ok(Date.parse(preview.retryNotBefore) > Date.now() + 29_000)
+    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true),
+      { status: 'UNAVAILABLE', retryNotBefore: preview.retryNotBefore })
+    assert.equal(writes, 4)
+
+    // A lost response followed by a lock conflict cannot be treated as a confirmed failure.
+    await passCooldown()
+    writeFailure = 'DROP'
+    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNKNOWN' })
+    writeFailure = 'LOCKED'
+    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNKNOWN', reason: 'POST_LOCKED' })
+    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, unrelated.id), { status: 'UNAVAILABLE' })
+    assert.equal(sent.get(limited.id)?.content, limited.content)
+    assert.equal(writes, 6)
+
+    const closeReason = 'Checked the discussion and ended delivery attempts'
+    const close = (actor: string, key: string, path = limited.path) => request('POST', path + '/close',
+      { actor, key, data: { reason: closeReason } })
+    assert.equal((await close('reviewer', 'newbi-close-reviewer')).status, 403)
+    assert.equal((await close('admin-a', 'newbi-close-ready', unrelated.path)).status, 409)
+    assert.equal((await close('admin-a', 'newbi-close')).status, 200)
+    assert.equal((await close('admin-a', 'newbi-close')).status, 200)
+    preview = (await request('GET', limited.path)).body
+    assert.equal(preview.status, 'CLOSED')
+    assert.equal(preview.attempts, 3)
+    assert.equal(preview.closureReason, closeReason)
+    assert.equal(preview.remoteCommentId, null)
+    assert.equal(await owner.managementAudit.count({ where: { targetId: limited.id, operation: 'newbi.reply.close' } }), 1)
+    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNAVAILABLE' })
+    dropResponse = false
+    writeFailure = 'LOCKED'
+    assert.deepEqual(await executeNewbiReply(executor, client, unrelated.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
+    assert.equal((await request('GET', unrelated.path)).body.status, 'CLOSED')
+    assert.equal(writes, 7)
   } finally {
     await executor.$disconnect()
     server.closeAllConnections()

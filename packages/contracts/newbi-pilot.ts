@@ -21,10 +21,12 @@ export const newbiDecisionInput = z.strictObject({
   reviewDigest: z.string().regex(/^[0-9a-f]{64}$/), decision: z.enum(['APPROVE', 'REJECT']),
   reason: z.string().trim().min(1).max(240),
 })
+export const newbiClosureInput = z.strictObject({ reason: z.string().trim().min(1).max(240) })
 export const newbiReplyView = z.object({
   id: resourceId, accountId: resourceId, identityId: resourceId, agentId: resourceId,
   endpoint: newbiEndpoint, postId: resourceId, content: z.string().nullable(), reviewDigest: z.string(),
-  status: z.enum(['WAITING', 'READY', 'REJECTED', 'IN_FLIGHT', 'UNKNOWN', 'SENT']),
+  status: z.enum(['WAITING', 'READY', 'REJECTED', 'IN_FLIGHT', 'UNKNOWN', 'SENT', 'CLOSED']),
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
+  retryNotBefore: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })
 export type NewbiReplyView = z.infer<typeof newbiReplyView>

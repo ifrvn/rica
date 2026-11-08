@@ -270,6 +270,8 @@ model NewbiReply {
   status          String @default("WAITING")
   attempts        Int @default(0)
   leaseUntil      DateTime? @map("lease_until") @db.Timestamptz
+  retryNotBefore  DateTime? @map("retry_not_before") @db.Timestamptz
+  closureReason   String? @map("closure_reason") @db.VarChar(240)
   remoteCommentId String? @map("remote_comment_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
   expiresAt       DateTime @map("expires_at") @db.Timestamptz
