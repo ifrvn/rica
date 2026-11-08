@@ -1,6 +1,7 @@
 import { request as directRequest } from 'node:http'
 import { z } from '@hono/zod-openapi'
 import { newbiEndpoint } from '../contracts/newbi-pilot.js'
+import { PlatformReadError, type PlatformEventReader, type PlatformReadFailure } from '../contracts/platform-reader.js'
 
 const uuid = z.uuid().transform((value) => value.toLowerCase())
 const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string() })
@@ -30,18 +31,14 @@ class NewbiEventCursorExpired extends Error {
   constructor(readonly resetCursor: string) { super('Newbi event history was lost') }
 }
 
-export class NewbiRequestError extends Error {
-  constructor(readonly reason: 'CREDENTIAL_INVALID' | 'ACCESS_DENIED' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'COMMUNITY_CLOSED' | 'POST_LOCKED',
-    readonly retrySeconds = 0) {
-    super(reason)
-  }
-}
+export class NewbiRequestError extends PlatformReadError<PlatformReadFailure | 'POST_LOCKED'> {}
 
-export function createNewbiClient(endpoint: string, credential: string, stop?: AbortSignal) {
+function createTransport(endpoint: string, credential: string, stop?: AbortSignal) {
   const base = newbiEndpoint.parse(endpoint)
   if (!/^nbi_agent_[A-Za-z0-9_-]{43}$/u.test(credential)) throw new Error('Invalid Newbi credential format')
 
   async function request(path: string, expected: number, options?: { id: string; content: string }) {
+    stop?.throwIfAborted()
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (path !== '/status') headers.Authorization = 'Bearer ' + credential
     if (options) {
@@ -104,23 +101,26 @@ export function createNewbiClient(endpoint: string, credential: string, stop?: A
     return envelope.data
   }
 
+  return { endpoint: base, get: (path: string) => request(path, 200), request }
+}
+
+function createReads(get: (path: string) => Promise<unknown>) {
   return {
-    endpoint: base,
     async verify(writing: boolean) {
       const status = z.object({ state: z.enum(['OPEN', 'READ_ONLY', 'CLOSED']), protocolVersion: z.literal(1) })
-        .parse(await request('/status', 200))
+        .parse(await get('/status'))
       if (status.state === 'CLOSED') throw new NewbiRequestError('COMMUNITY_CLOSED')
       if (writing && status.state !== 'OPEN') throw new Error('Newbi is unavailable for this operation')
-      const identity = agent.parse(await request('/me', 200))
+      const identity = agent.parse(await get('/me'))
       if (identity.accessStatus !== 'ACTIVE' && (writing || identity.accessStatus !== 'LIMITED')) {
         throw new NewbiRequestError('ACCESS_DENIED')
       }
       const rules = z.object({
         idempotencyDays: z.number().int().positive(),
         pollIntervalSeconds: z.number().int().positive().max(2_147_483_647).default(30),
-      }).parse(await request('/rules', 200))
+      }).parse(await get('/rules'))
       const quota = z.object({ comments: z.array(z.object({ remaining: z.number().int().nonnegative() })).min(1) })
-        .parse(await request('/quota', 200))
+        .parse(await get('/quota'))
       if (writing && (rules.idempotencyDays < 1 || quota.comments.some(({ remaining }) => remaining === 0))) {
         throw new Error('Newbi comment budget is unavailable')
       }
@@ -128,7 +128,7 @@ export function createNewbiClient(endpoint: string, credential: string, stop?: A
     },
     async readEvents(cursor: string | null) {
       try {
-        const page = eventPage.parse(await request('/events?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), 200))
+        const page = eventPage.parse(await get('/events?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')))
         if (page.hasMore && page.nextCursor === cursor) throw new Error('Newbi event cursor did not advance')
         return { ...page, historyLost: false }
       } catch (error) {
@@ -138,13 +138,13 @@ export function createNewbiClient(endpoint: string, credential: string, stop?: A
     },
     async readThread(postId: string) {
       const id = uuid.parse(postId)
-      const post = thread.parse(await request('/posts/' + id, 200))
+      const post = thread.parse(await get('/posts/' + id))
       if (post.id !== id || post.isHidden) throw new Error('Newbi post is unavailable')
       const comments: z.infer<typeof comment>[] = []
       let cursor: string | null = null
       for (let page = 0; page < 4; page++) {
-        const next = commentPage.parse(await request('/posts/' + id + '/comments?limit=50'
-          + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), 200))
+        const next = commentPage.parse(await get('/posts/' + id + '/comments?limit=50'
+          + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')))
         comments.push(...next.items.filter(({ isHidden }) => !isHidden))
         if (!next.hasMore) return { post, comments }
         if (!next.nextCursor || next.nextCursor === cursor) break
@@ -152,10 +152,25 @@ export function createNewbiClient(endpoint: string, credential: string, stop?: A
       }
       throw new Error('Newbi discussion exceeds the pilot context limit')
     },
+  }
+}
+
+export function createNewbiReadClient(endpoint: string, credential: string, stop?: AbortSignal) {
+  const transport = createTransport(endpoint, credential, stop)
+  const { verify, readEvents, readThread } = createReads(transport.get)
+  const reader = { endpoint: transport.endpoint, verify: () => verify(false), readEvents, readThread }
+  return reader satisfies PlatformEventReader
+}
+
+export function createNewbiClient(endpoint: string, credential: string, stop?: AbortSignal) {
+  const transport = createTransport(endpoint, credential, stop)
+  return {
+    endpoint: transport.endpoint,
+    ...createReads(transport.get),
     async comment(postId: string, key: string, content: string) {
       const id = uuid.parse(postId)
       const result = z.object({ id: uuid, postId: uuid, replayed: z.boolean() }).parse(
-        await request('/posts/' + id + '/comments', 201, { id: uuid.parse(key), content }),
+        await transport.request('/posts/' + id + '/comments', 201, { id: uuid.parse(key), content }),
       )
       if (result.postId !== id) throw new Error('Newbi returned a mismatched receipt')
       return result.id

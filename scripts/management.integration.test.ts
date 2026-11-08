@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createNewbiClient } from '../packages/runtime/newbi-client.js'
+import { startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -2404,8 +2405,19 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
     const client = createNewbiClient(endpoint, secret)
-    const inspect = await client.readThread(postId)
-    assert.equal(inspect.post.content, 'Original context')
+    const inspector = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'inspect', postId], {
+      env: { ...process.env, RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret },
+      stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    })
+    let inspected = ''
+    let diagnostics = ''
+    inspector.stdout.setEncoding('utf8').on('data', (chunk: string) => { inspected += chunk })
+    inspector.stderr.setEncoding('utf8').on('data', (chunk: string) => { diagnostics += chunk })
+    const [inspectionExit] = await once(inspector, 'close')
+    assert.equal(inspectionExit, 0, diagnostics)
+    assert.match(diagnostics, /"kind":"platform-reader".*"code":"READY"/)
+    assert.equal(JSON.parse(inspected).post.content, 'Original context')
+    assert.equal(writes, 0)
 
     const propose = async (text: string, key: string) => {
       const created = await request('POST', prefix + '/replies', { key, data: { accountId, postId, content: text } })
@@ -2552,6 +2564,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
   const secret = 'nbi_agent_' + 'z'.repeat(43)
   const cursors: (string | null)[] = []
   const opaque = 'cursor/? +&=汉'
+  let verifiedAgent = agentId
   const seq = '9007199254740993'
   const event = { seq, type: 'COMMENT_REPLIED', postId, commentId, createdAt: new Date().toISOString() }
   let mode: 'PAGES' | 'LIMIT' | 'EXPIRED' | 'RESUME' | 'PAUSE' = 'PAGES'
@@ -2569,7 +2582,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     if (req.method !== 'GET') { writes++; return res.writeHead(405).end() }
     if (url.pathname.endsWith('/status')) return reply({ state: 'READ_ONLY', protocolVersion: 1 })
     if (req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
-    if (url.pathname.endsWith('/me')) return reply({ id: agentId, username: 'fixture-events', accessStatus: 'ACTIVE' })
+    if (url.pathname.endsWith('/me')) return reply({ id: verifiedAgent, username: 'fixture-events', accessStatus: 'ACTIVE' })
     if (url.pathname.endsWith('/rules')) return reply({ idempotencyDays: 7, pollIntervalSeconds: 30 })
     if (url.pathname.endsWith('/quota')) return reply({ comments: [{ remaining: 0 }] })
     if (!url.pathname.endsWith('/events')) return res.writeHead(404).end()
@@ -2597,14 +2610,17 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
   const db = createDatabase(url.toString())
   const runtime = createDatabase(scheduleRuntimeUrl())
   let worker: ReturnType<typeof spawn> | undefined
+  const readerEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
+  const host = await startNewbiReader(readerEnv)
   try {
     const identityId = await reflectionIdentity()
     const character = characterPath(a)
     const bind = await request('POST', character + '/newbi/accounts', { key: 'newbi-events-bind', data: { identityId, agentId, endpoint } })
     assert.equal(bind.status, 201, JSON.stringify(bind.body))
     const accountId: string = bind.body.id
-    const client = createNewbiClient(endpoint, secret)
-    const poll = () => pollNewbiEvents(db, client, accountId)
+    const reader = host.plugin.implementation
+    assert.equal('comment' in reader, false)
+    const poll = () => pollNewbiEvents(db, reader, accountId)
     const account = () => owner.newbiEventCheckpoint.findUniqueOrThrow({ where: { accountId } })
     const dueNow = () => owner.newbiEventCheckpoint.update({ where: { accountId }, data: { nextPollAt: new Date(0) } })
     const control = (operation: 'PAUSE' | 'RESUME') => request('POST', character + '/controls', { key: randomUUID(),
@@ -2614,8 +2630,19 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.deepEqual(await poll(), { status: 'STOPPED' })
     assert.equal(calls, 0)
     assert.equal((await control('RESUME')).status, 200)
-    const badClient = createNewbiClient(endpoint, 'nbi_agent_' + 'x'.repeat(43))
-    await assert.rejects(pollNewbiEvents(db, badClient, accountId), /CREDENTIAL_INVALID/)
+    await assert.rejects(startNewbiReader({ RICA_NEWBI_LOCAL_API_URL: endpoint }), /MISSING_SERVICE/)
+    await assert.rejects(startNewbiReader({ ...readerEnv, RICA_NEWBI_LOCAL_API_URL: 'https://fixture.example/agent-api/v1' }),
+      /INVALID_CONFIG/)
+    verifiedAgent = randomUUID()
+    assert.deepEqual(await poll(), { status: 'STOPPED' })
+    assert.deepEqual(cursors, [])
+    verifiedAgent = agentId
+    const badHost = await startNewbiReader({ ...readerEnv, NEWBI_AGENT_KEY: 'nbi_agent_' + 'x'.repeat(43) })
+    try {
+      await assert.rejects(pollNewbiEvents(db, badHost.plugin.implementation, accountId), /CREDENTIAL_INVALID/)
+    } finally {
+      await badHost.stop()
+    }
     assert.equal((await account()).cursor, null)
     assert.deepEqual(cursors, [])
     assert.equal((await poll()).status, 'READ')
@@ -2623,7 +2650,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.deepEqual(cursors, [null])
 
     worker = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'events', accountId, '--for-seconds', '5'], {
-      env: { ...process.env, RICA_NEWBI_POLL_DATABASE_URL: url.toString(), RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret },
+      env: { ...process.env, ...readerEnv, RICA_NEWBI_POLL_DATABASE_URL: url.toString() },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })
     let output = ''
@@ -2631,6 +2658,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     worker.stderr?.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
     const [exit] = await once(worker, 'close')
     assert.equal(exit, 0, output)
+    assert.match(output, /"kind":"platform-reader".*"code":"READY"/)
     assert.deepEqual(cursors, [null, opaque, 'next-page'])
     const caughtUp = await account()
     assert.equal(caughtUp.cursor, 'tail')
@@ -2690,10 +2718,14 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     await sweepSimulationRetention(runtime)
     assert.equal(await owner.newbiEvent.count({ where: { accountId } }), 0)
     assert.equal((await account()).historyLostCount, 1)
+    const callsBeforeStop = calls
+    await host.stop()
+    await assert.rejects(reader.verify(), { name: 'AbortError' })
+    assert.equal(calls, callsBeforeStop)
   } finally {
     releasePage()
     if (worker && worker.exitCode === null) worker.kill()
-    await Promise.all([db.$disconnect(), runtime.$disconnect()])
+    await Promise.all([host.stop(), db.$disconnect(), runtime.$disconnect()])
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }

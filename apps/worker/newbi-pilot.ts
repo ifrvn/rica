@@ -4,6 +4,16 @@ import { createDatabase } from '../../packages/persistence/client.js'
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
 import { createNewbiClient, NewbiRequestError } from '../../packages/runtime/newbi-client.js'
+import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
+import { startNewbiReader } from './newbi-read-plugin.js'
+
+async function openReader(signal?: AbortSignal) {
+  const host = await startNewbiReader(process.env, signal)
+  const { id, version, contractVersion } = host.plugin
+  console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reader',
+    id, version, contractVersion, code: 'READY' }))
+  return host
+}
 
 async function readEvents(accountId: string, args: string[]) {
   const [option, seconds, ...extra] = args
@@ -15,26 +25,27 @@ async function readEvents(accountId: string, args: string[]) {
   }
   const controller = new AbortController()
   const stop = seconds ? AbortSignal.any([controller.signal, AbortSignal.timeout(Number(seconds) * 1000)]) : controller.signal
-  const client = createNewbiClient(process.env.RICA_NEWBI_LOCAL_API_URL ?? '', process.env.NEWBI_AGENT_KEY ?? '', stop)
+  const host = await openReader(stop)
+  const reader = host.plugin.implementation
   const db = createDatabase(url)
   const interrupt = () => controller.abort()
   process.once('SIGINT', interrupt)
   process.once('SIGTERM', interrupt)
   try {
     if (seconds) {
-      await runNewbiEventPoller(db, client, accountId, (result) => {
+      await runNewbiEventPoller(db, reader, accountId, (result) => {
         console.info(JSON.stringify(result))
         if (result.status === 'STOPPED' && !stop.aborted) process.exitCode = 1
       }, stop)
     } else {
-      const result = await pollNewbiEvents(db, client, accountId, stop)
+      const result = await pollNewbiEvents(db, reader, accountId, stop)
       console.info(JSON.stringify(result))
       if (result.status === 'STOPPED') process.exitCode = 1
     }
   } finally {
     process.off('SIGINT', interrupt)
     process.off('SIGTERM', interrupt)
-    await db.$disconnect()
+    await Promise.all([host.stop(), db.$disconnect()])
   }
 }
 
@@ -47,12 +58,18 @@ async function main() {
     || (command === 'send' && retry && retry !== '--retry') || (command !== 'inspect' && command !== 'send')) {
     throw new Error('Invalid arguments')
   }
-  const client = createNewbiClient(process.env.RICA_NEWBI_LOCAL_API_URL ?? '', process.env.NEWBI_AGENT_KEY ?? '')
   if (command === 'inspect') {
-    const identity = await client.verify(false)
-    console.info(JSON.stringify({ identity, ...await client.readThread(id) }, null, 2))
+    const host = await openReader()
+    try {
+      const reader = host.plugin.implementation
+      const identity = await reader.verify()
+      console.info(JSON.stringify({ identity, ...await reader.readThread(id) }, null, 2))
+    } finally {
+      await host.stop()
+    }
     return
   }
+  const client = createNewbiClient(process.env.RICA_NEWBI_LOCAL_API_URL ?? '', process.env.NEWBI_AGENT_KEY ?? '')
   const url = process.env.RICA_NEWBI_EXECUTION_DATABASE_URL
   if (!url || !URL.canParse(url) || !['postgres:', 'postgresql:'].includes(new URL(url).protocol)) {
     throw new Error('Invalid executor database URL')
@@ -70,7 +87,9 @@ async function main() {
 try {
   await main()
 } catch (error) {
-  if (error instanceof NewbiRequestError) {
+  if (error instanceof PluginHostError) {
+    console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', ...error.diagnostic }))
+  } else if (error instanceof NewbiRequestError) {
     console.error(JSON.stringify({ reason: error.reason, retryAfterSeconds: error.retrySeconds || undefined }))
   } else {
     console.error(process.argv[2] === 'events'
