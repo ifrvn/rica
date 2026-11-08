@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { reviewTarget } from '../contracts/action-review.js'
-import type { SimulationPlatformVersion } from '../contracts/simulation-platform.js'
+import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
 import { maxSimulatedTextLength } from '../runtime/model-provider.js'
@@ -137,7 +137,7 @@ export async function generateSimulatedDraft(
 }
 
 export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, platformVersion: SimulationPlatformVersion, model: Plugin<ModelProvider>, attempt?: OutboxAttempt,
+  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter, model: Plugin<ModelProvider>, attempt?: OutboxAttempt,
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
@@ -155,12 +155,13 @@ export async function processSimulatedDraft(
     const platform = inbound.adapterId ?? (await tx.$queryRaw<{ platform: string | null }[]>`
       SELECT public.rica_simulated_review_target(${run.id}::uuid)->>'platform' AS platform
     `)[0]?.platform
-    const adapterVersion = platform ? platformVersion(platform) : undefined
-    if (!adapterVersion || (inbound.adapterId !== null && inbound.adapterVersion !== adapterVersion)) return null
+    const adapter = platform ? resolveAdapter(platform) : undefined
+    if (!adapter || (inbound.adapterId !== null
+      && (inbound.adapterId !== adapter.adapterId || inbound.adapterVersion !== adapter.adapterVersion))) return null
     const { messageText } = await tx.inboundEvent.findUniqueOrThrow({
       where: { id: run.inboundEventId }, select: { messageText: true },
     })
-    return { scope, text: messageText, platform, adapterVersion }
+    return { scope, text: messageText, platform, adapter }
   })
   const scope = input?.scope
   const request: WritingRequest | null = scope?.channel === 'PRIVATE'
@@ -195,16 +196,16 @@ export async function processSimulatedDraft(
       const target = bound?.target ? reviewTarget.parse(bound.target) : null
       const content = accepted && bound?.disclosure
         ? candidate.draft.text + '\n\nAI 披露：' + bound.disclosure : null
-      const adapterVersion = target ? platformVersion(target.platform) : undefined
+      const adapter = target ? resolveAdapter(target.platform) : undefined
       const proposed = accepted && target && target.platform === input?.platform
-        && adapterVersion && adapterVersion === input.adapterVersion && content
+        && adapter && matchesSimulationAdapter(input.adapter, adapter) && content
         && content.length <= maxSimulatedTextLength
       if (proposed) {
         const expiresAt = new Date(Date.now() + 86_400_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
         const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
         const reviewDigest = createHash('sha256').update(JSON.stringify({
-          payloadHash, target, adapterVersion, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
+          payloadHash, target, ...adapter, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
           characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
@@ -229,7 +230,7 @@ export async function processSimulatedDraft(
         await tx.actionProposal.create({
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
-            policyVersion: simulationReviewPolicyVersion, adapterVersion, expiresAt, crossPlatformDuplicate,
+            policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
           },
         })
       }

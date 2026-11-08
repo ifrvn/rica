@@ -26,7 +26,7 @@ void redis.connect().catch(() => {})
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
-  platformVersion: platforms.version,
+  resolveAdapter: platforms.resolveAdapter,
 }) : undefined
 
 const app = createApp({

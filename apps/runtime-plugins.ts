@@ -1,4 +1,4 @@
-import type { PlatformAdapter, SimulationPlatformVersion } from '../packages/contracts/simulation-platform.js'
+import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '../packages/runtime/plugin-registry.js'
 import { simulatedModelDefinition } from '../packages/runtime/simulated-model.js'
 import { simulatedPlatformDefinitions } from '../packages/runtime/simulated-platforms.js'
@@ -20,8 +20,11 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
   const ids = configured === undefined ? simulatedPlatformDefinitions.map(({ id }) => id)
     : configured === '' ? [] : configured.split(',').map((id) => id.trim())
   const host = await startHost<PlatformAdapter>('platform', simulatedPlatformDefinitions, ids, service)
-  const version: SimulationPlatformVersion = (id) => host.find(id)?.version
-  return { ...host, version }
+  const resolveAdapter: ResolveSimulationAdapter = (id) => {
+    const plugin = host.find(id)
+    return plugin && { adapterId: plugin.id, adapterVersion: plugin.version, adapterContractVersion: plugin.contractVersion }
+  }
+  return { ...host, resolveAdapter }
 }
 
 export async function startCognitionPlugins(env = process.env, service?: string) {
@@ -32,7 +35,7 @@ export async function startCognitionPlugins(env = process.env, service?: string)
     const model = models.find(modelId)!
     return {
       model,
-      platformVersion: platforms.version,
+      resolveAdapter: platforms.resolveAdapter,
       async stop() {
         await models.stop()
         await platforms.stop()

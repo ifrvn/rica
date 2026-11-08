@@ -20,7 +20,8 @@ export const runReplayView = z.object({
     rankingVersion: z.number().int(), createdAt: timestamp, evidence: z.array(evidence),
   })),
   proposal: z.object({
-    id: z.uuid(), policyVersion: z.number().int(), adapterVersion: z.string(),
+    id: z.uuid(), policyVersion: z.number().int(), adapterId: z.string().nullable(), adapterVersion: z.string(),
+    adapterContractVersion: z.number().int().positive().nullable(),
     modelId: z.string().nullable(), modelVersion: z.string().nullable(),
     reviewDecision: z.enum(['APPROVE', 'REJECT']).nullable(),
     attemptStatus: z.enum(['PERMITTED', 'UNKNOWN', 'CONFIRMED', 'NOT_SENT']).nullable(), receiptAt: timestamp.nullable(),

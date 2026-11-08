@@ -15,4 +15,21 @@ export type PlatformAdapter = Readonly<{
 }>
 
 export type ResolveSimulationPlatform = (id: string) => Plugin<PlatformAdapter> | undefined
-export type SimulationPlatformVersion = (id: string) => string | undefined
+type SimulationAdapterBinding = Readonly<{
+  adapterId: string | null
+  adapterVersion: string
+  adapterContractVersion: number | null
+}>
+
+type ActiveSimulationAdapter = Readonly<{
+  adapterId: string
+  adapterVersion: string
+  adapterContractVersion: number
+}>
+
+export type ResolveSimulationAdapter = (platformId: string) => ActiveSimulationAdapter | undefined
+
+export function matchesSimulationAdapter(expected: SimulationAdapterBinding, actual: ActiveSimulationAdapter | undefined) {
+  return actual !== undefined && expected.adapterId === actual.adapterId
+    && expected.adapterVersion === actual.adapterVersion && expected.adapterContractVersion === actual.adapterContractVersion
+}

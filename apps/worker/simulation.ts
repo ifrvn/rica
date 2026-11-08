@@ -18,7 +18,7 @@ let cursor: string | null = null
 try {
   while (!stop.signal.aborted) {
     try {
-      cursor = await runSimulationBatch(db, cursor, platforms.version)
+      cursor = await runSimulationBatch(db, cursor, platforms.resolveAdapter)
     } catch {
       console.warn(JSON.stringify({ service: 'simulation-executor', event: 'batch_failed' }))
     }

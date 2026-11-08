@@ -1,10 +1,10 @@
 import type { z } from '@hono/zod-openapi'
 import { reviewTarget, type ActionView, type actionDecision } from '../contracts/action-review.js'
-import type { SimulationPlatformVersion } from '../contracts/simulation-platform.js'
+import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
 
-export const simulationReviewPolicyVersion = 2
+export const simulationReviewPolicyVersion = 3
 
 const reviewStates = [
   'WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED',
@@ -19,7 +19,9 @@ type Proposal = {
   reviewDigest: string
   policyVersion: number
   crossPlatformDuplicate: boolean
+  adapterId: string | null
   adapterVersion: string
+  adapterContractVersion: number | null
   proposerId: string | null
   expiresAt: Date
   expired: boolean
@@ -34,7 +36,8 @@ async function proposalRows(
 ) {
   return tx.$queryRaw<Proposal[]>`
     SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest",
-      a.policy_version AS "policyVersion", a.adapter_version AS "adapterVersion",
+      a.policy_version AS "policyVersion", a.adapter_id AS "adapterId", a.adapter_version AS "adapterVersion",
+      a.adapter_contract_version AS "adapterContractVersion",
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
       a.proposer_id AS "proposerId", a.expires_at AS "expiresAt",
       a.expires_at <= statement_timestamp() AS expired,
@@ -53,7 +56,7 @@ async function proposalRows(
   `
 }
 
-async function inspect(tx: Prisma.TransactionClient, characterId: string, proposal: Proposal, platformVersion: SimulationPlatformVersion, readContent = true) {
+async function inspect(tx: Prisma.TransactionClient, characterId: string, proposal: Proposal, resolveAdapter: ResolveSimulationAdapter, readContent = true) {
   const target = reviewTarget.parse(proposal.target)
   if (!reviewStates.includes(proposal.state)) notFound()
   if (proposal.state !== 'WAITING_APPROVAL' && proposal.state !== 'READY') {
@@ -61,7 +64,7 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
   }
   if (proposal.expired) return { target, state: 'EXPIRED' as const, content: null }
   if (proposal.policyVersion !== simulationReviewPolicyVersion
-    || proposal.adapterVersion !== platformVersion(target.platform)) {
+    || !matchesSimulationAdapter(proposal, resolveAdapter(target.platform))) {
     return { target, state: 'CANCELED' as const, content: null }
   }
   const [payload] = await tx.$queryRaw<{ content: string | null; valid: boolean }[]>`
@@ -76,7 +79,7 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
 }
 
 export async function listReviewActions(
-  db: PrismaClient, scope: Scope, platformVersion: SimulationPlatformVersion, actionId?: string, limit = 25, cursor?: string,
+  db: PrismaClient, scope: Scope, resolveAdapter: ResolveSimulationAdapter, actionId?: string, limit = 25, cursor?: string,
 ) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['REVIEWER'])
@@ -84,7 +87,7 @@ export async function listReviewActions(
     if (actionId && !rows.length) notFound()
     const actions: ActionView[] = []
     for (const row of rows.slice(0, limit)) {
-      const { target, state, content } = await inspect(tx, scope.characterId, row, platformVersion, Boolean(actionId))
+      const { target, state, content } = await inspect(tx, scope.characterId, row, resolveAdapter, Boolean(actionId))
       actions.push({
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
@@ -100,7 +103,7 @@ export async function listReviewActions(
 
 export async function decideReviewAction(
   tx: Prisma.TransactionClient, scope: Scope, actionId: string, version: number,
-  input: z.infer<typeof actionDecision>, platformVersion: SimulationPlatformVersion,
+  input: z.infer<typeof actionDecision>, resolveAdapter: ResolveSimulationAdapter,
 ) {
   const [proposal] = await proposalRows(tx, scope.characterId, actionId)
   if (!proposal) notFound()
@@ -110,7 +113,7 @@ export async function decideReviewAction(
     throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
   }
 
-  const { state } = await inspect(tx, scope.characterId, proposal, platformVersion)
+  const { state } = await inspect(tx, scope.characterId, proposal, resolveAdapter)
   const valid = state === 'WAITING_APPROVAL'
   const nextState = valid ? (input.decision === 'APPROVE' ? 'READY' : 'REJECTED') : state
   const [transition] = await tx.$queryRaw<{ version: number | null }[]>`

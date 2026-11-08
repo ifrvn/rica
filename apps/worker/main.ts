@@ -5,10 +5,10 @@ import { startCognitionPlugins } from '../runtime-plugins.js'
 async function main() {
   const config = loadConfig()
   const plugins = await startCognitionPlugins(process.env, 'worker')
-  const { model, platformVersion } = plugins
+  const { model, resolveAdapter } = plugins
   let worker: Awaited<ReturnType<typeof startOutboxWorker>>
   try {
-    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, model, platformVersion)
+    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, model, resolveAdapter)
   } catch (error) {
     await plugins.stop()
     if (!(error instanceof WorkerDependencyUnavailable)) throw error
