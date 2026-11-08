@@ -22,6 +22,7 @@ type Proposal = {
   adapterVersion: string
   proposerId: string | null
   expiresAt: Date
+  expired: boolean
 }
 
 function notFound(): never {
@@ -36,6 +37,7 @@ async function proposalRows(
       a.policy_version AS "policyVersion", a.adapter_version AS "adapterVersion",
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
       a.proposer_id AS "proposerId", a.expires_at AS "expiresAt",
+      a.expires_at <= statement_timestamp() AS expired,
       r.state, r.state_version AS version
     FROM public.action_proposals a
     JOIN public.agent_runs r ON (r.character_id, r.id) = (a.character_id, a.run_id)
@@ -57,16 +59,18 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
   if (proposal.state !== 'WAITING_APPROVAL' && proposal.state !== 'READY') {
     return { target, state: proposal.state, content: null }
   }
-  if (proposal.expiresAt.getTime() <= Date.now()) return { target, state: 'EXPIRED' as const, content: null }
+  if (proposal.expired) return { target, state: 'EXPIRED' as const, content: null }
   if (proposal.policyVersion !== simulationReviewPolicyVersion
     || proposal.adapterVersion !== resolveSimulatedPlatform(target.platform).version) {
     return { target, state: 'CANCELED' as const, content: null }
   }
-  if (!readContent) return { target, state: proposal.state, content: null }
-  const [payload] = await tx.$queryRaw<{ content: string | null }[]>`
-    SELECT public.rica_review_payload(${characterId}::uuid, ${proposal.id}::uuid) AS content
+  const [payload] = await tx.$queryRaw<{ content: string | null; valid: boolean }[]>`
+    WITH checked AS MATERIALIZED (
+      SELECT public.rica_review_payload(${characterId}::uuid, ${proposal.id}::uuid) AS content
+    )
+    SELECT CASE WHEN ${readContent} THEN content END AS content, content IS NOT NULL AS valid FROM checked
   `
-  return payload?.content
+  return payload?.valid
     ? { target, state: proposal.state, content: payload.content }
     : { target, state: 'CANCELED' as const, content: null }
 }

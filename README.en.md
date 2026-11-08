@@ -4,7 +4,7 @@
 
 Rica is a runtime for AI characters that operate across platforms and social identities. One character can act through a company account, a personal account, or another persona while keeping a unified core self. Memory is isolated by identity by default. Sharing across identities requires authorization, and account permissions and approval rules govern posting and interactions.
 
-The M0 foundation includes a Hono API, a BullMQ worker, a Vue 3 admin UI, and a transactional outbox smoke test. M1 will use explicitly registered simulated platform adapters and model providers to connect event ingestion, identity binding, memory retrieval, decision-making, approval, and simulated execution. See the [system design specification (Chinese)](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md) for the full roadmap.
+Rica has passed M1–M4 simulation acceptance. It covers ingestion on two simulated platforms, identity-scoped retrieval, human approval, simulated receipts and reconciliation, daily reflection, belief evolution, autonomous goals, and longitudinal evaluation. Live platforms have a separate pilot acceptance process. See the [roadmap (Chinese)](docs/roadmap.md) and [design specification (Chinese)](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md).
 
 ## Getting started
 
@@ -39,17 +39,17 @@ pnpm run test:integration
 
 Type checking uses TypeScript 7's `tsc` for the API, worker, and shared TypeScript code. It then uses `vue-tsc` with the TypeScript 6 compatibility package to check Vue single-file components and templates.
 
-The integration test requires Redis and a PostgreSQL database with migrations applied. It inserts a test outbox event, starts the worker, and checks that BullMQ processes the event and the worker records the result in PostgreSQL.
+Integration tests require dedicated Redis and migrated PostgreSQL instances. They cover authorization and isolation, approval and execution, scheduling, longitudinal simulation, and BullMQ outbox recovery.
 
 ## Project structure
 
-- `apps/api` contains the Hono service and health checks.
-- `apps/worker` contains the BullMQ worker and the initial outbox relay.
-- `apps/admin` contains the Vue 3 service status page.
+- `apps/api` contains the Hono management API and health checks.
+- `apps/worker` contains BullMQ consumers, the outbox relay, scheduling, and the separate simulation executor.
+- `apps/admin` contains the Vue 3 service status and human review interfaces.
 - `packages` contains shared contracts, configuration, and database connectivity.
-- `prisma` contains the data model and initial migration.
+- `prisma` contains the data model, authorization policies, and versioned migrations.
 
-The outbox currently handles internal smoke-test events. Authentication, identity-scoped memory, and approvals are planned. The platform delivery path will be introduced as part of the M1 simulation.
+For the dedicated credentials required to review proposals and record simulated receipts, see the [management API](docs/management-api.md) and [simulation executor](docs/simulation-execution.md) guides.
 
 ## License
 

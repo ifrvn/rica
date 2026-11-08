@@ -344,6 +344,11 @@ test('review rechecks evidence expiry and adapter version, and records a valid r
     const preview = await request('GET', path, { actor: 'reviewer' })
     const rejected = scenario === 'reject'
     const expected = rejected ? 'WAITING_APPROVAL' : scenario === 'proposal-expiry' ? 'EXPIRED' : 'CANCELED'
+    const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
+    assert.equal(queue.status, 200)
+    const listed = queue.body.items.find(({ id }: { id: string }) => id === action.id)
+    assert.equal(listed.state, expected)
+    assert.equal(listed.content, null)
     assert.equal(preview.body.state, expected)
     assert.equal(Boolean(preview.body.content), rejected)
     const result = await request('POST', path + '/decisions', {
@@ -394,6 +399,29 @@ function simulationZone(hour: number) {
   const shift = (hour - new Date().getUTCHours() + 35) % 24 - 11
   return shift === 0 ? 'UTC' : 'Etc/GMT' + (shift > 0 ? '-' : '+') + Math.abs(shift)
 }
+
+test('receipt rechecks an ordinary writing grant after execution is permitted', async () => {
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+  const { action, grant } = await approveSimulation(await newSimulationAccount())
+  const executor = simulationDatabase()
+  try {
+    let permitted = false
+    await executeSimulation(executor, action.id, async (db, id) => {
+      permitted = true
+      const now = await databaseNow()
+      await owner.memoryGrant.update({
+        where: { id: grant.id }, data: { validFrom: new Date(now - 60_000), validUntil: new Date(now - 1000) },
+      })
+      return recordSimulationReceipt(db, id)
+    })
+    assert.equal(permitted, true)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
+    assert.equal((await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: action.id } })).status, 'NOT_SENT')
+  } finally {
+    await executor.$disconnect()
+  }
+})
 
 test('simulation defers quiet hours and rejects stale evidence or a paused binding', async () => {
   const executor = simulationDatabase()

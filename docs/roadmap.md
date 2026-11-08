@@ -84,6 +84,11 @@ PostgreSQL 18 和 Redis 8 临时环境完成全新迁移、旧库升级和 Prism
 
 PostgreSQL 18 和 Redis 8 临时环境完成全新迁移、M3 旧库升级及 Prisma 一致性检查。类型检查、管理台生产构建、7 项单元测试、61 项集成测试和 Outbox 冒烟测试通过。检索基准单独执行。复现 14 天用例可在专用测试库运行 `pnpm exec tsx --test --test-name-pattern="M4 evaluates fourteen" scripts/management.integration.test.ts`。日报和配置见[管理 API](management-api.md#每日评测与预算)。
 
+## 真实平台试点前的工程缺口
+
+- 出箱会重新投递仍未消费的事件。BullMQ 的尝试上限只约束单个队列作业，持续失败的事件需要数据库级的累计重试上限和人工处置入口。
+- 设计规范规定入站正文及审批草稿默认保留 30 天，运行引用默认保留 90 天。按保留期限清理、保留最少审计引用和备份恢复后补清理仍待实现。
+
 ## M2 退出证据
 
 | 工作包 | 验收证据 |
