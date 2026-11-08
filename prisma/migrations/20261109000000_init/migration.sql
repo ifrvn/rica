@@ -4937,7 +4937,7 @@ ALTER TABLE public.context_snapshot_evidence ENABLE ROW LEVEL SECURITY;
 -- Name: context_snapshot_evidence context_snapshot_evidence_owner; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY context_snapshot_evidence_owner ON public.context_snapshot_evidence TO postgres USING (true) WITH CHECK (true);
+CREATE POLICY context_snapshot_evidence_owner ON public.context_snapshot_evidence TO CURRENT_USER USING (true) WITH CHECK (true);
 
 
 --
@@ -4961,7 +4961,7 @@ ALTER TABLE public.context_snapshots ENABLE ROW LEVEL SECURITY;
 -- Name: context_snapshots context_snapshots_owner; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY context_snapshots_owner ON public.context_snapshots TO postgres USING (true) WITH CHECK (true);
+CREATE POLICY context_snapshots_owner ON public.context_snapshots TO CURRENT_USER USING (true) WITH CHECK (true);
 
 
 --
@@ -4975,7 +4975,7 @@ CREATE POLICY context_snapshots_runtime ON public.context_snapshots TO rica_runt
 -- Name: daily_energy_projections daily_energy_owner; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY daily_energy_owner ON public.daily_energy_projections TO postgres USING (true) WITH CHECK (true);
+CREATE POLICY daily_energy_owner ON public.daily_energy_projections TO CURRENT_USER USING (true) WITH CHECK (true);
 
 
 --
@@ -4988,7 +4988,7 @@ ALTER TABLE public.daily_energy_projections ENABLE ROW LEVEL SECURITY;
 -- Name: identity_state_revisions identity_state_owner; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY identity_state_owner ON public.identity_state_revisions TO postgres USING (true) WITH CHECK (true);
+CREATE POLICY identity_state_owner ON public.identity_state_revisions TO CURRENT_USER USING (true) WITH CHECK (true);
 
 
 --
@@ -5007,7 +5007,7 @@ ALTER TABLE public.memories ENABLE ROW LEVEL SECURITY;
 -- Name: memories memories_admin; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY memories_admin ON public.memories TO postgres, rica_memory_admin USING (true) WITH CHECK (true);
+CREATE POLICY memories_admin ON public.memories TO CURRENT_USER, rica_memory_admin USING (true) WITH CHECK (true);
 
 
 --
@@ -5049,7 +5049,7 @@ ALTER TABLE public.memory_grants ENABLE ROW LEVEL SECURITY;
 -- Name: memory_grants memory_grants_admin; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY memory_grants_admin ON public.memory_grants TO postgres, rica_memory_admin USING (true) WITH CHECK (true);
+CREATE POLICY memory_grants_admin ON public.memory_grants TO CURRENT_USER, rica_memory_admin USING (true) WITH CHECK (true);
 
 
 --
@@ -5078,7 +5078,7 @@ ALTER TABLE public.memory_sources ENABLE ROW LEVEL SECURITY;
 -- Name: memory_sources memory_sources_admin; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY memory_sources_admin ON public.memory_sources TO postgres, rica_memory_admin USING (true) WITH CHECK (true);
+CREATE POLICY memory_sources_admin ON public.memory_sources TO CURRENT_USER, rica_memory_admin USING (true) WITH CHECK (true);
 
 
 --
@@ -5099,7 +5099,7 @@ ALTER TABLE public.simulated_drafts ENABLE ROW LEVEL SECURITY;
 -- Name: simulated_drafts simulated_drafts_owner; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY simulated_drafts_owner ON public.simulated_drafts TO postgres USING (true) WITH CHECK (true);
+CREATE POLICY simulated_drafts_owner ON public.simulated_drafts TO CURRENT_USER USING (true) WITH CHECK (true);
 
 
 --
@@ -5122,7 +5122,7 @@ ALTER TABLE public.sources_registry ENABLE ROW LEVEL SECURITY;
 -- Name: sources_registry sources_registry_admin; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY sources_registry_admin ON public.sources_registry TO postgres, rica_memory_admin USING (true) WITH CHECK (true);
+CREATE POLICY sources_registry_admin ON public.sources_registry TO CURRENT_USER, rica_memory_admin USING (true) WITH CHECK (true);
 
 
 --
