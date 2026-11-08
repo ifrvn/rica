@@ -3,9 +3,10 @@ import { z } from '@hono/zod-openapi'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
-import { createNewbiClient, NewbiRequestError } from '../../packages/runtime/newbi-client.js'
+import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
 import { startNewbiReader } from './newbi-read-plugin.js'
+import { startNewbiExecutor } from './newbi-execution-plugin.js'
 
 async function openReader(signal?: AbortSignal) {
   const host = await startNewbiReader(process.env, signal)
@@ -69,18 +70,21 @@ async function main() {
     }
     return
   }
-  const client = createNewbiClient(process.env.RICA_NEWBI_LOCAL_API_URL ?? '', process.env.NEWBI_AGENT_KEY ?? '')
   const url = process.env.RICA_NEWBI_EXECUTION_DATABASE_URL
   if (!url || !URL.canParse(url) || !['postgres:', 'postgresql:'].includes(new URL(url).protocol)) {
     throw new Error('Invalid executor database URL')
   }
+  const host = await startNewbiExecutor()
+  const { id: pluginId, version, contractVersion, implementation } = host.plugin
+  console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reply-executor',
+    id: pluginId, version, contractVersion, code: 'READY' }))
   const db = createDatabase(url)
   try {
-    const result = await executeNewbiReply(db, client, id, retry === '--retry')
+    const result = await executeNewbiReply(db, implementation, id, retry === '--retry')
     console.info(JSON.stringify(result))
     if (result.status !== 'SENT') process.exitCode = 1
   } finally {
-    await db.$disconnect()
+    await Promise.all([host.stop(), db.$disconnect()])
   }
 }
 
@@ -89,7 +93,7 @@ try {
 } catch (error) {
   if (error instanceof PluginHostError) {
     console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', ...error.diagnostic }))
-  } else if (error instanceof NewbiRequestError) {
+  } else if (error instanceof PlatformReplyError) {
     console.error(JSON.stringify({ reason: error.reason, retryAfterSeconds: error.retrySeconds || undefined }))
   } else {
     console.error(process.argv[2] === 'events'

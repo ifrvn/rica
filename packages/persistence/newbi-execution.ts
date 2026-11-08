@@ -1,5 +1,5 @@
 import type { PrismaClient } from './generated/client.js'
-import { NewbiRequestError, type NewbiClient } from '../runtime/newbi-client.js'
+import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
 
 type Target = {
   agentId: string; endpoint: string; postId: string; status: string; attempts: number
@@ -7,10 +7,10 @@ type Target = {
 }
 type Claim = { id: string; postId: string; content: string; attempt: number }
 type Outcome =
-  | { status: 'UNAVAILABLE' | 'UNKNOWN' | 'CLOSED'; reason?: NewbiRequestError['reason']; retryNotBefore?: string }
+  | { status: 'UNAVAILABLE' | 'UNKNOWN' | 'CLOSED'; reason?: PlatformReplyError['reason']; retryNotBefore?: string }
   | { status: 'SENT'; commentId: string }
 
-export async function executeNewbiReply(db: PrismaClient, client: NewbiClient, id: string, retry = false): Promise<Outcome> {
+export async function executeNewbiReply(db: PrismaClient, client: PlatformReplyExecutor, id: string, retry = false): Promise<Outcome> {
   const [row] = await db.$queryRaw<{ target: Target | null }[]>`
     SELECT public.rica_newbi_execution_target(${id}::uuid) AS target
   `
@@ -25,12 +25,12 @@ export async function executeNewbiReply(db: PrismaClient, client: NewbiClient, i
 
   let agentId: string
   try {
-    agentId = (await client.verify(true)).id
+    agentId = (await client.verify()).id
     if (agentId !== target.agentId) return { status: 'UNAVAILABLE' }
-    const { post } = await client.readThread(target.postId)
-    if (post.isLocked) throw new NewbiRequestError('POST_LOCKED')
+    const post = await client.readTarget(target.postId)
+    if (post.isLocked) throw new PlatformReplyError('POST_LOCKED')
   } catch (error) {
-    if (!(error instanceof NewbiRequestError)) throw error
+    if (!(error instanceof PlatformReplyError)) throw error
     const locked = error.reason === 'POST_LOCKED'
     let closed = false
     if (error.retrySeconds || locked) {
@@ -52,12 +52,12 @@ export async function executeNewbiReply(db: PrismaClient, client: NewbiClient, i
 
   const { id: idempotencyKey, postId, content, attempt } = claim.payload
   let commentId: string | null = null
-  let failure: NewbiRequestError | undefined
+  let failure: PlatformReplyError | undefined
   try {
-    commentId = await client.comment(postId, idempotencyKey, content)
+    commentId = await client.sendReply(postId, idempotencyKey, content)
   } catch (error) {
     // A lost response can hide a successful write. Keep the same key for any explicit retry.
-    if (error instanceof NewbiRequestError) failure = error
+    if (error instanceof PlatformReplyError) failure = error
   }
   const locked = failure?.reason === 'POST_LOCKED'
   const seconds = failure?.retrySeconds ?? 0

@@ -1,7 +1,8 @@
 import { request as directRequest } from 'node:http'
 import { z } from '@hono/zod-openapi'
 import { newbiEndpoint } from '../contracts/newbi-pilot.js'
-import { PlatformReadError, type PlatformEventReader, type PlatformReadFailure } from '../contracts/platform-reader.js'
+import type { PlatformEventReader } from '../contracts/platform-reader.js'
+import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
 
 const uuid = z.uuid().transform((value) => value.toLowerCase())
 const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string() })
@@ -30,8 +31,6 @@ const expiredCursor = z.object({
 class NewbiEventCursorExpired extends Error {
   constructor(readonly resetCursor: string) { super('Newbi event history was lost') }
 }
-
-export class NewbiRequestError extends PlatformReadError<PlatformReadFailure | 'POST_LOCKED'> {}
 
 function createTransport(endpoint: string, credential: string, stop?: AbortSignal) {
   const base = newbiEndpoint.parse(endpoint)
@@ -64,10 +63,10 @@ function createTransport(endpoint: string, credential: string, stop?: AbortSigna
           const retryAfter = res.headers['retry-after']
           const seconds = retryAfter && /^\d+$/u.test(retryAfter) ? Number(retryAfter) : 30
           const wait = Math.min(seconds, 2_147_483_644) + 1 + Math.floor(Math.random() * 3)
-          if (status === 429) reject(new NewbiRequestError('RATE_LIMITED', wait))
-          else if (status === 503) reject(new NewbiRequestError('SERVICE_UNAVAILABLE', wait))
-          else if (status === 401) reject(new NewbiRequestError('CREDENTIAL_INVALID'))
-          else if (status === 403) reject(new NewbiRequestError('ACCESS_DENIED'))
+          if (status === 429) reject(new PlatformReplyError('RATE_LIMITED', wait))
+          else if (status === 503) reject(new PlatformReplyError('SERVICE_UNAVAILABLE', wait))
+          else if (status === 401) reject(new PlatformReplyError('CREDENTIAL_INVALID'))
+          else if (status === 403) reject(new PlatformReplyError('ACCESS_DENIED'))
           else reject(new Error('Newbi request rejected'))
           return
         }
@@ -87,7 +86,7 @@ function createTransport(endpoint: string, credential: string, stop?: AbortSigna
               reject(failure.success ? new NewbiEventCursorExpired(failure.data.data.resetCursor) : new Error('Invalid Newbi cursor reset'))
             } else if (status === 409) {
               const lock = z.object({ errorCode: z.literal('POST_LOCKED') }).safeParse(parsed)
-              reject(lock.success ? new NewbiRequestError('POST_LOCKED') : new Error('Newbi request conflict'))
+              reject(lock.success ? new PlatformReplyError('POST_LOCKED') : new Error('Newbi request conflict'))
             } else {
               resolve(parsed)
             }
@@ -109,11 +108,11 @@ function createReads(get: (path: string) => Promise<unknown>) {
     async verify(writing: boolean) {
       const status = z.object({ state: z.enum(['OPEN', 'READ_ONLY', 'CLOSED']), protocolVersion: z.literal(1) })
         .parse(await get('/status'))
-      if (status.state === 'CLOSED') throw new NewbiRequestError('COMMUNITY_CLOSED')
+      if (status.state === 'CLOSED') throw new PlatformReplyError('COMMUNITY_CLOSED')
       if (writing && status.state !== 'OPEN') throw new Error('Newbi is unavailable for this operation')
       const identity = agent.parse(await get('/me'))
       if (identity.accessStatus !== 'ACTIVE' && (writing || identity.accessStatus !== 'LIMITED')) {
-        throw new NewbiRequestError('ACCESS_DENIED')
+        throw new PlatformReplyError('ACCESS_DENIED')
       }
       const rules = z.object({
         idempotencyDays: z.number().int().positive(),
@@ -162,12 +161,17 @@ export function createNewbiReadClient(endpoint: string, credential: string, stop
   return reader satisfies PlatformEventReader
 }
 
-export function createNewbiClient(endpoint: string, credential: string, stop?: AbortSignal) {
+export function createNewbiReplyExecutor(endpoint: string, credential: string, stop?: AbortSignal): PlatformReplyExecutor {
   const transport = createTransport(endpoint, credential, stop)
+  const { verify, readThread } = createReads(transport.get)
   return {
     endpoint: transport.endpoint,
-    ...createReads(transport.get),
-    async comment(postId: string, key: string, content: string) {
+    verify: () => verify(true),
+    async readTarget(postId) {
+      const { post } = await readThread(postId)
+      return { isLocked: post.isLocked }
+    },
+    async sendReply(postId, key, content) {
       const id = uuid.parse(postId)
       const result = z.object({ id: uuid, postId: uuid, replayed: z.boolean() }).parse(
         await transport.request('/posts/' + id + '/comments', 201, { id: uuid.parse(key), content }),
@@ -177,5 +181,3 @@ export function createNewbiClient(endpoint: string, credential: string, stop?: A
     },
   }
 }
-
-export type NewbiClient = ReturnType<typeof createNewbiClient>
