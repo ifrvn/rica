@@ -29,6 +29,11 @@ export async function loadMemoryReadScope(
 
   const binding = await lockSimulatedBinding(tx, run.accountId)
   if (!binding || !bindingMatches(run, binding)) return null
+  // A retention sweep may have compacted the run while the binding lock was being acquired.
+  const current = await tx.agentRun.findFirst({
+    where: { id: runId, state: 'CONTEXT_READY', referencesExpiredAt: null }, select: { id: true },
+  })
+  if (!current) return null
   const context = await lockEventContext(tx, binding, run.inboundEvent)
   if (!context) return null
   const { channel, conversationId, contactId } = context

@@ -261,6 +261,7 @@ model InboundEvent {
   accountId      String          @map("account_id") @db.Uuid
   sourceKey      String          @map("source_key") @db.VarChar(256)
   messageText    String?         @map("message_text")
+  bodyExpiredAt  DateTime?       @map("body_expired_at") @db.Timestamptz
   adapterId      String?         @map("adapter_id")
   adapterVersion String?         @map("adapter_version")
   kind           InboundKind
@@ -295,6 +296,7 @@ model AgentRun {
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
   goalRefs Json @default("[]") @map("goal_refs")
   contextTimezone String?         @map("context_timezone")
+  referencesExpiredAt DateTime?   @map("references_expired_at") @db.Timestamptz
   inboundEvent    InboundEvent    @relation(fields: [characterId, identityId, accountId, inboundEventId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
   core            CoreVersion     @relation(fields: [characterId, coreVersion], references: [characterId, version], onDelete: Restrict, onUpdate: NoAction)
   identity        IdentityVersion @relation(fields: [characterId, identityId, identityVersion], references: [characterId, identityId, version], onDelete: Restrict, onUpdate: NoAction)

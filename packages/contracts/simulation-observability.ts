@@ -13,6 +13,7 @@ export const runReplayView = z.object({
   bindingVersion: z.number().int(), authEpoch: z.number().int(),
   occurredAt: timestamp, createdAt: timestamp, contextTimezone: z.string().nullable(),
   goalRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })),
+  referencesExpiredAt: timestamp.nullable(),
   beliefRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })).max(8),
   snapshots: z.array(z.object({
     id: z.uuid(), purpose: z.enum(['INTERNAL_CONTEXT', 'DECISION_SUPPORT', 'PUBLIC_REFERENCE', 'PRIVATE_REPLY']),

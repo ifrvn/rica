@@ -6,6 +6,7 @@ import { scanIdentityReflections } from '../../packages/persistence/identity-ref
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
+import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
 import { simulatedModelPlugin, type ModelProvider } from '../../packages/runtime/model-provider.js'
 import type { Plugin } from '../../packages/runtime/plugin-registry.js'
@@ -164,7 +165,19 @@ export async function startOutboxWorker(
     }
   }
 
-  const loops = [relay(), scheduleLoop(), reflectionLoop()]
+  async function retentionLoop() {
+    while (!stop.signal.aborted) {
+      let changed = 0
+      try {
+        changed = await sweepSimulationRetention(db)
+      } catch {
+        logError()
+      }
+      await sleep(changed > 0 ? 1000 : 60_000, undefined, { signal: stop.signal }).catch(() => {})
+    }
+  }
+
+  const loops = [relay(), scheduleLoop(), reflectionLoop(), retentionLoop()]
   return {
     async close() {
       stop.abort()

@@ -143,13 +143,21 @@ export async function processSimulatedDraft(
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
       ...(attempt ? { generation: attempt.generation, attempts: attempt.ticket } : {}) },
     include: {
-      run: { include: { inboundEvent: { select: { messageText: true, adapterId: true, adapterVersion: true } } } },
+      run: { include: { inboundEvent: { select: { adapterId: true, adapterVersion: true } } } },
     },
   })
   const run = event?.run
   if (!run) return
 
-  const scope = await db.$transaction((tx) => loadMemoryReadScope(tx, run.id, decisionRequest))
+  const input = await db.$transaction(async (tx) => {
+    const scope = await loadMemoryReadScope(tx, run.id, decisionRequest)
+    if (!scope) return null
+    const { messageText } = await tx.inboundEvent.findUniqueOrThrow({
+      where: { id: run.inboundEventId }, select: { messageText: true },
+    })
+    return { scope, text: messageText }
+  })
+  const scope = input?.scope
   const request: WritingRequest | null = scope?.channel === 'PRIVATE'
     ? { purpose: 'PRIVATE_REPLY' }
     : scope?.channel === 'PUBLIC' && scope.conversation_id
@@ -158,7 +166,7 @@ export async function processSimulatedDraft(
 
   // Model calls stay outside the write transaction. A retry can rebuild from the same snapshots.
   const signal = AbortSignal.timeout(5_000)
-  const text = run.inboundEvent.messageText
+  const text = input?.text ?? null
   const candidate = request && text !== null
     ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal)
     : null

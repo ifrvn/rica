@@ -12,6 +12,7 @@ import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
+import { sweepSimulationRetention } from '../packages/persistence/simulation-retention.js'
 import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { scanIdentityReflections } from '../packages/persistence/identity-reflection.js'
@@ -1840,6 +1841,120 @@ test('a crashed outbox attempt consumes its ticket and a late failure cannot rel
     assert.ok((await owner.outboxEvent.findUniqueOrThrow({ where: { eventId } })).quarantinedAt)
   } finally {
     await runtime.$disconnect()
+  }
+})
+
+async function ageSimulationRun(runId: string, days: number) {
+  const createdAt = new Date((await databaseNow()) - days * 86_400_000)
+  const run = await owner.agentRun.update({ where: { id: runId }, data: { createdAt } })
+  const inbound = await owner.inboundEvent.update({ where: { id: run.inboundEventId }, data: { receivedAt: createdAt } })
+  await owner.simulatedDraft.updateMany({ where: { runId }, data: { createdAt } })
+  return inbound
+}
+
+async function drainSimulationRetention(runtime: ReturnType<typeof createDatabase>) {
+  while (await sweepSimulationRetention(runtime) > 0) { /* Drain the fixture batches. */ }
+}
+
+test('simulation retention removes bodies and references at separate cutoffs while preserving deduplication and receipts', async () => {
+  const identityId = await reflectionIdentity()
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  const archived = (await approveSimulation(await newSimulationAccount(identityId), undefined, identityId)).action
+  const redacted = (await approveSimulation(await newSimulationAccount(identityId), undefined, identityId)).action
+  const fresh = (await approveSimulation(await newSimulationAccount(identityId), undefined, identityId)).action
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    await executeSimulation(executor, archived.id)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: archived.id } }), 1)
+    const inbound = await ageSimulationRun(archived.runId, 91)
+    await ageSimulationRun(redacted.runId, 31)
+    await ageSimulationRun(fresh.runId, 29)
+    assert.ok(await owner.contextSnapshot.count({ where: { runId: archived.runId } }) > 0)
+    await Promise.all([drainSimulationRetention(runtime), drainSimulationRetention(runtime)])
+    assert.equal(await sweepSimulationRetention(runtime), 0)
+
+    for (const { runId } of [archived, redacted, fresh]) {
+      const run = await owner.agentRun.findUniqueOrThrow({ where: { id: runId }, include: { inboundEvent: true, draft: true } })
+      const bodyRetained = runId === fresh.runId
+      assert.equal(run.inboundEvent.messageText !== null, bodyRetained)
+      assert.equal(run.draft?.content != null, bodyRetained)
+      assert.equal(run.referencesExpiredAt !== null, runId === archived.runId)
+    }
+    assert.equal(await owner.contextSnapshot.count({ where: { runId: archived.runId } }), 0)
+    assert.ok(await owner.contextSnapshot.count({ where: { runId: redacted.runId } }) > 0)
+    const archivedDraft = await owner.simulatedDraft.findUniqueOrThrow({ where: {
+      characterId_runId: { characterId: a, runId: archived.runId },
+    } })
+    assert.deepEqual(archivedDraft.writingEvidenceIds, [])
+    assert.deepEqual(archivedDraft.decisionEvidenceIds, [])
+    assert.deepEqual(archivedDraft.citationIds, [])
+    const replay = await request('GET', characterPath(a) + '/runs/' + archived.runId + '/replay')
+    assert.equal(replay.status, 200, JSON.stringify(replay.body))
+    assert.ok(replay.body.referencesExpiredAt)
+    assert.deepEqual(replay.body.snapshots, [])
+    assert.deepEqual(replay.body.beliefRefs, [])
+    assert.deepEqual(replay.body.goalRefs, [])
+    assert.equal(replay.body.proposal.attemptStatus, 'CONFIRMED')
+    assert.ok(replay.body.proposal.receiptAt)
+    assert.equal(await recordSimulationReceipt(executor, archived.id), true)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: archived.id } }), 1)
+
+    const duplicate = await ingestSimulatedEvent(runtime, {
+      accountId: inbound.accountId, conversationId: inbound.conversationId!, sourceKey: inbound.sourceKey,
+      kind: inbound.kind, messageText: 'Retried original inbound', occurredAt: inbound.occurredAt,
+    })
+    assert.deepEqual(duplicate, { status: 'DUPLICATE', runId: archived.runId })
+    const expired = await request('GET', actionPath(redacted.id), { actor: 'reviewer' })
+    assert.equal(expired.body.content, null)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
+  }
+})
+
+test('retention preserves unknown-delivery reconciliation and stops an expired run from rebuilding drafts', async () => {
+  const identityId = await reflectionIdentity()
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  const unknown = (await approveSimulation(await newSimulationAccount(identityId), undefined, identityId)).action
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    await assert.rejects(executeSimulation(executor, unknown.id, async () => { throw new Error('synthetic lost outcome') }))
+    await owner.simulationAttempt.update({
+      where: { actionId: unknown.id }, data: { permitUntil: new Date((await databaseNow()) - 16 * 60_000) },
+    })
+    await ageSimulationRun(unknown.runId, 91)
+    const pending = await prepareTopic(runtime, await topicAccount(identityId, 'mock-b'), 'Retention of pending run')
+    const inbound = await ageSimulationRun(pending.runId, 91)
+    await drainSimulationRetention(runtime)
+    const scrubbed = await owner.inboundEvent.findUniqueOrThrow({ where: { id: inbound.id } })
+    assert.equal(scrubbed.messageText, null)
+    assert.ok(scrubbed.bodyExpiredAt)
+    assert.equal(scrubbed.adapterId, 'mock-b')
+
+    const path = actionPath(unknown.id) + '/reconciliation'
+    const proof = await request('GET', path)
+    assert.equal(proof.status, 200)
+    assert.equal(proof.body.outcome, 'DEFINITELY_NOT_SENT')
+    assert.ok(proof.body.evidenceRef)
+    const resolved = await request('POST', path, {
+      key: 'retained-unknown-ledger', ifMatch: proof.headers.get('etag') ?? '',
+      data: { outcome: proof.body.outcome, evidenceRef: proof.body.evidenceRef, reason: 'Checked retained ledger' },
+    })
+    assert.equal(resolved.status, 200, JSON.stringify(resolved.body))
+    assert.equal(resolved.body.status, 'BLOCKED')
+    await processSimulatedDraft(runtime, pending.eventId, {
+      ...simulatedModelPlugin,
+      implementation: {
+        ...simulatedModelPlugin.implementation,
+        async decide() { return assert.fail('Expired run reached the model') },
+      },
+    })
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: pending.runId } })).state, 'EXPIRED')
+    assert.equal(await owner.contextSnapshot.count({ where: { runId: pending.runId } }), 0)
+    assert.equal(await owner.actionProposal.count({ where: { runId: pending.runId } }), 0)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }
 })
 
