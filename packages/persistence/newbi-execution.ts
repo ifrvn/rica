@@ -10,9 +10,9 @@ type Outcome =
   | { status: 'UNAVAILABLE' | 'UNKNOWN' | 'CLOSED'; reason?: PlatformReplyError['reason']; retryNotBefore?: string }
   | { status: 'SENT'; commentId: string }
 
-export async function executeNewbiReply(db: PrismaClient, client: PlatformReplyExecutor, id: string, retry = false): Promise<Outcome> {
+export async function executeNewbiReply(db: PrismaClient, client: PlatformReplyExecutor, executorKey: string, id: string, retry = false): Promise<Outcome> {
   const [row] = await db.$queryRaw<{ target: Target | null }[]>`
-    SELECT public.rica_newbi_execution_target(${id}::uuid) AS target
+    SELECT public.rica_newbi_execution_target(${id}::uuid, ${executorKey}) AS target
   `
   const target = row.target
   if (!target || target.endpoint !== client.endpoint || target.attempts >= 3 || (target.status !== 'READY' && !retry)
@@ -35,7 +35,7 @@ export async function executeNewbiReply(db: PrismaClient, client: PlatformReplyE
     let closed = false
     if (error.retrySeconds || locked) {
       const [result] = await db.$queryRaw<{ changed: boolean }[]>`
-        SELECT public.rica_finish_newbi_reply(${id}::uuid,NULL,NULL,${error.retrySeconds}::int,${locked}) AS changed
+        SELECT public.rica_newbi_reply_preflight(${id}::uuid,${executorKey},${error.retrySeconds}::int,${locked}) AS changed
       `
       closed = locked && result.changed
     }
@@ -46,7 +46,7 @@ export async function executeNewbiReply(db: PrismaClient, client: PlatformReplyE
   }
 
   const [claim] = await db.$queryRaw<{ payload: Claim | null }[]>`
-    SELECT public.rica_claim_newbi_reply(${id}::uuid, ${retry}, ${agentId}::uuid, ${client.endpoint}) AS payload
+    SELECT public.rica_claim_newbi_reply(${id}::uuid, ${retry}, ${agentId}::uuid, ${client.endpoint}, ${executorKey}) AS payload
   `
   if (!claim.payload) return { status: 'UNAVAILABLE' }
 

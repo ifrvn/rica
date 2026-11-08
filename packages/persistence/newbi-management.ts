@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
+import { newbiExecutorIdentity, newbiExecutorKey } from '../contracts/newbi-executor-identity.js'
 import { coreProfile } from '../contracts/management.js'
 import { newbiInboxView, newbiReplyView, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
+
+const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
 function missing(): never { throw new ManagementError(404, 'NOT_FOUND', 'Newbi pilot resource not found') }
 function conflict(): never { throw new ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is no longer eligible') }
@@ -39,13 +42,13 @@ export async function createNewbiReply(tx: Prisma.TransactionClient, scope: Scop
   const id = randomUUID()
   const reviewDigest = createHash('sha256').update(JSON.stringify([
     id, account.id, account.instanceKey, account.remoteAccountId, account.bindingVersion,
-    character.authEpoch, input.postId, content,
+    character.authEpoch, input.postId, content, executorKey,
   ])).digest('hex')
   const [clock] = await tx.$queryRaw<{ expires: Date }[]>`SELECT clock_timestamp()+interval '24 hours' AS expires`
   await tx.newbiReply.create({
     data: { id, characterId: scope.characterId, identityId: identity.id, accountId: account.id,
       authEpoch: character.authEpoch, bindingVersion: account.bindingVersion, postId: input.postId,
-      content, reviewDigest, proposerId: scope.actor.id, expiresAt: clock.expires },
+      content, reviewDigest, executorKey, proposerId: scope.actor.id, expiresAt: clock.expires },
   })
   return { id, status: 'WAITING' }
 }
@@ -58,6 +61,7 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
     if (!reply) missing()
     return newbiReplyView.parse({
       ...reply, agentId: reply.account.remoteAccountId, endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
+      content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
       retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
     })
   }, { isolationLevel: 'RepeatableRead' })
@@ -67,7 +71,7 @@ export async function decideNewbiReply(tx: Prisma.TransactionClient, scope: Scop
   const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId } })
   if (!reply) missing()
   if (reply.proposerId === scope.actor.id) denyPermission()
-  if (reply.status !== 'WAITING' || reply.reviewDigest !== input.reviewDigest) conflict()
+  if (reply.status !== 'WAITING' || reply.executorKey !== executorKey || reply.reviewDigest !== input.reviewDigest) conflict()
   const account = await boundAccount(tx, scope.characterId, reply.accountId)
   if (!account || account.status !== 'ACTIVE' || account.identity.status !== 'ACTIVE'
     || account.identity.character.status !== 'ACTIVE' || account.bindingVersion !== reply.bindingVersion
@@ -76,7 +80,8 @@ export async function decideNewbiReply(tx: Prisma.TransactionClient, scope: Scop
   if (reply.expiresAt <= clock.now) conflict()
   const status = input.decision === 'APPROVE' ? 'READY' : 'REJECTED'
   const { count } = await tx.newbiReply.updateMany({
-    where: { id, status: 'WAITING' }, data: { status, reviewerId: scope.actor.id },
+    where: { id, status: 'WAITING', executorKey },
+    data: { status, reviewerId: scope.actor.id, approvedExecutorKey: status === 'READY' ? executorKey : null },
   })
   if (count !== 1) conflict()
   return { id, status }

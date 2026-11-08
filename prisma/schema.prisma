@@ -295,6 +295,8 @@ model NewbiReply {
   postId          String @map("post_id") @db.Uuid
   content         String?
   reviewDigest    String @map("review_digest") @db.VarChar(64)
+  executorKey     String? @map("executor_key")
+  approvedExecutorKey String? @map("approved_executor_key")
   proposerId      String @map("proposer_id")
   reviewerId      String? @map("reviewer_id")
   status          String @default("WAITING")

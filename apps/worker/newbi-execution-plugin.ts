@@ -1,3 +1,4 @@
+import { newbiExecutorIdentity } from '../../packages/contracts/newbi-executor-identity.js'
 import { newbiEndpoint } from '../../packages/contracts/newbi-pilot.js'
 import { createNewbiReplyExecutor } from '../../packages/runtime/newbi-client.js'
 import { startPluginHost, type PluginDefinition } from '../../packages/runtime/plugin-registry.js'
@@ -7,9 +8,7 @@ const credentialService = 'local-agent-credential'
 export async function startNewbiExecutor(env = process.env) {
   const credential = env.NEWBI_AGENT_KEY ?? ''
   const definition: PluginDefinition<ReturnType<typeof createNewbiReplyExecutor>> = {
-    id: 'newbi-local-executor',
-    version: '1.0.0',
-    contractVersion: 1,
+    ...newbiExecutorIdentity,
     requires: [credentialService],
     validateConfig: (value) => newbiEndpoint.safeParse(value).success,
     create(config) {

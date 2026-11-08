@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
 import { startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
@@ -2405,6 +2406,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
     const client = createNewbiReplyExecutor(endpoint, secret)
+    const executorKey = newbiExecutorKey(newbiExecutorIdentity)
     const inspector = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'inspect', postId], {
       env: { ...process.env, RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
@@ -2436,17 +2438,31 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       return { id, path, decide, content: preview.body.content }
     }
     const denied = await propose('Rejected fixture text', 'newbi-denied')
-    assert.deepEqual(await executeNewbiReply(executor, client, denied.id), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, denied.id), { status: 'UNAVAILABLE' })
     assert.equal((await denied.decide('REJECT')).status, 200)
-    assert.deepEqual(await executeNewbiReply(executor, client, denied.id), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, denied.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 0)
     await assert.rejects(executor.newbiReply.count(), /permission denied/i)
 
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
     assert.equal((await approved.decide('APPROVE', 'admin-a')).status, 403)
+    await assert.rejects(management.$executeRaw`
+      UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'legacy-reviewer' WHERE id = ${approved.id}::uuid
+    `, /Approval must bind the reply executor/)
     assert.equal((await approved.decide('APPROVE')).status, 200)
+    await assert.rejects(executor.$queryRaw`
+      SELECT public.rica_claim_newbi_reply(${approved.id}::uuid,false,${agentId}::uuid,${endpoint})
+    `, /permission denied/i)
+    const nextExecutor = newbiExecutorKey({ ...newbiExecutorIdentity, version: '2.0.0' })
+    const readCount = reads
+    assert.deepEqual(await executeNewbiReply(executor, client, nextExecutor, approved.id), { status: 'UNAVAILABLE' })
+    assert.equal(reads, readCount)
+    const [foreignClaim] = await executor.$queryRaw<{ claim: unknown }[]>`
+      SELECT public.rica_claim_newbi_reply(${approved.id}::uuid,false,${agentId}::uuid,${endpoint},${nextExecutor}) AS claim
+    `
+    assert.equal(foreignClaim.claim, null)
     currentAgent = randomUUID()
-    assert.deepEqual(await executeNewbiReply(executor, client, approved.id), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, approved.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 0)
     currentAgent = agentId
     const send = async (id: string, key: string, ...args: string[]) => {
@@ -2480,13 +2496,14 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const lost = await propose('Lost response fixture reply', 'newbi-unknown')
     assert.equal((await lost.decide('APPROVE')).status, 200)
     dropResponse = true
-    assert.deepEqual(await executeNewbiReply(executor, client, lost.id), { status: 'UNKNOWN' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, lost.id), { status: 'UNKNOWN' })
     assert.equal((await request('GET', lost.path)).body.status, 'UNKNOWN')
     assert.equal(sent.get(lost.id)?.content, lost.content)
     const waiting = await propose('Fixture queued behind unknown result', 'newbi-waiting')
     assert.equal((await waiting.decide('APPROVE')).status, 200)
-    assert.deepEqual(await executeNewbiReply(executor, client, waiting.id), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, waiting.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 2)
+    assert.deepEqual(await executeNewbiReply(executor, client, nextExecutor, lost.id, true), { status: 'UNAVAILABLE' })
     const withoutRetry = await send(lost.id, secret)
     assert.equal(withoutRetry.code, 1, withoutRetry.stderr)
     assert.deepEqual(JSON.parse(withoutRetry.stdout), { status: 'UNAVAILABLE' })
@@ -2503,11 +2520,11 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
 
     // Invalid credentials and locked threads never reach the comment endpoint.
     const invalidClient = createNewbiReplyExecutor(endpoint, 'nbi_agent_' + 'y'.repeat(43))
-    assert.deepEqual(await executeNewbiReply(executor, invalidClient, waiting.id),
+    assert.deepEqual(await executeNewbiReply(executor, invalidClient, executorKey, waiting.id),
       { status: 'UNAVAILABLE', reason: 'CREDENTIAL_INVALID' })
     assert.equal((await request('GET', waiting.path)).body.attempts, 0)
     locked = true
-    assert.deepEqual(await executeNewbiReply(executor, client, waiting.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, waiting.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
     assert.equal((await request('GET', waiting.path)).body.status, 'CLOSED')
     assert.equal(writes, 3)
     locked = false
@@ -2517,7 +2534,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal((await limited.decide('APPROVE')).status, 200)
     preflightLimit = true
     const limitTime = Date.now()
-    const preflight = await executeNewbiReply(executor, client, limited.id)
+    const preflight = await executeNewbiReply(executor, client, executorKey, limited.id)
     assert.equal(preflight.status, 'UNAVAILABLE')
     assert.ok('reason' in preflight && preflight.reason === 'RATE_LIMITED')
     let preview = (await request('GET', limited.path)).body
@@ -2525,31 +2542,31 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.ok(Date.parse(preview.retryNotBefore) >= limitTime + 30_000)
     const unrelated = await propose('Fixture reply behind a cooldown', 'newbi-cooldown')
     assert.equal((await unrelated.decide('APPROVE')).status, 200)
-    assert.deepEqual(await executeNewbiReply(executor, client, unrelated.id),
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, unrelated.id),
       { status: 'UNAVAILABLE', retryNotBefore: preview.retryNotBefore })
     assert.equal(writes, 3)
     preflightLimit = false
     const passCooldown = () => owner.newbiReply.update({ where: { id: limited.id }, data: { retryNotBefore: new Date(0) } })
     await passCooldown()
     writeFailure = 'LIMIT'
-    const rateLimited = await executeNewbiReply(executor, client, limited.id)
+    const rateLimited = await executeNewbiReply(executor, client, executorKey, limited.id)
     assert.equal(rateLimited.status, 'UNKNOWN')
     assert.ok('reason' in rateLimited && rateLimited.reason === 'RATE_LIMITED')
     preview = (await request('GET', limited.path)).body
     assert.equal(preview.attempts, 1)
     assert.ok(Date.parse(preview.retryNotBefore) > Date.now() + 29_000)
-    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true),
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true),
       { status: 'UNAVAILABLE', retryNotBefore: preview.retryNotBefore })
     assert.equal(writes, 4)
 
     // A lost response followed by a lock conflict cannot be treated as a confirmed failure.
     await passCooldown()
     writeFailure = 'DROP'
-    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNKNOWN' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true), { status: 'UNKNOWN' })
     writeFailure = 'LOCKED'
-    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNKNOWN', reason: 'POST_LOCKED' })
-    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNAVAILABLE' })
-    assert.deepEqual(await executeNewbiReply(executor, client, unrelated.id), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true), { status: 'UNKNOWN', reason: 'POST_LOCKED' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, unrelated.id), { status: 'UNAVAILABLE' })
     assert.equal(sent.get(limited.id)?.content, limited.content)
     assert.equal(writes, 6)
 
@@ -2566,10 +2583,10 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(preview.closureReason, closeReason)
     assert.equal(preview.remoteCommentId, null)
     assert.equal(await owner.managementAudit.count({ where: { targetId: limited.id, operation: 'newbi.reply.close' } }), 1)
-    assert.deepEqual(await executeNewbiReply(executor, client, limited.id, true), { status: 'UNAVAILABLE' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true), { status: 'UNAVAILABLE' })
     dropResponse = false
     writeFailure = 'LOCKED'
-    assert.deepEqual(await executeNewbiReply(executor, client, unrelated.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, unrelated.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
     assert.equal((await request('GET', unrelated.path)).body.status, 'CLOSED')
     assert.equal(writes, 7)
   } finally {

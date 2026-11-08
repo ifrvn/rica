@@ -3,6 +3,7 @@ import { z } from '@hono/zod-openapi'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
+import { newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
 import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
 import { startNewbiReader } from './newbi-read-plugin.js'
@@ -80,7 +81,7 @@ async function main() {
     id: pluginId, version, contractVersion, code: 'READY' }))
   const db = createDatabase(url)
   try {
-    const result = await executeNewbiReply(db, implementation, id, retry === '--retry')
+    const result = await executeNewbiReply(db, implementation, newbiExecutorKey(host.plugin), id, retry === '--retry')
     console.info(JSON.stringify(result))
     if (result.status !== 'SENT') process.exitCode = 1
   } finally {
