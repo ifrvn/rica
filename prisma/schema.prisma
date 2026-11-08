@@ -243,6 +243,7 @@ model PlatformAccount {
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
   identity        Identity       @relation(fields: [characterId, identityId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   inboundEvents   InboundEvent[]
+  newbiReplies    NewbiReply[]
   memories        Memory[]
   memorySources   SourceRecord[]
   memoryGrants    MemoryGrant[]
@@ -252,6 +253,30 @@ model PlatformAccount {
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
   @@map("platform_accounts")
+}
+
+model NewbiReply {
+  id              String @id @db.Uuid
+  characterId     String @map("character_id") @db.Uuid
+  identityId      String @map("identity_id") @db.Uuid
+  accountId       String @map("account_id") @db.Uuid
+  authEpoch       Int @map("auth_epoch")
+  bindingVersion  Int @map("binding_version")
+  postId          String @map("post_id") @db.Uuid
+  content         String?
+  reviewDigest    String @map("review_digest") @db.VarChar(64)
+  proposerId      String @map("proposer_id")
+  reviewerId      String? @map("reviewer_id")
+  status          String @default("WAITING")
+  attempts        Int @default(0)
+  leaseUntil      DateTime? @map("lease_until") @db.Timestamptz
+  remoteCommentId String? @map("remote_comment_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  expiresAt       DateTime @map("expires_at") @db.Timestamptz
+  account         PlatformAccount @relation(fields: [characterId,identityId,accountId], references: [characterId,identityId,id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([accountId,remoteCommentId])
+  @@map("newbi_replies")
 }
 
 model InboundEvent {

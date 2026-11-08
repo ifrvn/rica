@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate deploy",
     "dev:api": "tsx watch apps/api/main.ts",
     "dev:worker": "tsx watch apps/worker/main.ts",
+    "pilot:newbi": "tsx apps/worker/newbi-pilot.ts",
     "maintenance:retention": "tsx apps/worker/retention.ts",
     "dev:simulation": "tsx apps/worker/simulation.ts",
     "dev:admin": "vite --config apps/admin/vite.config.ts",

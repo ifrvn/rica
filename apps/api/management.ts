@@ -7,6 +7,8 @@ import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/cont
 import { dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
+import { newbiAccountInput, newbiDecisionInput, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import { bindNewbiAccount, createNewbiReply, decideNewbiReply, getNewbiReply } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -727,6 +729,62 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
   }), async (c) => c.json(await readSimulationBacklog(
     db, { ...c.req.valid('param'), actor: c.get('actor') },
   ), 200))
+
+  const newbi = `${character}/newbi` as const
+  const newbiReplyParams = characterParams.extend({ replyId: schema.resourceId })
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/accounts`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(newbiAccountInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => bindNewbiAccount(tx, scope, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/replies`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(newbiReplyInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'newbi.reply.create', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => createNewbiReply(tx, scope, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${newbi}/replies/{replyId}`, security,
+    request: { params: newbiReplyParams }, responses: { ...errors, 200: success(newbiReplyView) },
+  }), async (c) => {
+    const { characterId, replyId } = c.req.valid('param')
+    return c.json(await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/replies/{replyId}/decision`, security,
+    request: { params: newbiReplyParams, headers: schema.idempotencyHeader, body: body(newbiDecisionInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, replyId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'newbi.reply.review', targetScope: characterId + '/' + replyId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'], roles: ['REVIEWER'],
+    }, (tx) => decideNewbiReply(tx, scope, replyId, input))
+    return c.json({ ...result, requestId }, 200)
+  })
 
   app.doc31('/openapi.json', {
     openapi: '3.1.0', info: { title: 'Rica Management API', version: '1.0.0' }, servers: [{ url: '/v1' }],

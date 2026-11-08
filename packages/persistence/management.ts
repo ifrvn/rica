@@ -200,7 +200,7 @@ export async function control(tx: Tx, scope: Scope, input: Input<typeof contract
     if (account.status === 'REVOKED' || (operation === 'RESUME' && account.status !== 'PAUSED' && account.status !== 'ACTIVE')) {
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account cannot perform this transition')
     }
-    if (operation === 'RESUME' && account.platform !== 'mock-a' && account.platform !== 'mock-b') {
+    if (operation === 'RESUME' && account.platform !== 'mock-a' && account.platform !== 'mock-b' && account.platform !== 'newbi') {
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
     }
     // Pausing a reauthentication or pending account must not make it eligible for activation.

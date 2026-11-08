@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { createServer } from 'node:http'
+import { createNewbiClient } from '../packages/runtime/newbi-client.js'
+import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { simulatedModelPlugin } from '../packages/runtime/model-provider.js'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
@@ -136,6 +139,7 @@ after(async () => {
       await tx.sourceRecord.deleteMany({ where })
       await tx.conversation.deleteMany({ where })
       await tx.contact.deleteMany({ where })
+      await tx.newbiReply.deleteMany({ where })
       await tx.platformAccount.deleteMany({ where })
       await tx.identity.updateMany({ where, data: { status: 'PAUSED', activeVersion: null } })
       await tx.identityVersion.deleteMany({ where })
@@ -2157,6 +2161,134 @@ test('concurrent model calls share one enforced character budget and report the 
     assert.ok(report.body.days[0].reservedUnits <= budget)
   } finally {
     await runtime.$disconnect()
+  }
+})
+
+test('Newbi pilot binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async () => {
+  const agentId = randomUUID()
+  let currentAgent = agentId
+  const postId = randomUUID()
+  const secret = 'nbi_agent_' + 'x'.repeat(43)
+  const sent = new Map<string, { id: string; content: string }>()
+  let writes = 0
+  let reads = 0
+  let dropResponse = false
+  const server = createServer(async (req, res) => {
+    const path = req.url?.split('?')[0]
+    const reply = (data: unknown, status = 200) => res.writeHead(status, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ code: 0, data }))
+    if (path === '/agent-api/v1/status') return reply({ state: 'OPEN', protocolVersion: 1 })
+    if (req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
+    if (path === '/agent-api/v1/me') return reply({ id: currentAgent, username: 'fixture-agent', accessStatus: 'ACTIVE' })
+    if (path === '/agent-api/v1/rules') return reply({ idempotencyDays: 7 })
+    if (path === '/agent-api/v1/quota') return reply({ comments: [{ remaining: 5 }] })
+    if (path === '/agent-api/v1/posts/' + postId) {
+      reads++
+      return reply({ id: postId, title: 'Fixture discussion', content: 'Original context', isHidden: false, isLocked: false })
+    }
+    if (path === '/agent-api/v1/posts/' + postId + '/comments') {
+      if (req.method === 'GET') {
+        reads++
+        return reply({ items: [], nextCursor: null, hasMore: false })
+      }
+      writes++
+      const key = req.headers['idempotency-key']
+      if (typeof key !== 'string') return res.writeHead(400).end()
+      let body = ''
+      for await (const chunk of req) body += chunk
+      const { content } = JSON.parse(body) as { content: string }
+      const previous = sent.get(key)
+      if (previous && previous.content !== content) return res.writeHead(409).end()
+      const id = previous?.id ?? randomUUID()
+      sent.set(key, { id, content })
+      if (dropResponse && !previous) return res.destroy()
+      return reply({ id, postId, replayed: !!previous }, 201)
+    }
+    return res.writeHead(404).end()
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const { port } = server.address() as { port: number }
+  const endpoint = 'http://localhost:' + port + '/agent-api/v1'
+  const executorUrl = new URL(config.databaseUrl)
+  executorUrl.searchParams.set('options', '-c role=rica_newbi_executor')
+  const executor = createDatabase(executorUrl.toString())
+  try {
+    const identityId = await reflectionIdentity()
+    const prefix = characterPath(a) + '/newbi'
+    const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId, agentId, endpoint } })
+    assert.equal(binding.status, 201, JSON.stringify(binding.body))
+    const accountId = binding.body.id
+    const resumed = await request('POST', characterPath(a) + '/controls', { key: 'newbi-test-resume',
+      data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
+    assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
+    const client = createNewbiClient(endpoint, secret)
+    const inspect = await client.readThread(postId)
+    assert.equal(inspect.post.content, 'Original context')
+
+    const propose = async (text: string, key: string) => {
+      const created = await request('POST', prefix + '/replies', { key, data: { accountId, postId, content: text } })
+      assert.equal(created.status, 201, JSON.stringify(created.body))
+      const id: string = created.body.id
+      const path = prefix + '/replies/' + id
+      const preview = await request('GET', path, { actor: 'reviewer' })
+      assert.equal(preview.status, 200, JSON.stringify(preview.body))
+      assert.equal(preview.body.agentId, agentId)
+      assert.equal(preview.body.postId, postId)
+      assert.equal(preview.body.accountId, accountId)
+      assert.equal(preview.body.content.split('\n\nAI 披露：')[0], text)
+      const decide = (decision: 'APPROVE' | 'REJECT', actor = 'reviewer') => request('POST', path + '/decision', {
+        actor, key: randomUUID(), data: { decision, reviewDigest: preview.body.reviewDigest, reason: 'Checked bound reply' },
+      })
+      return { id, path, decide, content: preview.body.content }
+    }
+    const denied = await propose('Rejected fixture text', 'newbi-denied')
+    assert.deepEqual(await executeNewbiReply(executor, client, denied.id), { status: 'UNAVAILABLE' })
+    assert.equal((await denied.decide('REJECT')).status, 200)
+    assert.deepEqual(await executeNewbiReply(executor, client, denied.id), { status: 'UNAVAILABLE' })
+    assert.equal(writes, 0)
+    await assert.rejects(executor.newbiReply.count(), /permission denied/i)
+
+    const approved = await propose('Ordinary fixture reply', 'newbi-success')
+    assert.equal((await approved.decide('APPROVE', 'admin-a')).status, 403)
+    assert.equal((await approved.decide('APPROVE')).status, 200)
+    currentAgent = randomUUID()
+    assert.deepEqual(await executeNewbiReply(executor, client, approved.id), { status: 'UNAVAILABLE' })
+    assert.equal(writes, 0)
+    currentAgent = agentId
+    const normal = await executeNewbiReply(executor, client, approved.id)
+    assert.deepEqual(normal, { status: 'SENT', commentId: sent.get(approved.id)?.id })
+    assert.equal((await request('GET', approved.path)).body.remoteCommentId, sent.get(approved.id)?.id)
+    assert.equal(writes, 1)
+
+    const lost = await propose('Lost response fixture reply', 'newbi-unknown')
+    assert.equal((await lost.decide('APPROVE')).status, 200)
+    dropResponse = true
+    assert.deepEqual(await executeNewbiReply(executor, client, lost.id), { status: 'UNKNOWN' })
+    assert.equal((await request('GET', lost.path)).body.status, 'UNKNOWN')
+    assert.equal(sent.get(lost.id)?.content, lost.content)
+    const waiting = await propose('Fixture queued behind unknown result', 'newbi-waiting')
+    assert.equal((await waiting.decide('APPROVE')).status, 200)
+    assert.deepEqual(await executeNewbiReply(executor, client, waiting.id), { status: 'UNAVAILABLE' })
+    assert.equal(writes, 2)
+    const restart = createDatabase(executorUrl.toString())
+    try {
+      assert.deepEqual(await executeNewbiReply(restart, client, lost.id), { status: 'UNAVAILABLE' })
+      assert.deepEqual(await executeNewbiReply(restart, client, lost.id.toUpperCase(), true),
+        { status: 'SENT', commentId: sent.get(lost.id)?.id })
+    } finally {
+      await restart.$disconnect()
+    }
+    const receipt = await request('GET', lost.path)
+    assert.equal(receipt.body.remoteCommentId, sent.get(lost.id)?.id)
+    assert.equal(receipt.body.attempts, 2)
+    assert.equal(sent.size, 2)
+    assert.equal(writes, 3)
+    assert.ok(reads >= 8)
+  } finally {
+    await executor.$disconnect()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
 

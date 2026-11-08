@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
 type Character = { id: string; slug: string; profile: { name?: string } | null }
@@ -18,6 +19,14 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 let pending: { signature: string; key: string } | undefined
+const newbiId = ref('')
+const newbiReply = ref<NewbiReplyView>()
+const newbiReason = ref('')
+let newbiPending: { signature: string; key: string } | undefined
+const newbiPath = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/newbi/replies')
+const newbiStatus: Record<NewbiReplyView['status'], string> = {
+  WAITING: '待审', READY: '已批准', REJECTED: '已拒绝', IN_FLIGHT: '发送中', UNKNOWN: '待核对', SENT: '已发送',
+}
 
 const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/actions')
 const statusText: Record<ActionView['state'], string> = {
@@ -53,6 +62,7 @@ async function run(task: () => Promise<void>) {
     if ([401, 403, 404, 409, 412].includes(status) && selected.value) {
       selected.value = { ...selected.value, content: null }
     }
+    if ([401, 403, 404, 409, 412].includes(status)) newbiReply.value = undefined
   } finally {
     busy.value = false
   }
@@ -75,7 +85,15 @@ function resetReview() {
   pending = undefined
 }
 
+function resetNewbi() {
+  newbiId.value = ''
+  newbiReply.value = undefined
+  newbiReason.value = ''
+  newbiPending = undefined
+}
+
 function disconnect() {
+  resetNewbi()
   token.value = ''
   tokenInput.value = ''
   characters.value = []
@@ -102,6 +120,7 @@ async function loadQueue(append = false) {
 }
 
 function changeCharacter() {
+  resetNewbi()
   actions.value = []
   nextCursor.value = null
   resetReview()
@@ -137,6 +156,38 @@ async function decide(decision: Decision) {
     reason.value = ''
     pending = undefined
     notice.value = outcome.status === 'READY' ? '已批准模拟提案。' : '已拒绝模拟提案。'
+  })
+}
+async function openNewbiReply() {
+  const id = newbiId.value.trim()
+  if (!id) return
+  await run(async () => {
+    newbiReply.value = undefined
+    newbiReason.value = ''
+    newbiPending = undefined
+    newbiReply.value = await request<NewbiReplyView>(newbiPath.value + '/' + encodeURIComponent(id))
+  })
+}
+
+async function decideNewbi(decision: Decision) {
+  const reply = newbiReply.value
+  const reason = newbiReason.value.trim()
+  if (busy.value || !reply?.content || reply.status !== 'WAITING' || !reason) return
+  const data = { decision, reviewDigest: reply.reviewDigest, reason }
+  const signature = JSON.stringify([reply.id, data])
+  if (newbiPending?.signature !== signature) newbiPending = { signature, key: crypto.randomUUID() }
+  const { key } = newbiPending
+  await run(async () => {
+    const result = await request<{ status: 'READY' | 'REJECTED' }>(
+      newbiPath.value + '/' + encodeURIComponent(reply.id) + '/decision', token.value, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+        body: JSON.stringify(data),
+      },
+    )
+    newbiReply.value = { ...reply, status: result.status }
+    newbiReason.value = ''
+    newbiPending = undefined
+    notice.value = result.status === 'READY' ? '扭笔回复已批准，等待单次执行。' : '扭笔回复已拒绝。'
   })
 }
 </script>
@@ -207,6 +258,35 @@ async function decide(decision: Decision) {
           </form>
         </section>
       </div>
+      <details v-if="characterId" class="proposal newbi-review">
+        <summary>扭笔本地试点</summary>
+        <form @submit.prevent="openNewbiReply">
+          <label for="newbi-reply-id">提案 ID</label>
+          <input id="newbi-reply-id" v-model="newbiId" required :disabled="busy" />
+          <button type="submit" :disabled="busy || !newbiId.trim()">查看扭笔提案</button>
+        </form>
+        <template v-if="newbiReply">
+          <h3>扭笔回复 · {{ newbiStatus[newbiReply.status] }}</h3>
+          <dl>
+            <dt>本机平台</dt><dd>{{ newbiReply.endpoint }}</dd>
+            <dt>身份与账号</dt><dd>{{ newbiReply.identityId }} / {{ newbiReply.accountId }}</dd>
+            <dt>扭笔 Agent</dt><dd>{{ newbiReply.agentId }}</dd>
+            <dt>目标帖子</dt><dd>{{ newbiReply.postId }} · 公开回复</dd>
+            <template v-if="newbiReply.remoteCommentId">
+              <dt>评论回执</dt><dd>{{ newbiReply.remoteCommentId }}</dd>
+            </template>
+          </dl>
+          <p v-if="newbiReply.content" class="payload">{{ newbiReply.content }}</p>
+          <form v-if="newbiReply.status === 'WAITING' && newbiReply.content" @submit.prevent="decideNewbi('APPROVE')">
+            <label for="newbi-reason">审批理由</label>
+            <textarea id="newbi-reason" v-model="newbiReason" maxlength="240" rows="3" required :disabled="busy" />
+            <div class="decision-buttons">
+              <button class="primary" type="submit" :disabled="busy || !newbiReason.trim()">批准扭笔回复</button>
+              <button type="button" :disabled="busy || !newbiReason.trim()" @click="decideNewbi('REJECT')">拒绝</button>
+            </div>
+          </form>
+        </template>
+      </details>
     </template>
     <p v-if="busy" role="status">处理中…</p>
     <p v-if="notice" role="status">{{ notice }}</p>
@@ -216,6 +296,7 @@ async function decide(decision: Decision) {
 
 <style scoped>
 .review-desk { margin-block-start: 1.5rem; }
+.newbi-review { margin-block-start: 1rem; }
 .review-header, .decision-buttons { display: flex; gap: .6rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .review-header :is(h2, h3) { margin: 0; }
 .connect, .proposal form { display: grid; gap: .5rem; margin-block-start: .9rem; }
