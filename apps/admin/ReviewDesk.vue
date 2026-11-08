@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import type { ActionView } from '../../packages/contracts/action-review.js'
@@ -15,6 +16,7 @@ const passkeyPassword = ref('')
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
 const characterId = ref('')
+const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const actions = ref<ActionView[]>([])
 const nextCursor = ref<string | null>(null)
 const selected = ref<ActionView>()
@@ -36,6 +38,13 @@ const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.v
 const statusText: Record<ActionView['state'], string> = {
   WAITING_APPROVAL: '待审', READY: '已批准', REJECTED: '已拒绝', CANCELED: '已失效', EXPIRED: '已过期',
   EXECUTING: '模拟执行中', RECONCILING: '待对账', SIMULATED: '模拟完成', BLOCKED: '执行已拦截',
+}
+
+function statusTone(state: ActionView['state'] | NewbiReplyView['status']) {
+  if (state === 'WAITING_APPROVAL' || state === 'WAITING' || state === 'RECONCILING' || state === 'UNKNOWN') return 'warning'
+  if (state === 'READY' || state === 'SIMULATED' || state === 'SENT') return 'success'
+  if (state === 'BLOCKED' || state === 'REJECTED') return 'error'
+  return 'default'
 }
 
 class RequestError extends Error {
@@ -172,7 +181,8 @@ async function loadQueue(append = false) {
   })
 }
 
-function changeCharacter() {
+function changeCharacter(id: string) {
+  characterId.value = id
   resetNewbi()
   actions.value = []
   nextCursor.value = null
@@ -246,143 +256,206 @@ async function decideNewbi(decision: Decision) {
 </script>
 
 <template>
-  <section class="review-desk" aria-labelledby="review-heading">
-    <div class="review-header">
-      <h2 id="review-heading">人工审批</h2>
-      <button v-if="username" type="button" :disabled="busy" @click="disconnect">退出登录</button>
-    </div>
-
-    <form v-if="!username" class="connect" @submit.prevent="connect">
-      <label for="review-username">用户名</label>
-      <input id="review-username" v-model="usernameInput" autocomplete="username" required :disabled="busy" />
-      <label for="review-password">密码</label>
-      <input id="review-password" v-model="password" type="password" autocomplete="current-password" required :disabled="busy" />
-      <div class="review-buttons">
-        <button type="submit" :disabled="busy">登录</button>
-        <button v-if="passkeysAvailable" type="button" :disabled="busy" @click="passkeyLogin">使用 Passkey</button>
-      </div>
-    </form>
+  <section class="review-desk" aria-labelledby="review-heading" :aria-busy="busy">
+    <NCard v-if="!username" class="login-card">
+      <h2 id="review-heading">登录管理台</h2>
+      <NForm :show-feedback="false" @submit.prevent="connect">
+        <NFormItem label="用户名" :label-props="{ for: 'review-username' }">
+          <NInput v-model:value="usernameInput" :input-props="{ id: 'review-username', autocomplete: 'username', required: true }"
+            :disabled="busy" placeholder="" />
+        </NFormItem>
+        <NFormItem label="密码" :label-props="{ for: 'review-password' }">
+          <NInput v-model:value="password" type="password"
+            :input-props="{ id: 'review-password', autocomplete: 'current-password', required: true }"
+            :disabled="busy" placeholder="" />
+        </NFormItem>
+        <NAlert v-if="error" type="error" role="alert" class="login-alert">{{ error }}</NAlert>
+        <div class="login-actions">
+          <NButton type="primary" attr-type="submit" block :disabled="busy">登录</NButton>
+          <NButton v-if="passkeysAvailable" block :disabled="busy" @click="passkeyLogin">使用 Passkey</NButton>
+        </div>
+      </NForm>
+    </NCard>
 
     <template v-else>
-      <details v-if="passkeysAvailable">
-        <summary>添加 Passkey</summary>
-        <form class="connect" @submit.prevent="registerPasskey">
-          <label for="review-passkey-password">确认密码</label>
-          <input id="review-passkey-password" v-model="passkeyPassword" type="password"
-            autocomplete="current-password" required :disabled="busy" />
-          <button type="submit" :disabled="busy">添加 Passkey</button>
-        </form>
-      </details>
-      <div class="role-picker">
-        <label for="review-character">角色</label>
-        <select id="review-character" v-model="characterId" :disabled="busy" @change="changeCharacter">
-          <option value="" disabled>选择角色</option>
-          <option v-for="character in characters" :key="character.id" :value="character.id">
-            {{ character.profile?.name || character.slug }}
-          </option>
-        </select>
+      <div class="workspace-header">
+        <h2 id="review-heading">人工审批</h2>
+        <div class="account-actions">
+          <NTag size="small" :bordered="false" class="account-name">{{ username }}</NTag>
+          <NPopover v-if="passkeysAvailable" trigger="click" placement="bottom-end" :width="248">
+            <template #trigger>
+              <NButton size="small" :disabled="busy">添加 Passkey</NButton>
+            </template>
+            <NForm :show-feedback="false" @submit.prevent="registerPasskey">
+              <NFormItem label="确认密码" :label-props="{ for: 'review-passkey-password' }">
+                <NInput v-model:value="passkeyPassword" type="password"
+                  :input-props="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
+                  :disabled="busy" placeholder="" />
+              </NFormItem>
+              <NButton attr-type="submit" type="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</NButton>
+            </NForm>
+          </NPopover>
+          <NButton size="small" :disabled="busy" @click="disconnect">退出登录</NButton>
+        </div>
       </div>
-      <p v-if="!characters.length">当前账号没有可访问的角色。</p>
-      <div v-if="characterId" class="review-layout">
-        <div class="queue">
-          <div class="review-header">
+
+      <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
+      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+
+      <NCard v-if="!characters.length && !busy && !error" class="blank-card">
+        <NEmpty description="当前账号没有可访问的角色。" />
+      </NCard>
+      <div v-if="characters.length" class="role-picker">
+        <label for="review-character">角色</label>
+        <NSelect :value="characterId || null" :options="characterOptions" :disabled="busy"
+          :input-props="{ id: 'review-character' }" placeholder="选择角色" filterable @update:value="changeCharacter" />
+      </div>
+
+      <div v-if="characterId" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
+        <NCard class="queue" size="small">
+          <div class="card-heading">
             <h3>待办</h3>
-            <button type="button" :disabled="busy" @click="loadQueue()">刷新</button>
+            <NButton size="small" quaternary :disabled="busy" @click="loadQueue()">刷新</NButton>
           </div>
-          <p v-if="!actions.length && !busy && !error">暂无待审提案。</p>
-          <ul v-if="actions.length">
+          <NEmpty v-if="!actions.length && !busy && !error" description="暂无待审提案。" />
+          <ul v-if="actions.length" class="queue-items">
             <li v-for="item in actions" :key="item.id">
-              <button type="button" :disabled="busy" :aria-pressed="selected?.id === item.id" @click="openAction(item.id)">
-                {{ item.target.identity }} · {{ item.target.account }} · {{ statusText[item.state] }}
-              </button>
+              <NButton block :type="selected?.id === item.id ? 'primary' : 'default'" secondary
+                class="queue-button" :disabled="busy" :aria-pressed="selected?.id === item.id" @click="openAction(item.id)">
+                <span class="queue-item">
+                  <span class="queue-identity">{{ item.target.identity }}</span>
+                  <span class="queue-account">{{ item.target.account }}</span>
+                  <NTag size="tiny" :bordered="false" :type="statusTone(item.state)" class="queue-status">{{ statusText[item.state] }}</NTag>
+                </span>
+              </NButton>
             </li>
           </ul>
-          <button v-if="nextCursor" type="button" :disabled="busy" @click="loadQueue(true)">加载更多</button>
-        </div>
-        <section v-if="selected" class="proposal" aria-labelledby="proposal-heading">
-          <div class="review-header">
-            <h3 id="proposal-heading">模拟回复 · {{ statusText[selected.state] }}</h3>
-            <button type="button" :disabled="busy" @click="openAction(selected.id)">重新核对</button>
+          <NButton v-if="nextCursor" block size="small" quaternary :disabled="busy" @click="loadQueue(true)">加载更多</NButton>
+        </NCard>
+
+        <NCard v-if="selected" class="proposal" size="small">
+          <div class="card-heading">
+            <div class="proposal-title">
+              <h3>模拟回复</h3>
+              <NTag size="small" :bordered="false" :type="statusTone(selected.state)">{{ statusText[selected.state] }}</NTag>
+            </div>
+            <NButton size="small" quaternary :disabled="busy" @click="openAction(selected.id)">重新核对</NButton>
           </div>
-          <dl>
-            <dt>平台</dt><dd>{{ selected.target.platform }} / {{ selected.target.instance }}</dd>
-            <dt>身份与账号</dt><dd>{{ selected.target.identity }} / {{ selected.target.account }}</dd>
-            <dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd>
-            <dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd>
-            <dt>风险码</dt><dd>{{ selected.riskCodes.join(' · ') }}</dd>
+          <dl class="metadata">
+            <div><dt>平台</dt><dd>{{ selected.target.platform }} / {{ selected.target.instance }}</dd></div>
+            <div><dt>身份与账号</dt><dd>{{ selected.target.identity }} / {{ selected.target.account }}</dd></div>
+            <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
+            <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
+            <div v-if="selected.riskCodes.length"><dt>风险码</dt><dd>{{ selected.riskCodes.join(' · ') }}</dd></div>
           </dl>
           <template v-if="selected.content">
             <h4>拟发送内容</h4>
             <p class="payload">{{ selected.content }}</p>
           </template>
-          <form v-if="selected.state === 'WAITING_APPROVAL' && selected.content" @submit.prevent="decide('APPROVE')">
-            <label for="review-reason">审批理由</label>
-            <textarea id="review-reason" v-model="reason" required maxlength="240" :disabled="busy" rows="3" />
+          <NForm v-if="selected.state === 'WAITING_APPROVAL' && selected.content" :show-feedback="false"
+            @submit.prevent="decide('APPROVE')">
+            <NFormItem label="审批理由" :label-props="{ for: 'review-reason' }">
+              <NInput v-model:value="reason" type="textarea" :rows="3" :maxlength="240"
+                :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="" />
+            </NFormItem>
             <div class="decision-buttons">
-              <button class="primary" type="submit" :disabled="busy || !reason.trim()">批准模拟回复</button>
-              <button type="button" :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</button>
+              <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">批准模拟回复</NButton>
+              <NButton :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
             </div>
-          </form>
-        </section>
+          </NForm>
+        </NCard>
+        <NCard v-else-if="actions.length" class="blank-card">
+          <NEmpty description="选择一条待审提案。" />
+        </NCard>
       </div>
-      <details v-if="characterId" class="proposal newbi-review">
-        <summary>扭笔本地试点</summary>
-        <form @submit.prevent="openNewbiReply">
-          <label for="newbi-reply-id">提案 ID</label>
-          <input id="newbi-reply-id" v-model="newbiId" required :disabled="busy" />
-          <button type="submit" :disabled="busy || !newbiId.trim()">查看扭笔提案</button>
-        </form>
-        <template v-if="newbiReply">
-          <h3>扭笔回复 · {{ newbiStatus[newbiReply.status] }}</h3>
-          <dl>
-            <dt>本机平台</dt><dd>{{ newbiReply.endpoint }}</dd>
-            <dt>身份与账号</dt><dd>{{ newbiReply.identityId }} / {{ newbiReply.accountId }}</dd>
-            <dt>扭笔 Agent</dt><dd>{{ newbiReply.agentId }}</dd>
-            <dt>目标帖子</dt><dd>{{ newbiReply.postId }} · 公开回复</dd>
-            <template v-if="newbiReply.remoteCommentId">
-              <dt>评论回执</dt><dd>{{ newbiReply.remoteCommentId }}</dd>
-            </template>
-          </dl>
-          <p v-if="newbiReply.content" class="payload">{{ newbiReply.content }}</p>
-          <form v-if="newbiReply.status === 'WAITING' && newbiReply.content" @submit.prevent="decideNewbi('APPROVE')">
-            <label for="newbi-reason">审批理由</label>
-            <textarea id="newbi-reason" v-model="newbiReason" maxlength="240" rows="3" required :disabled="busy" />
-            <div class="decision-buttons">
-              <button class="primary" type="submit" :disabled="busy || !newbiReason.trim()">批准扭笔回复</button>
-              <button type="button" :disabled="busy || !newbiReason.trim()" @click="decideNewbi('REJECT')">拒绝</button>
-            </div>
-          </form>
-        </template>
-      </details>
+
+      <NCard v-if="characterId" size="small">
+        <NCollapse>
+          <NCollapseItem name="pilot" title="扭笔本地试点">
+            <NForm class="lookup" :show-feedback="false" @submit.prevent="openNewbiReply">
+              <NFormItem label="提案 ID" :label-props="{ for: 'newbi-reply-id' }">
+                <NInput v-model:value="newbiId" :input-props="{ id: 'newbi-reply-id', required: true }"
+                  :disabled="busy" placeholder="" />
+              </NFormItem>
+              <NButton attr-type="submit" :disabled="busy || !newbiId.trim()">查看扭笔提案</NButton>
+            </NForm>
+            <section v-if="newbiReply" class="pilot-proposal" aria-labelledby="pilot-proposal-heading">
+              <div class="proposal-title">
+                <h3 id="pilot-proposal-heading">扭笔回复</h3>
+                <NTag size="small" :bordered="false" :type="statusTone(newbiReply.status)">{{ newbiStatus[newbiReply.status] }}</NTag>
+              </div>
+              <dl class="metadata">
+                <div><dt>本机平台</dt><dd>{{ newbiReply.endpoint }}</dd></div>
+                <div><dt>身份与账号</dt><dd>{{ newbiReply.identityId }} / {{ newbiReply.accountId }}</dd></div>
+                <div><dt>扭笔 Agent</dt><dd>{{ newbiReply.agentId }}</dd></div>
+                <div><dt>目标帖子</dt><dd>{{ newbiReply.postId }} · 公开回复</dd></div>
+                <div v-if="newbiReply.remoteCommentId"><dt>评论回执</dt><dd>{{ newbiReply.remoteCommentId }}</dd></div>
+              </dl>
+              <p v-if="newbiReply.content" class="payload">{{ newbiReply.content }}</p>
+              <NForm v-if="newbiReply.status === 'WAITING' && newbiReply.content" :show-feedback="false"
+                @submit.prevent="decideNewbi('APPROVE')">
+                <NFormItem label="审批理由" :label-props="{ for: 'newbi-reason' }">
+                  <NInput v-model:value="newbiReason" type="textarea" :rows="3" :maxlength="240"
+                    :input-props="{ id: 'newbi-reason', required: true }" :disabled="busy" placeholder="" />
+                </NFormItem>
+                <div class="decision-buttons">
+                  <NButton type="primary" attr-type="submit" :disabled="busy || !newbiReason.trim()">批准扭笔回复</NButton>
+                  <NButton :disabled="busy || !newbiReason.trim()" @click="decideNewbi('REJECT')">拒绝</NButton>
+                </div>
+              </NForm>
+            </section>
+          </NCollapseItem>
+        </NCollapse>
+      </NCard>
     </template>
-    <p v-if="busy" role="status">处理中…</p>
-    <p v-if="notice" role="status">{{ notice }}</p>
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <span v-if="busy" class="sr-only" role="status">处理中…</span>
   </section>
 </template>
 
 <style scoped>
-.review-desk { margin-block-start: 1.5rem; }
-.newbi-review { margin-block-start: 1rem; }
-.review-header, .decision-buttons { display: flex; gap: .6rem; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-.review-header :is(h2, h3) { margin: 0; }
-.connect, .proposal form { display: grid; gap: .5rem; margin-block-start: .9rem; }
-.review-buttons { display: flex; flex-wrap: wrap; gap: .5rem; }
-.role-picker { display: flex; gap: .6rem; align-items: center; margin-block: .9rem; }
-.review-layout { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
-.queue, .proposal { min-width: 0; padding: .9rem; border: 1px solid #d9e0e8; border-radius: .5rem; }
-.queue ul { list-style: none; padding: 0; display: grid; gap: .35rem; }
-.queue li button { width: 100%; text-align: left; overflow-wrap: anywhere; }
-.queue button[aria-pressed="true"] { border-color: #2760a8; background: #e9f2ff; }
-input, select, textarea { font: inherit; min-width: 0; max-width: 100%; padding: .5rem; border: 1px solid #68788a; border-radius: .35rem; }
-textarea { resize: vertical; }
-.proposal dl { grid-template-columns: minmax(4.5rem, auto) minmax(0, 1fr); }
-.proposal dd, .payload { overflow-wrap: anywhere; white-space: pre-wrap; }
-.payload { padding: .75rem; background: #f2f5f9; border-radius: .4rem; }
-.decision-buttons { justify-content: flex-start; }
-.primary { color: white; background: #225790; border: 1px solid #225790; }
-button:disabled { cursor: default; opacity: .65; }
-:is(input, select, textarea, button):focus-visible { outline: 2px solid #2760a8; outline-offset: 2px; }
-.error { color: #a32727; }
-@media (max-width: 42rem) { .review-layout { grid-template-columns: minmax(0, 1fr); } }
+.review-desk { display: grid; gap: 1rem; }
+.login-card { width: min(100%, 25rem); margin: clamp(1rem, 8vh, 5rem) auto 0; }
+.login-card h2, .workspace-header h2, h3 { margin: 0; }
+.login-card h2 { font-size: 1.25rem; margin-block-end: 1rem; }
+.login-card :deep(.n-form-item + .n-form-item) { margin-block-start: .625rem; }
+.login-actions { display: grid; gap: .625rem; margin-block-start: .625rem; }
+.login-alert { margin-block: .5rem; }
+.workspace-header, .account-actions, .decision-buttons, .proposal-title { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
+.workspace-header { justify-content: space-between; margin-block-end: .375rem; }
+.workspace-header h2 { font-size: 1.5rem; line-height: 1.25; letter-spacing: -.025em; }
+.account-name { max-width: 12rem; }
+.account-name :deep(.n-tag__content) { overflow: hidden; text-overflow: ellipsis; }
+.role-picker { display: flex; align-items: center; gap: .75rem; width: min(100%, 20rem); }
+.role-picker > label { flex: none; color: #485c5b; }
+.review-layout { display: grid; grid-template-columns: minmax(13rem, 19rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
+.review-layout--single { grid-template-columns: minmax(0, 1fr); }
+.review-layout > * { min-width: 0; }
+.card-heading { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-block-end: .625rem; }
+.queue h3, .proposal-title h3 { font-size: 1rem; font-weight: 650; }
+.queue-items { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.queue-items + .n-button { margin-block-start: .5rem; }
+.queue-button { min-height: 3.25rem; height: auto; padding-block: .5rem; }
+.queue-button :deep(.n-button__content) { width: 100%; text-align: left; }
+.queue-item { line-height: 1.3; display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; column-gap: .5rem; align-items: center; }
+.queue-identity, .queue-account { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-identity { font-weight: 650; }
+.queue-account { grid-column: 1; color: #536866; font-size: .75rem; }
+.queue-status { grid-area: 1 / 2 / span 2 / 3; }
+.blank-card :deep(.n-card__content) { padding-block: 2rem; }
+.metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
+.metadata dt { color: #536866; font-size: .8125rem; }
+.metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
+.proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
+.payload { margin: 0 0 1rem; padding: .875rem 1rem; border-radius: .5rem; background: #f3f7f6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lookup { display: flex; gap: .625rem; align-items: flex-end; max-width: 33rem; }
+.lookup :deep(.n-form-item) { flex: 1; min-width: 0; }
+.decision-buttons, .passkey-submit { margin-block-start: .75rem; }
+.pilot-proposal { margin-block-start: 1rem; }
+.pilot-proposal .proposal-title { margin-block-end: .75rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 46rem) { .review-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 30rem) {
+  .metadata { grid-template-columns: minmax(0, 1fr); }
+  .lookup { align-items: stretch; flex-direction: column; }
+}
 </style>
