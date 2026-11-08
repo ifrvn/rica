@@ -4,7 +4,7 @@ import { Queue, Worker } from 'bullmq'
 import { Redis } from 'ioredis'
 import { scanIdentityReflections } from '../../packages/persistence/identity-reflection.js'
 import { createDatabase } from '../../packages/persistence/client.js'
-import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
+import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
 import { simulatedModelPlugin, type ModelProvider } from '../../packages/runtime/model-provider.js'
@@ -12,6 +12,8 @@ import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 export const outboxQueueName = 'character-bootstrap'
+
+type OutboxJob = { eventId: string; generation?: number }
 
 export class WorkerDependencyUnavailable extends Error {
   constructor(readonly dependencies: ('postgres' | 'redis')[]) {
@@ -41,25 +43,38 @@ export async function startOutboxWorker(
     throw new WorkerDependencyUnavailable(dependencies)
   }
   const consumer = new Redis(redisUrl, { maxRetriesPerRequest: null })
-  const queue = new Queue<{ eventId: string }>(outboxQueueName, { connection: producer })
-  const worker = new Worker<{ eventId: string }>(outboxQueueName, async ({ name, data }) => {
+  const queue = new Queue<OutboxJob>(outboxQueueName, { connection: producer })
+  const worker = new Worker<OutboxJob>(outboxQueueName, async ({ name, data }) => {
+    const { eventId, generation = 0 } = data
+    let ticket: number | null = null
     try {
+      if (name !== runQueuedEvent && name !== draftQueuedEvent && name !== smokeEvent) throw new Error('Unknown outbox job')
+      const [claim] = await db.$queryRaw<{ ticket: number | null }[]>`
+        SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${name}, ${generation}::int) AS ticket
+      `
+      ticket = claim.ticket
+      if (ticket === null) return
+      const attempt = { generation, ticket }
       if (name === runQueuedEvent) {
-        await prepareSimulatedRun(db, data.eventId)
-        return
+        await prepareSimulatedRun(db, eventId, attempt)
+      } else if (name === draftQueuedEvent) {
+        await processSimulatedDraft(db, eventId, model, attempt)
+      } else {
+        await db.$executeRaw`
+          UPDATE public.outbox SET processed_at = clock_timestamp()
+          WHERE event_id = ${eventId}::uuid AND type = ${smokeEvent}
+            AND processed_at IS NULL AND quarantined_at IS NULL ${outboxAttemptFence(attempt)}
+        `
       }
-      if (name === draftQueuedEvent) {
-        await processSimulatedDraft(db, data.eventId, model)
-        return
-      }
-      if (name !== smokeEvent) throw new Error('Unknown outbox job')
-      await db.outboxEvent.updateMany({
-        where: { eventId: data.eventId, type: smokeEvent, processedAt: null },
-        data: { processedAt: new Date() },
-      })
     } catch {
-      // BullMQ records failure details in Redis. Keep plugin and payload data out of them.
-      throw new Error('Outbox job failed')
+      try {
+        if (ticket !== null) await db.$queryRaw`
+          SELECT public.rica_fail_outbox_attempt(${eventId}::uuid, ${generation}::int, ${ticket}::int)::text
+        `
+      } finally {
+        // BullMQ records failure details in Redis. Keep plugin and payload data out of them.
+        throw new Error('Outbox job failed')
+      }
     }
   }, { connection: consumer, autorun: false })
   const stop = new AbortController()
@@ -97,22 +112,23 @@ export async function startOutboxWorker(
           where: {
             type: { in: [smokeEvent, runQueuedEvent, draftQueuedEvent] },
             processedAt: null,
+            quarantinedAt: null,
             OR: [{ enqueuedAt: null }, { enqueuedAt: { lt: new Date(Date.now() - 10_000) } }],
           },
           orderBy: { createdAt: 'asc' },
           take: 25,
         })
-        for (const { eventId, type } of pending) {
+        for (const { eventId, type, generation } of pending) {
           if (stop.signal.aborted) break
-          await queue.add(type, { eventId }, {
-            jobId: eventId,
+          await queue.add(type, { eventId, generation }, {
+            jobId: generation === 0 ? eventId : eventId + '-' + generation,
             attempts: 3,
             backoff: { type: 'exponential', delay: 1000 },
             removeOnComplete: true,
             removeOnFail: true,
           })
-          await db.outboxEvent.update({
-            where: { eventId },
+          await db.outboxEvent.updateMany({
+            where: { eventId, generation, quarantinedAt: null },
             data: { enqueuedAt: new Date() },
           })
         }

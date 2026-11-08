@@ -13,6 +13,10 @@ model OutboxEvent {
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
   enqueuedAt  DateTime? @map("enqueued_at") @db.Timestamptz
   processedAt DateTime? @map("processed_at") @db.Timestamptz
+  generation  Int       @default(0)
+  attempts    Int       @default(0)
+  attemptUntil DateTime? @map("attempt_until") @db.Timestamptz
+  quarantinedAt DateTime? @map("quarantined_at") @db.Timestamptz
 
   runId String?   @map("run_id") @db.Uuid
   run   AgentRun? @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: NoAction)

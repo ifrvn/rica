@@ -9,7 +9,7 @@ import type { Prisma, PrismaClient } from './generated/client.js'
 import { captureMemorySnapshot, captureSelfModelSnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
 import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
 import { loadRunContinuity, type RunContinuity } from './run-continuity.js'
-import { draftQueuedEvent } from './run-context.js'
+import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from './run-context.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
   | { purpose: 'PRIVATE_REPLY' }
@@ -137,10 +137,11 @@ export async function generateSimulatedDraft(
 }
 
 export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, model: Plugin<ModelProvider> = simulatedModelPlugin,
+  db: PrismaClient, eventId: string, model: Plugin<ModelProvider> = simulatedModelPlugin, attempt?: OutboxAttempt,
 ) {
   const event = await db.outboxEvent.findFirst({
-    where: { eventId, type: draftQueuedEvent, processedAt: null },
+    where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
+      ...(attempt ? { generation: attempt.generation, attempts: attempt.ticket } : {}) },
     include: {
       run: { include: { inboundEvent: { select: { messageText: true, adapterId: true, adapterVersion: true } } } },
     },
@@ -166,6 +167,7 @@ export async function processSimulatedDraft(
     const [pending] = await tx.$queryRaw<{ eventId: string }[]>`
       SELECT event_id AS "eventId" FROM public.outbox
       WHERE event_id = ${eventId}::uuid AND type = ${draftQueuedEvent} AND processed_at IS NULL
+        AND quarantined_at IS NULL ${outboxAttemptFence(attempt)}
       FOR UPDATE
     `
     if (!pending) return

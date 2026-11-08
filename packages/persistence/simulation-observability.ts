@@ -1,6 +1,6 @@
 import type { z } from '@hono/zod-openapi'
-import { runReplayView, simulationBacklogView, simulationDailyRow, type simulationDailyMetricsView } from '../contracts/simulation-observability.js'
-import type { PrismaClient } from './generated/client.js'
+import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, type simulationDailyMetricsView } from '../contracts/simulation-observability.js'
+import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, ManagementError, type Scope } from './management.js'
 
 export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId: string) {
@@ -43,6 +43,28 @@ export async function readSimulationDailyMetrics(db: PrismaClient, scope: Scope,
     }
     return { days, alerts }
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readQuarantinedOutbox(db: PrismaClient, scope: Scope, after?: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const [row] = await tx.$queryRaw<{ events: unknown }[]>`
+      SELECT public.rica_quarantined_outbox(${scope.characterId}::uuid, ${after ?? null}::uuid) AS events
+    `
+    const events = quarantinedOutboxEvent.array().parse(row.events)
+    const items = events.slice(0, 25)
+    return { items, nextCursor: events.length > items.length ? items.at(-1)!.id : null }
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function retryQuarantinedOutbox(tx: Prisma.TransactionClient, scope: Scope, eventId: string, expected: number) {
+  const [row] = await tx.$queryRaw<{ status: string }[]>`
+    SELECT public.rica_retry_outbox(${scope.characterId}::uuid, ${eventId}::uuid, ${expected}::int) AS status
+  `
+  if (row.status === 'MISSING') throw new ManagementError(404, 'NOT_FOUND', 'Outbox event not found')
+  if (row.status === 'STALE') throw new ManagementError(412, 'STALE_VERSION', 'Outbox generation has changed')
+  if (row.status !== 'UPDATED') throw new ManagementError(409, 'OUTBOX_NOT_QUARANTINED', 'Outbox event is not quarantined')
+  return { id: eventId, version: expected + 1 }
 }
 
 export async function readSimulationBacklog(db: PrismaClient, scope: Scope) {

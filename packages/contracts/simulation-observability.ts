@@ -46,11 +46,20 @@ export const simulationDailyMetricsView = z.object({
     'RECEIPT_VOLUME_DRIFT', 'REVIEW_RATE_DRIFT'])),
 })
 
+export const outboxQuarantineQuery = z.object({ after: z.uuid().optional() })
+export const quarantinedOutboxEvent = z.object({
+  id: z.uuid(), runId: z.uuid(), type: z.enum(['RunQueued.v1', 'SimulatedDraftQueued.v1']),
+  generation: z.number().int().nonnegative(), attempts: z.literal(4), quarantinedAt: timestamp,
+})
+export const outboxQuarantineView = z.object({
+  items: z.array(quarantinedOutboxEvent), nextCursor: z.uuid().nullable(),
+})
+
 const backlog = z.object({ count: z.number().int().nonnegative(), oldestAt: timestamp.nullable() })
 
 export const simulationBacklogView = z.object({
   observedAt: timestamp,
-  outbox: backlog.extend({ enqueued: z.number().int().nonnegative() }),
+  outbox: backlog.extend({ enqueued: count, quarantined: count }),
   approvals: backlog,
   reconciliation: backlog,
   schedules: backlog,

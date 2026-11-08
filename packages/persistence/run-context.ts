@@ -1,7 +1,14 @@
-import type { ConversationChannel, Prisma, PrismaClient, RunStateReason } from './generated/client.js'
+import { Prisma, type ConversationChannel, type PrismaClient, type RunStateReason } from './generated/client.js'
 
 export const runQueuedEvent = 'RunQueued.v1'
 export const draftQueuedEvent = 'SimulatedDraftQueued.v1'
+
+export type OutboxAttempt = Readonly<{ generation: number; ticket: number }>
+
+export function outboxAttemptFence(attempt?: OutboxAttempt) {
+  return attempt ? Prisma.sql`AND generation = ${attempt.generation} AND attempts = ${attempt.ticket}
+    AND attempt_until > clock_timestamp()` : Prisma.empty
+}
 
 type Binding = {
   characterId: string
@@ -63,12 +70,13 @@ export function bindingMatches(run: Binding, current: Binding) {
     && run.authEpoch === current.authEpoch
 }
 
-export async function prepareSimulatedRun(db: PrismaClient, eventId: string) {
+export async function prepareSimulatedRun(db: PrismaClient, eventId: string, attempt?: OutboxAttempt) {
   await db.$transaction(async (tx) => {
     // Duplicate queue delivery must not race the run transition or its acknowledgment.
     const [event] = await tx.$queryRaw<{ runId: string }[]>`
       SELECT run_id AS "runId" FROM outbox
       WHERE event_id = ${eventId}::uuid AND type = ${runQueuedEvent} AND processed_at IS NULL
+        AND quarantined_at IS NULL ${outboxAttemptFence(attempt)}
       FOR UPDATE
     `
     if (!event) return

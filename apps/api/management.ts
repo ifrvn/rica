@@ -4,8 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
-import { dailyMetricsQuery, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
-import { readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun } from '../../packages/persistence/simulation-observability.js'
+import { dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
+import { readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
@@ -683,6 +683,33 @@ export function createManagementApp({ db, authenticate, creatorSubjects }: Optio
   }), async (c) => {
     const { characterId, runId } = c.req.valid('param')
     return c.json(await replaySimulationRun(db, { characterId, actor: c.get('actor') }, runId), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/outbox/quarantined`, security,
+    request: { params: characterParams, query: outboxQuarantineQuery },
+    responses: { ...errors, 200: success(outboxQuarantineView) },
+  }), async (c) => c.json(await readQuarantinedOutbox(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, c.req.valid('query').after,
+  ), 200))
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/outbox/{eventId}/retry`, security,
+    request: {
+      params: characterParams.extend({ eventId: schema.resourceId }),
+      headers: schema.versionHeader, body: body(schema.reasonInput),
+    },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, eventId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'outbox.retry', targetScope: characterId + '/' + eventId,
+      input: { ...c.req.valid('json'), expected }, requestId,
+    }, (tx) => retryQuarantinedOutbox(tx, scope, eventId, expected))
+    return c.json({ ...result, requestId }, 200)
   })
 
   app.openapi(createRoute({

@@ -46,6 +46,7 @@ GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
 | `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 或 AUDITOR 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
+| `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 或 AUDITOR 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
 | `GET /c/audit` | ADMIN 和 AUDITOR 读取操作元数据、摘要哈希和请求 ID。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | REVIEWER 读取模拟待办和经复核的提案预览。列表不含正文。 |
 | `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
@@ -105,6 +106,14 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 日报按角色和 UTC 日返回提案、批准、拒绝、近似重复提示、模拟回执、账号单日回执峰值、草稿延迟均值和预算计数。审批率以提案日期归组，分子为该组收到审批决定的提案数。回执按实际记录日期归组。报告只包含聚合数据。
 
 告警由日报计算。带重复提示的回执、缺少批准的回执、预算拒绝分别发出对应风险码。有至少 14 个完整 UTC 日时比较最近两个 7 日窗口。后窗回执总量达到前窗两倍加 7，或审批率相差至少 20 个百分点时，报告漂移。授权泄露由隔离验收中的测试标记验证。
+
+## 出箱隔离与恢复
+
+每个出箱代次最多尝试四次，含首次和三次重试。Worker 在开始处理前以 PostgreSQL 记录一次尝试并取得 30 秒租约。进程崩溃后，过期租约不会返还尝试次数。耗尽后隔离事件，保留原运行和事件。监控中的 `outbox.quarantined` 单独计数，`outbox.count` 包含所有未完成事件。
+
+`GET /c/outbox/quarantined` 每页最多 25 条，用响应中的 `nextCursor` 作为下次请求的 `after`。返回事件 ID、运行 ID、类型、当前代次、尝试数和隔离时间。查明失败原因后，ADMIN 调用 `POST /c/outbox/{eventId}/retry`，提交 `reason` 并在 If-Match 传入当前代次，例如 `"0"`。成功会增加代次、重置尝试预算并交给正常 Worker 流程，同时追加审计。并发恢复只允许一次，旧代次返回 412。
+
+部署时先停止旧 Worker，再应用迁移并启动新 Worker。迁移前已入队且未带代次的作业按第 0 代处理。
 
 ## 回放与积压
 

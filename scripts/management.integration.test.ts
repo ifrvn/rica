@@ -1729,6 +1729,120 @@ async function topicProposal(runtime: ReturnType<typeof createDatabase>, target:
   return owner.actionProposal.findUniqueOrThrow({ where: { runId } })
 }
 
+test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { timeout: 35_000 }, async () => {
+  const identityId = await reflectionIdentity()
+  const target = await topicAccount(identityId, 'mock-a')
+  const runtimeUrl = scheduleRuntimeUrl()
+  const runtime = createDatabase(runtimeUrl)
+  try {
+    const { runId, eventId } = await prepareTopic(runtime, target, 'Outbox recovery fixture')
+    const where = { eventId }
+    const read = () => owner.outboxEvent.findUniqueOrThrow({ where })
+    const wait = async (predicate: (row: Awaited<ReturnType<typeof read>>) => boolean) => {
+      const deadline = Date.now() + 12_000
+      while (Date.now() < deadline) {
+        const row = await read()
+        if (predicate(row)) return row
+        await sleep(50)
+      }
+      assert.fail('Outbox did not reach the expected state')
+    }
+    let failures = 0
+    const failing: typeof simulatedModelPlugin = {
+      ...simulatedModelPlugin,
+      implementation: {
+        ...simulatedModelPlugin.implementation,
+        async decide(input, signal) {
+          if (input.context.runId !== runId) return simulatedModelPlugin.implementation.decide(input, signal)
+          failures++
+          throw new Error('synthetic model failure')
+        },
+      },
+    }
+    const first = await startOutboxWorker(runtimeUrl, config.redisUrl, failing)
+    try {
+      await wait(({ attempts, attemptUntil }) => attempts === 3 && attemptUntil === null)
+    } finally {
+      await first.close()
+    }
+    assert.equal(failures, 3)
+    await owner.outboxEvent.update({ where, data: { enqueuedAt: new Date(Date.now() - 15_000) } })
+    const restarted = await startOutboxWorker(runtimeUrl, config.redisUrl, failing)
+    try {
+      const held = await wait(({ quarantinedAt }) => quarantinedAt !== null)
+      assert.equal(held.attempts, 4)
+      assert.equal(held.processedAt, null)
+    } finally {
+      await restarted.close()
+    }
+    assert.equal(failures, 4)
+    const list = await request('GET', characterPath(a) + '/outbox/quarantined')
+    assert.equal(list.status, 200, JSON.stringify(list.body))
+    assert.ok(list.body.items.some((row: { id: string; generation: number }) => row.id === eventId && row.generation === 0))
+    const monitoring = await request('GET', characterPath(a) + '/monitoring')
+    assert.ok(monitoring.body.outbox.quarantined >= 1)
+
+    const suffix = '/outbox/' + eventId + '/retry'
+    const options = { ifMatch: '"0"', data: { reason: 'Model provider recovered' } }
+    assert.equal((await request('POST', characterPath(a) + suffix, { ...options, actor: 'reviewer' })).status, 403)
+    assert.equal((await request('POST', characterPath(b) + suffix, { ...options, actor: 'admin-b' })).status, 404)
+    const retried = await Promise.all(Array.from({ length: 2 }, () => request('POST', characterPath(a) + suffix, options)))
+    assert.deepEqual(retried.map(({ status }) => status).sort(), [200, 412])
+    assert.equal(await owner.managementAudit.count({ where: { targetId: eventId, operation: 'outbox.retry' } }), 1)
+
+    const [stale] = await runtime.$queryRaw<{ ticket: number | null }[]>`
+      SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${draftQueuedEvent}, 0) AS ticket
+    `
+    assert.equal(stale.ticket, null)
+    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl)
+    try {
+      const processed = await wait(({ processedAt }) => processedAt !== null)
+      assert.equal(processed.generation, 1)
+      assert.equal(processed.attempts, 1)
+      assert.equal(processed.quarantinedAt, null)
+    } finally {
+      await healthy.close()
+    }
+    assert.equal(await owner.actionProposal.count({ where: { runId } }), 1)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('a crashed outbox attempt consumes its ticket and a late failure cannot release a replacement', async () => {
+  const identityId = await reflectionIdentity()
+  const target = await topicAccount(identityId, 'mock-a')
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    const { eventId } = await prepareTopic(runtime, target, 'Outbox lease fixture')
+    const claim = async () => {
+      const [row] = await runtime.$queryRaw<{ ticket: number | null }[]>`
+        SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${draftQueuedEvent}, 0) AS ticket
+      `
+      return row.ticket
+    }
+    assert.deepEqual((await Promise.all([claim(), claim()])).sort(), [1, null])
+    const expireLease = async () => owner.outboxEvent.update({
+      where: { eventId }, data: { attemptUntil: new Date((await databaseNow()) - 1000) },
+    })
+    await expireLease()
+    assert.equal(await claim(), 2)
+    await runtime.$queryRaw`SELECT public.rica_fail_outbox_attempt(${eventId}::uuid, 0, 1)::text`
+    assert.equal(await claim(), null)
+    await processSimulatedDraft(runtime, eventId, simulatedModelPlugin, { generation: 0, ticket: 1 })
+    assert.equal((await owner.outboxEvent.findUniqueOrThrow({ where: { eventId } })).processedAt, null)
+    for (const ticket of [3, 4]) {
+      await expireLease()
+      assert.equal(await claim(), ticket)
+    }
+    await expireLease()
+    assert.equal(await claim(), null)
+    assert.ok((await owner.outboxEvent.findUniqueOrThrow({ where: { eventId } })).quarantinedAt)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 const duplicateReview = { similarityPercent: 75, windowHours: 2 }
 
 test('cross-platform near duplicates only flag opted-in public topics in the same identity', async () => {
