@@ -4,6 +4,8 @@ import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSelect, NTag
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
 import type { runReplayView, simulationRunSummary } from '../../packages/contracts/simulation-observability.js'
+import SimulationReconciliation from './SimulationReconciliation.vue'
+import type { ReconciliationView } from '../../packages/contracts/action-review.js'
 import { request, RequestError } from './request.js'
 
 type Run = z.infer<typeof simulationRunSummary>
@@ -25,6 +27,7 @@ const selected = ref<Replay>()
 const selectedPlatform = computed(() => selected.value?.proposal?.adapterId
   ?? accounts.value.find(({ id }) => id === selected.value?.accountId)?.platform ?? '—')
 const detailError = ref('')
+const resolutionNotice = ref('')
 let detailRevision = 0
 const accountId = ref('')
 const message = ref('')
@@ -89,7 +92,10 @@ async function detail(id?: string) {
   }
 }
 
-watch(() => props.detailId, (id) => { void detail(id) }, { immediate: true })
+watch(() => props.detailId, (id) => {
+  resolutionNotice.value = ''
+  void detail(id)
+}, { immediate: true })
 
 async function act(task: () => Promise<void>) {
   if (busy.value) return
@@ -133,6 +139,12 @@ function refresh() {
   })
 }
 
+function reconciled(outcome: NonNullable<ReconciliationView['outcome']>) {
+  resolutionNotice.value = outcome === 'CONFIRMED' ? '已确认模拟回执。' : '已按未写入回执结案。'
+  void detail(props.detailId)
+  void act(() => list())
+}
+
 function start() {
   if (!props.canStart || !options.value.some(({ value }) => value === accountId.value) || !message.value.trim()) return
   const body = JSON.stringify({ accountId: accountId.value, message: message.value.trim() })
@@ -162,6 +174,7 @@ onMounted(() => { void act(load) })
       <NButton :disabled="busy" @click="refresh">刷新</NButton>
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="resolutionNotice" type="success" role="status">{{ resolutionNotice }}</NAlert>
     <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
     <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
     <NAlert v-if="canStart && !busy && !options.length && !loadingError" type="info">请先在角色与身份页启用角色、身份和可用的模拟账号。</NAlert>
@@ -195,6 +208,9 @@ onMounted(() => { void act(load) })
           ? new Date(selected.proposal.receiptAt).toLocaleString() : '暂无回执' }}</dd></div>
       </dl>
     </NCard>
+    <SimulationReconciliation v-if="canStart && selected?.state === 'RECONCILING' && selected.proposal"
+      :key="selected.proposal.id" :character-id="characterId" :action-id="selected.proposal.id"
+      @expired="emit('expired')" @resolved="reconciled" />
     <NCard title="最近运行" size="small">
       <NEmpty v-if="!rows.length && !busy && !error" description="暂无模拟运行。" />
       <ul v-if="rows.length" class="run-list">

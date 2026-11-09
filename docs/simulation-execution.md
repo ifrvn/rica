@@ -23,6 +23,8 @@ GRANT rica_simulation_executor TO rica_simulation_login WITH INHERIT TRUE, SET T
 
 ## 人工对账
 
+在控制台的「运行」中打开状态为「待对账」的模拟运行。管理员点击「核对账本」，确认封存证据后填写对账理由并提交。版本发生变化时，重新核对后可使用原理由提交。
+
 未知尝试在许可过期 15 分钟后可由当前角色的 ADMIN 处置。先读取 `GET /v1/characters/{characterId}/actions/{actionId}/reconciliation`，取得版本、账本支持的结论和证据引用。尚未到人工处置时间时，结论和证据引用为空。
 
 向同一路径发送 POST，带 `Idempotency-Key`、GET 返回的 `If-Match` 版本，以及 `outcome`、`evidenceRef`、`reason`。服务会在角色锁内重查本地账本。已有回执支持 `CONFIRMED`，封存许可没有回执时支持 `DEFINITELY_NOT_SENT`。确认未写入会释放账号和预算，原提案进入 `BLOCKED`。系统不会重发原提案。操作人、理由和证据引用随结果保存，管理审计记录同事务追加。
