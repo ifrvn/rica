@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NTag } from 'naive-ui'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import CharacterWorkspace from './CharacterWorkspace.vue'
 import SimulationWorkspace from './SimulationWorkspace.vue'
 import { request, RequestError } from './request.js'
+import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
+import type { characterWorkspaceView } from '../../packages/contracts/management.js'
+import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
 type Character = { id: string; slug: string; profile: { name?: string } | null }
@@ -19,7 +22,10 @@ const passkeyPassword = ref('')
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
-const tab = ref<'character' | 'review' | 'runs'>('character')
+const tab = ref<ConsolePage>('character')
+const detailId = ref<string>()
+const routing = ref(false)
+let revision = 0
 const characterCursor = ref<string | null>(null)
 const roles = ref<string[]>([])
 const canReadRuns = computed(() => roles.value.some((role) => role === 'ADMIN' || role === 'AUDITOR'))
@@ -29,6 +35,7 @@ const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const actions = ref<ActionView[]>([])
 const nextCursor = ref<string | null>(null)
+let queueLoaded = false
 const selected = ref<ActionView>()
 const reason = ref('')
 const busy = ref(false)
@@ -68,7 +75,7 @@ type Session = { username: string; canCreate: boolean }
 type AuthenticationOptions = { challengeId: string; options: Parameters<typeof startAuthentication>[0]['optionsJSON'] }
 type RegistrationOptions = { challengeId: string; options: Parameters<typeof startRegistration>[0]['optionsJSON'] }
 
-async function run(task: () => Promise<void>) {
+async function run(task: () => Promise<void>, scope?: number) {
   if (busy.value) return
   busy.value = true
   error.value = ''
@@ -76,6 +83,7 @@ async function run(task: () => Promise<void>) {
   try {
     await task()
   } catch (cause) {
+    if (scope !== undefined && scope !== revision) return
     const status = cause instanceof RequestError ? cause.status : 0
     const wasSignedIn = !!username.value
     if (status === 401 && wasSignedIn) resetSession()
@@ -99,12 +107,13 @@ async function openSession(session: Session) {
   password.value = ''
   canCreate.value = session.canCreate
   await fetchCharacters()
-  characterId.value = characters.value[0]?.id ?? ''
+  await restoreLocation()
 }
 
 async function fetchCharacters(cursor?: string) {
   const page = await request<Page<Character>>('/v1/characters?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''))
-  characters.value = cursor ? [...characters.value, ...page.items] : page.items
+  const known = new Set(characters.value.map(({ id }) => id))
+  characters.value = cursor ? [...characters.value, ...page.items.filter(({ id }) => !known.has(id))] : page.items
   characterCursor.value = page.nextCursor
 }
 
@@ -113,22 +122,100 @@ function characterCreated(character: Character) {
   changeCharacter(character.id)
 }
 
-function changeTab(value: 'character' | 'review' | 'runs') {
-  tab.value = value
-  if (value === 'review') void loadQueue()
-  else {
-    resetReview()
+function navigate(location: ConsoleLocation) {
+  const hash = consoleHash(location)
+  if (window.location.hash === hash && characterId.value === location.characterId
+    && tab.value === location.page && detailId.value === location.detail) return
+  if (window.location.hash !== hash) window.history.pushState(null, '', hash)
+  void applyLocation(location)
+}
+
+function restoreLocation() {
+  if (!username.value) return
+  const location = readConsoleLocation(window.location.hash)
+  const first = characters.value[0]
+  return applyLocation(location ?? (first && { characterId: first.id, page: 'character' }), !location)
+}
+
+async function applyLocation(location?: ConsoleLocation, replace = false) {
+  const current = ++revision
+  const target = location?.characterId ?? ''
+  const changedCharacter = target !== characterId.value
+  const changedPage = tab.value !== location?.page
+  if (changedCharacter || changedPage) {
+    actions.value = []
+    nextCursor.value = null
+    queueLoaded = false
     resetNewbi()
+  }
+  resetReview()
+  error.value = ''
+  notice.value = ''
+  detailId.value = undefined
+  if (changedCharacter) {
+    characterId.value = ''
+    roles.value = []
+  }
+  routing.value = true
+  try {
+    if (!location) {
+      tab.value = 'character'
+      if (window.location.hash) window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      return
+    }
+    if (changedCharacter) {
+      const workspace = await request<z.infer<typeof characterWorkspaceView>>('/v1/characters/' + target)
+      if (current !== revision) return
+      roles.value = workspace.roles
+      if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
+    }
+    characterId.value = target
+    const denied = (location.page === 'runs' && !canReadRuns.value)
+      || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
+    tab.value = denied ? 'character' : location.page
+    detailId.value = denied ? undefined : location.detail
+    if (denied) error.value = '当前账号无权打开此链接。'
+    if (replace || denied) {
+      window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value }))
+    }
+    if (tab.value === 'review' && canReviewSimulation.value) {
+      if (!queueLoaded) await fetchQueue(current)
+      if (current === revision && location.detail) await fetchAction(location.detail, current)
+    }
+  } catch (cause) {
+    if (current !== revision) return
+    const status = cause instanceof RequestError ? cause.status : 0
+    if (status === 401) {
+      resetSession()
+      error.value = '登录已过期，请重新登录。'
+    }
+    else {
+      if (changedCharacter && !characterId.value) tab.value = 'character'
+      error.value = status === 403 || status === 404 ? '无法访问链接中的角色或详情。' : '无法打开链接，请重试。'
+    }
+  } finally {
+    if (current === revision) routing.value = false
   }
 }
 
-onMounted(() => run(async () => {
-  const session = await request<Session>('/v1/auth/session').catch((cause: unknown) => {
-    if (cause instanceof RequestError && (cause.status === 401 || cause.status === 404)) return null
-    throw cause
+function changeTab(page: ConsolePage) {
+  if (characterId.value) navigate({ characterId: characterId.value, page })
+}
+
+onBeforeUnmount(() => {
+  ++revision
+  window.removeEventListener('hashchange', restoreLocation)
+})
+onMounted(() => {
+  window.addEventListener('hashchange', restoreLocation)
+  void run(async () => {
+    const session = await request<Session>('/v1/auth/session').catch((cause: unknown) => {
+      if (cause instanceof RequestError && (cause.status === 401 || cause.status === 404)) return null
+      throw cause
+    })
+    if (session) await openSession(session)
   })
-  if (session) await openSession(session)
-}))
+})
 
 async function connect() {
   await run(async () => openSession(await authPost<Session>('login', {
@@ -177,6 +264,9 @@ async function disconnect() {
 }
 
 function resetSession() {
+  ++revision
+  routing.value = false
+  detailId.value = undefined
   resetNewbi()
   username.value = ''
   password.value = ''
@@ -189,40 +279,50 @@ function resetSession() {
   characterId.value = ''
   actions.value = []
   nextCursor.value = null
+  queueLoaded = false
   error.value = ''
   notice.value = ''
   resetReview()
 }
 
+async function fetchQueue(current: number, append = false) {
+  const cursor = append && nextCursor.value ? '?cursor=' + encodeURIComponent(nextCursor.value) : ''
+  const result = await request<Page<ActionView>>(path.value + cursor)
+  if (current !== revision) return
+  actions.value = append ? [...actions.value, ...result.items] : result.items
+  nextCursor.value = result.nextCursor
+  queueLoaded = true
+}
+
 async function loadQueue(append = false) {
-  if (!characterId.value || !canReviewSimulation.value) return
+  const current = revision
   await run(async () => {
-    const cursor = append && nextCursor.value ? '?cursor=' + encodeURIComponent(nextCursor.value) : ''
-    const result = await request<Page<ActionView>>(path.value + cursor)
-    actions.value = append ? [...actions.value, ...result.items] : result.items
-    nextCursor.value = result.nextCursor
+    await fetchQueue(current, append)
     const preview = selected.value
-    if (!append && preview?.state === 'WAITING_APPROVAL' && !result.items.some(({ id }) => id === preview.id)) {
-      selected.value = { ...preview, content: null }
-    }
-  })
+    if (current === revision && !append && preview?.state === 'WAITING_APPROVAL'
+      && !actions.value.some(({ id }) => id === preview.id)) selected.value = { ...preview, content: null }
+  }, current)
 }
 
 function changeCharacter(id: string) {
-  characterId.value = id
-  roles.value = []
-  tab.value = 'character'
-  resetNewbi()
-  actions.value = []
-  nextCursor.value = null
-  resetReview()
+  navigate({ characterId: id, page: 'character' })
 }
 
-async function openAction(id: string) {
-  await run(async () => {
-    if (selected.value?.id !== id) resetReview()
-    selected.value = await request<ActionView>(path.value + '/' + id)
-  })
+async function fetchAction(id: string, current: number) {
+  const action = await request<ActionView>(path.value + '/' + id)
+  if (current === revision) selected.value = action
+}
+
+function openAction(id: string) {
+  if (detailId.value !== id) navigate({ characterId: characterId.value, page: 'review', detail: id })
+  else {
+    const current = revision
+    void run(() => fetchAction(id, current), current)
+  }
+}
+
+function openRun(id: string) {
+  navigate({ characterId: characterId.value, page: 'runs', detail: id })
 }
 
 async function decide(decision: Decision) {
@@ -233,6 +333,7 @@ async function decide(decision: Decision) {
   const signature = JSON.stringify([proposal.id, proposal.version, data])
   if (pending?.signature !== signature) pending = { signature, key: crypto.randomUUID() }
   const { key } = pending
+  const current = revision
   await run(async () => {
     const outcome = await request<{ status: 'READY' | 'REJECTED'; version: number }>(
       path.value + '/' + proposal.id + '/decisions', {
@@ -242,22 +343,25 @@ async function decide(decision: Decision) {
         body: JSON.stringify(data),
       },
     )
+    if (current !== revision) return
     actions.value = actions.value.filter(({ id }) => id !== proposal.id)
     selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version }
     reason.value = ''
     pending = undefined
     notice.value = outcome.status === 'READY' ? '已批准模拟提案。' : '已拒绝模拟提案。'
-  })
+  }, current)
 }
 async function openNewbiReply() {
   const id = newbiId.value.trim()
   if (!id) return
+  const current = revision
   await run(async () => {
     newbiReply.value = undefined
     newbiReason.value = ''
     newbiPending = undefined
-    newbiReply.value = await request<NewbiReplyView>(newbiPath.value + '/' + encodeURIComponent(id))
-  })
+    const reply = await request<NewbiReplyView>(newbiPath.value + '/' + encodeURIComponent(id))
+    if (current === revision) newbiReply.value = reply
+  }, current)
 }
 
 async function decideNewbi(decision: Decision) {
@@ -268,6 +372,7 @@ async function decideNewbi(decision: Decision) {
   const signature = JSON.stringify([reply.id, data])
   if (newbiPending?.signature !== signature) newbiPending = { signature, key: crypto.randomUUID() }
   const { key } = newbiPending
+  const current = revision
   await run(async () => {
     const result = await request<{ status: 'READY' | 'REJECTED' }>(
       newbiPath.value + '/' + encodeURIComponent(reply.id) + '/decision', {
@@ -275,16 +380,17 @@ async function decideNewbi(decision: Decision) {
         body: JSON.stringify(data),
       },
     )
+    if (current !== revision) return
     newbiReply.value = { ...reply, status: result.status }
     newbiReason.value = ''
     newbiPending = undefined
     notice.value = result.status === 'READY' ? '扭笔回复已批准，等待单次执行。' : '扭笔回复已拒绝。'
-  })
+  }, current)
 }
 </script>
 
 <template>
-  <section class="review-desk" aria-labelledby="review-heading" :aria-busy="busy">
+  <section class="review-desk" aria-labelledby="review-heading" :aria-busy="busy || routing">
     <NCard v-if="!username" class="login-card">
       <h2 id="review-heading">登录控制台</h2>
       <NForm :show-feedback="false" @submit.prevent="connect">
@@ -332,8 +438,8 @@ async function decideNewbi(decision: Decision) {
 
       <nav class="account-actions" aria-label="控制台导航">
         <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
-        <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || !canReview" @click="changeTab('review')">审批</NButton>
-        <NButton :type="tab === 'runs' ? 'primary' : 'default'" :disabled="busy || !canReadRuns" @click="changeTab('runs')">运行</NButton>
+        <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab('review')">审批</NButton>
+        <NButton :type="tab === 'runs' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
       </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
@@ -343,17 +449,18 @@ async function decideNewbi(decision: Decision) {
           @click="run(() => fetchCharacters(characterCursor ?? undefined))">加载更多角色</NButton>
       </div>
 
-      <CharacterWorkspace v-if="tab === 'character'" :key="characterId" :character-id="characterId"
+      <NSpin v-if="routing && !characterId" />
+      <CharacterWorkspace v-else-if="tab === 'character'" :key="characterId" :character-id="characterId"
         :can-create="canCreate" @created="characterCreated" @expired="resetSession" @roles="roles = $event" />
       <SimulationWorkspace v-else-if="tab === 'runs' && characterId && canReadRuns" :key="characterId"
-        :character-id="characterId" :can-start="roles.includes('ADMIN')" @expired="resetSession" />
+        :character-id="characterId" :can-start="roles.includes('ADMIN')" :detail-id="detailId" @expired="resetSession" @open="openRun" />
       <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">
             <h3>待办</h3>
             <NButton size="small" quaternary :disabled="busy" @click="loadQueue()">刷新</NButton>
           </div>
-          <NEmpty v-if="!actions.length && !busy && !error" description="暂无待审提案。" />
+          <NEmpty v-if="!actions.length && !busy && !routing && !error" description="暂无待审提案。" />
           <ul v-if="actions.length" class="queue-items">
             <li v-for="item in actions" :key="item.id">
               <NButton block :type="selected?.id === item.id ? 'primary' : 'default'" secondary

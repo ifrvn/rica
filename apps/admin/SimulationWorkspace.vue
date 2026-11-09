@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSelect, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
@@ -13,8 +13,8 @@ type Character = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 
-const props = defineProps<{ characterId: string; canStart: boolean }>()
-const emit = defineEmits<{ expired: [] }>()
+const props = defineProps<{ characterId: string; canStart: boolean; detailId?: string }>()
+const emit = defineEmits<{ expired: []; open: [id: string] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -22,7 +22,10 @@ const accounts = ref<Account[]>([])
 const character = ref<Character>()
 const cursor = ref<string | null>(null)
 const selected = ref<Replay>()
-const selectedPlatform = ref('')
+const selectedPlatform = computed(() => selected.value?.proposal?.adapterId
+  ?? accounts.value.find(({ id }) => id === selected.value?.accountId)?.platform ?? '—')
+const detailError = ref('')
+let detailRevision = 0
 const accountId = ref('')
 const message = ref('')
 const busy = ref(false)
@@ -70,12 +73,23 @@ async function list(append = false) {
   cursor.value = page.nextCursor
 }
 
-async function detail(id: string, platform: string) {
-  const view = await request<Replay>(base.value + '/runs/' + encodeURIComponent(id) + '/replay')
-  if (!active) return
-  selected.value = view
-  selectedPlatform.value = platform
+async function detail(id?: string) {
+  const current = ++detailRevision
+  selected.value = undefined
+  detailError.value = ''
+  if (!id) return
+  try {
+    const view = await request<Replay>(base.value + '/runs/' + encodeURIComponent(id) + '/replay')
+    if (active && current === detailRevision) selected.value = view
+  } catch (cause) {
+    if (!active || current !== detailRevision) return
+    const status = cause instanceof RequestError ? cause.status : 0
+    if (status === 401) emit('expired')
+    else detailError.value = status === 403 || status === 404 ? '找不到该角色的运行详情。' : '无法读取运行详情，请刷新后重试。'
+  }
 }
+
+watch(() => props.detailId, (id) => { void detail(id) }, { immediate: true })
 
 async function act(task: () => Promise<void>) {
   if (busy.value) return
@@ -101,7 +115,7 @@ async function load() {
     list(),
     Promise.all([
       all<Identity>(base.value + '/identities'),
-      props.canStart ? all<Account>(base.value + '/accounts') : Promise.resolve([]),
+      all<Account>(base.value + '/accounts'),
       props.canStart ? request<Character>(base.value) : Promise.resolve(undefined),
     ]).then(([names, choices, current]) => {
       if (active) { identities.value = names; accounts.value = choices; character.value = current }
@@ -113,12 +127,17 @@ async function load() {
   ])
 }
 
+function refresh() {
+  void act(async () => {
+    await Promise.all([load(), detail(props.detailId)])
+  })
+}
+
 function start() {
   if (!props.canStart || !options.value.some(({ value }) => value === accountId.value) || !message.value.trim()) return
   const body = JSON.stringify({ accountId: accountId.value, message: message.value.trim() })
   if (pending?.body !== body) pending = { body, key: crypto.randomUUID() }
   const key = pending.key
-  const platform = accounts.value.find(({ id }) => id === accountId.value)?.platform ?? ''
   void act(async () => {
     const result = await request<{ id: string }>(base.value + '/runs', {
       method: 'POST', body, headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
@@ -127,7 +146,8 @@ function start() {
     showForm.value = false
     message.value = ''
     pending = undefined
-    await Promise.all([detail(result.id, platform), list()])
+    emit('open', result.id)
+    await list()
   })
 }
 
@@ -139,12 +159,10 @@ onMounted(() => { void act(load) })
     <div class="run-actions">
       <NButton v-if="canStart && !showForm" type="primary" :disabled="busy || !options.length"
         @click="showForm = true">运行一次模拟</NButton>
-      <NButton :disabled="busy" @click="act(async () => {
-        await load()
-        if (selected) await detail(selected.id, selectedPlatform)
-      })">刷新</NButton>
+      <NButton :disabled="busy" @click="refresh">刷新</NButton>
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
     <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
     <NAlert v-if="canStart && !busy && !options.length && !loadingError" type="info">请先在角色与身份页启用角色、身份和可用的模拟账号。</NAlert>
     <NCard v-if="showForm" title="运行一次模拟" size="small">
@@ -182,7 +200,7 @@ onMounted(() => { void act(load) })
       <ul v-if="rows.length" class="run-list">
         <li v-for="item in rows" :key="item.id" class="run-actions">
           <NButton quaternary :disabled="busy" :aria-pressed="selected?.id === item.id"
-            @click="act(() => detail(item.id, item.platform))">
+            @click="emit('open', item.id)">
             {{ new Date(item.createdAt).toLocaleString() }}
           </NButton>
           <span>{{ identityName(item.identityId) }} · {{ item.platform }}</span>
