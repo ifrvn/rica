@@ -1,5 +1,5 @@
 import type { z } from '@hono/zod-openapi'
-import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView } from '../contracts/simulation-observability.js'
+import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '../contracts/simulation-observability.js'
 import type { ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, ManagementError, type Scope } from './management.js'
@@ -22,11 +22,17 @@ export async function startConsoleSimulation(
   return { id: row.id, status: 'QUEUED' }
 }
 
-export async function listSimulationRuns(db: PrismaClient, scope: Scope, { limit, cursor }: { limit: number; cursor?: string }) {
+type RunListQuery = Omit<z.infer<typeof simulationRunQuery>, 'limit'> & { limit: number }
+
+export async function listSimulationRuns(db: PrismaClient, scope: Scope, { limit, cursor, state, identityId, accountId, from, through }: RunListQuery) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
     const rows = await tx.$queryRaw<(Omit<z.infer<typeof simulationRunSummary>, 'createdAt'> & { createdAt: Date })[]>`
-      SELECT * FROM public.rica_console_simulation_runs(${scope.characterId}::uuid, ${cursor ?? null}::uuid, ${limit + 1}::int)
+      SELECT * FROM public.rica_console_simulation_runs(
+        ${scope.characterId}::uuid, ${cursor ?? null}::uuid, ${limit + 1}::int,
+        ${state ?? null}::public."RunState", ${identityId ?? null}::uuid, ${accountId ?? null}::uuid,
+        ${from ?? null}::date, ${through ?? null}::date
+      )
     `
     const items = rows.slice(0, limit).map((row) => simulationRunSummary.parse({ ...row, createdAt: row.createdAt.toISOString() }))
     return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null }

@@ -3,9 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSelect, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
-import type { runReplayView, simulationRunSummary } from '../../packages/contracts/simulation-observability.js'
+import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../packages/contracts/simulation-observability.js'
 import SimulationReconciliation from './SimulationReconciliation.vue'
 import type { ReconciliationView } from '../../packages/contracts/action-review.js'
+import { runFilterKeys } from './console-location.js'
 import { request, RequestError } from './request.js'
 
 type Run = z.infer<typeof simulationRunSummary>
@@ -15,8 +16,8 @@ type Character = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 
-const props = defineProps<{ characterId: string; canStart: boolean; detailId?: string }>()
-const emit = defineEmits<{ expired: []; open: [id: string]; audit: [id: string] }>()
+const props = defineProps<{ characterId: string; canStart: boolean; detailId?: string; runQuery: string }>()
+const emit = defineEmits<{ expired: []; open: [id: string]; audit: [id: string]; filter: [query: string] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -34,15 +35,40 @@ const message = ref('')
 const busy = ref(false)
 const error = ref('')
 const loadingError = ref('')
+const listError = ref('')
+const loadingList = ref(false)
+let listRevision = 0
+const filters = ref({ state: '', identityId: '', accountId: '', from: '', through: '' })
+const invalidDates = computed(() => !!filters.value.from && !!filters.value.through && filters.value.from > filters.value.through)
 const showForm = ref(false)
 let pending: { body: string; key: string } | undefined
 let active = true
 onBeforeUnmount(() => { active = false })
 
-const stateLabels: Record<string, string> = {
-  QUEUED: '已排队', CONTEXT_READY: '准备草稿', WAITING_APPROVAL: '待审批', READY: '待执行',
+const stateLabels = {
+  QUEUED: '已排队', CONTEXT_READY: '准备草稿', DRAFTED: '草稿已生成', WAITING_APPROVAL: '待审批', READY: '待执行',
   EXECUTING: '执行中', RECONCILING: '待对账', SIMULATED: '模拟完成',
   REJECTED: '已拒绝', BLOCKED: '已拦截', CANCELED: '已取消', EXPIRED: '已过期',
+} satisfies Record<NonNullable<z.infer<typeof simulationRunQuery>['state']>, string>
+
+function stateName(state: string) {
+  return (stateLabels as Record<string, string>)[state] ?? state
+}
+
+const stateOptions = [{ label: '全部', value: '' }, ...Object.entries(stateLabels).map(([value, label]) => ({ label, value }))]
+const identityOptions = computed(() => [{ label: '全部', value: '' },
+  ...identities.value.map(({ id }) => ({ value: id, label: identityName(id) }))])
+const accountOptions = computed(() => [{ label: '全部', value: '' }, ...accounts.value
+  .filter(({ identityId }) => !filters.value.identityId || identityId === filters.value.identityId)
+  .map(({ id, platform, instanceKey }) => ({ value: id, label: platform + ' · ' + instanceKey }))])
+
+function applyFilters() {
+  if (invalidDates.value) return
+  const query = new URLSearchParams()
+  for (const key of runFilterKeys) {
+    if (filters.value[key]) query.set(key, filters.value[key])
+  }
+  emit('filter', query.toString())
 }
 
 function identityName(id: string) {
@@ -69,12 +95,42 @@ async function all<T>(path: string) {
 }
 
 async function list(append = false) {
-  const query = append && cursor.value ? '?cursor=' + encodeURIComponent(cursor.value) : ''
-  const page = await request<Page<Run>>(base.value + '/runs' + query)
-  if (!active) return
-  rows.value = append ? [...rows.value, ...page.items] : page.items
-  cursor.value = page.nextCursor
+  const current = ++listRevision
+  const query = new URLSearchParams(props.runQuery)
+  if (append && cursor.value) query.set('cursor', cursor.value)
+  loadingList.value = true
+  listError.value = ''
+  try {
+    const page = await request<Page<Run>>(base.value + '/runs?' + query.toString())
+    if (!active || current !== listRevision) return
+    rows.value = append ? [...rows.value, ...page.items] : page.items
+    cursor.value = page.nextCursor
+  } catch (cause) {
+    if (!active || current !== listRevision) return
+    const status = cause instanceof RequestError ? cause.status : 0
+    if (status === 401) emit('expired')
+    else {
+      if (status === 403 || status === 404) {
+        rows.value = []
+        cursor.value = null
+      }
+      listError.value = ({
+        403: '当前账号无权查看运行。', 404: '找不到该角色的运行。', 422: '筛选条件无效，请清除后重新选择。',
+      } as Record<number, string>)[status] ?? '无法加载运行，请刷新后重试。'
+    }
+  } finally {
+    if (current === listRevision) loadingList.value = false
+  }
 }
+
+watch(() => props.runQuery, (value, previous) => {
+  const query = new URLSearchParams(value)
+  for (const key of runFilterKeys) filters.value[key] = query.get(key) ?? ''
+  if (previous === undefined) return
+  rows.value = []
+  cursor.value = null
+  void list()
+}, { immediate: true })
 
 async function detail(id?: string) {
   const current = ++detailRevision
@@ -196,7 +252,7 @@ onMounted(() => { void act(load) })
     <NCard v-if="selected" title="运行详情" size="small">
       <div class="run-actions">
         <NTag size="small">模拟</NTag>
-        <NTag size="small">{{ stateLabels[selected.state] || selected.state }}</NTag>
+        <NTag size="small">{{ stateName(selected.state) }}</NTag>
         <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
       </div>
       <dl>
@@ -213,7 +269,33 @@ onMounted(() => { void act(load) })
       :key="selected.proposal.id" :character-id="characterId" :action-id="selected.proposal.id"
       @expired="emit('expired')" @resolved="reconciled" />
     <NCard title="最近运行" size="small">
-      <NEmpty v-if="!rows.length && !busy && !error" description="暂无模拟运行。" />
+      <NForm class="run-filters" @submit.prevent="applyFilters">
+        <NFormItem label="状态" :label-props="{ for: 'filter-run-state' }">
+          <NSelect filterable v-model:value="filters.state" :options="stateOptions" :input-props="{ id: 'filter-run-state' }" />
+        </NFormItem>
+        <NFormItem label="身份" :label-props="{ for: 'filter-run-identity' }">
+          <NSelect filterable v-model:value="filters.identityId" :options="identityOptions"
+            :input-props="{ id: 'filter-run-identity' }" @update:value="filters.accountId = ''" />
+        </NFormItem>
+        <NFormItem label="账号" :label-props="{ for: 'filter-run-account' }">
+          <NSelect filterable v-model:value="filters.accountId" :options="accountOptions" :input-props="{ id: 'filter-run-account' }" />
+        </NFormItem>
+        <NFormItem label="起始日期（UTC）" :label-props="{ for: 'filter-run-from' }">
+          <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />
+        </NFormItem>
+        <NFormItem label="截止日期（UTC）" :label-props="{ for: 'filter-run-through' }">
+          <input id="filter-run-through" v-model="filters.through" type="date" min="0001-01-01" max="9999-12-31" />
+        </NFormItem>
+        <div class="run-actions">
+          <NButton attr-type="submit" :disabled="invalidDates">筛选</NButton>
+          <NButton v-if="runQuery" quaternary @click="emit('filter', '')">清除筛选</NButton>
+        </div>
+      </NForm>
+      <NAlert v-if="invalidDates" type="warning" role="status">截止日期应等于或晚于起始日期。</NAlert>
+      <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
+      <p v-if="loadingList && !rows.length" role="status">正在加载运行…</p>
+      <NEmpty v-if="!rows.length && !loadingList && !listError"
+        :description="runQuery ? '没有符合筛选条件的运行。' : '暂无模拟运行。'" />
       <ul v-if="rows.length" class="run-list">
         <li v-for="item in rows" :key="item.id" class="run-actions">
           <NButton quaternary :disabled="busy" :aria-pressed="selected?.id === item.id"
@@ -221,10 +303,10 @@ onMounted(() => { void act(load) })
             {{ new Date(item.createdAt).toLocaleString() }}
           </NButton>
           <span>{{ identityName(item.identityId) }} · {{ item.platform }}</span>
-          <NTag size="small">{{ stateLabels[item.state] || item.state }}</NTag>
+          <NTag size="small">{{ stateName(item.state) }}</NTag>
         </li>
       </ul>
-      <NButton v-if="cursor" size="small" :disabled="busy" @click="act(() => list(true))">加载更多</NButton>
+      <NButton v-if="cursor" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</NButton>
     </NCard>
   </section>
 </template>
@@ -232,6 +314,9 @@ onMounted(() => { void act(load) })
 <style scoped>
 .simulation-workspace { display: grid; gap: 1rem; margin-top: 1rem; }
 .run-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; overflow-wrap: anywhere; }
+.run-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 0 .75rem; align-items: start; }
+.run-filters input[type="date"] { box-sizing: border-box; width: 100%; font: inherit; min-height: 34px; }
+.run-filters .run-actions { align-self: center; margin-bottom: .75rem; }
 .run-list { list-style: none; margin: 0 0 .5rem; padding: 0; }
 .run-list li + li { border-top: 1px solid #e0e8e7; }
 dl { display: grid; gap: .5rem; }

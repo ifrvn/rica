@@ -4,7 +4,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
-import { consoleSimulationInput, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
+import { consoleSimulationInput, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
@@ -707,11 +707,12 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/runs`, security,
-    request: { params: characterParams, query: schema.listQuery },
+    request: { params: characterParams, query: simulationRunQuery },
     responses: { ...errors, 200: success(schema.pageView(simulationRunSummary)) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    return c.json(await listSimulationRuns(db, scope, management.parsePage(c.req.valid('query'))), 200)
+    const query = c.req.valid('query')
+    return c.json(await listSimulationRuns(db, scope, { ...query, ...management.parsePage(query) }), 200)
   })
 
   app.openapi(createRoute({

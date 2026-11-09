@@ -30,6 +30,7 @@ const pageTitle: Record<ConsolePage, string> = {
   character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
+const runQuery = ref('')
 const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
@@ -171,9 +172,10 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
     tab.value = denied ? 'character'
       : location.page === 'review' && !canReviewSimulation.value ? 'connector' : location.page
     detailId.value = denied ? undefined : location.detail
+    runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
     if (denied) error.value = '当前账号无权打开此链接。'
     if (replace || tab.value !== location.page) {
-      window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value }))
+      window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value, runQuery: runQuery.value }))
     }
     if (tab.value === 'review' && canReviewSimulation.value) {
       if (!queueLoaded) await fetchQueue(current)
@@ -311,7 +313,7 @@ function openAction(id: string) {
 }
 
 function openRun(id: string) {
-  navigate({ characterId: characterId.value, page: 'runs', detail: id })
+  navigate({ characterId: characterId.value, page: 'runs', detail: id, runQuery: runQuery.value })
 }
 
 function openRunAudit(id: string) {
@@ -421,7 +423,8 @@ async function decide(decision: Decision) {
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')" />
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
-          :detail-id="detailId" @expired="resetSession" @open="openRun" @audit="openRunAudit" />
+          :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
+          @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event })" />
       </template>
       <RunOperations v-else-if="tab === 'outbox' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" mode="outbox" :can-retry="roles.includes('ADMIN')"

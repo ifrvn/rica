@@ -2990,6 +2990,33 @@ test('console simulation runs use an isolated conversation, one approval and one
       [id, second.body.id].sort())
     assert.equal(older.body.nextCursor, null)
 
+    const filters = new URLSearchParams({ identityId, accountId: account.id, limit: '1' })
+    const matchingPage = await request('GET', path + '?' + filters)
+    assert.equal(matchingPage.status, 200, JSON.stringify(matchingPage.body))
+    assert.equal(matchingPage.body.nextCursor, recent.body.nextCursor)
+    filters.set('cursor', matchingPage.body.nextCursor)
+    const matchingOlder = await request('GET', path + '?' + filters)
+    assert.deepEqual(matchingOlder.body, older.body)
+    filters.delete('cursor')
+    filters.set('state', 'SIMULATED')
+    const utcDay = run.createdAt.toISOString().slice(0, 10)
+    filters.set('from', utcDay)
+    filters.set('through', utcDay)
+    const filtered = await request('GET', path + '?' + filters)
+    assert.equal(filtered.status, 200, JSON.stringify(filtered.body))
+    assert.deepEqual(filtered.body.items.map((item: { id: string }) => item.id), [id])
+    assert.equal(filtered.body.nextCursor, null)
+    const previousDay = new Date(Date.parse(utcDay) - 86_400_000).toISOString().slice(0, 10)
+    for (const replacement of [
+      { from: previousDay, through: previousDay }, { identityId: randomUUID() }, { accountId: accountA },
+    ]) {
+      const unmatched = new URLSearchParams(filters)
+      for (const [key, value] of Object.entries(replacement)) unmatched.set(key, value)
+      assert.deepEqual((await request('GET', path + '?' + unmatched)).body, { items: [], nextCursor: null })
+    }
+    assert.equal((await request('GET', path + '?from=' + utcDay + '&through=' + previousDay)).status, 422)
+    assert.deepEqual((await request('GET', characterPath(a) + '/runs?' + filters)).body, { items: [], nextCursor: null })
+
     const audit = character + '/audit?runId=' + id
     assert.equal((await request('GET', audit, { actor: 'reviewer' })).status, 403)
     assert.equal((await request('GET', characterPath(a) + '/audit?runId=' + id)).status, 404)

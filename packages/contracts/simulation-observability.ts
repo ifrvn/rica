@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi'
 
-import { resourceId } from './management.js'
+import { listQuery, resourceId } from './management.js'
 import { maxSimulatedTextLength } from '../runtime/model-provider.js'
 
 const timestamp = z.iso.datetime({ offset: true })
@@ -8,6 +8,16 @@ export const consoleSimulationInput = z.strictObject({
   accountId: resourceId,
   message: z.string().trim().min(1).max(maxSimulatedTextLength).refine((value) => !value.includes('\0')),
 })
+export const simulationRunQuery = listQuery.extend({
+  state: z.enum(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'CANCELED', 'WAITING_APPROVAL', 'READY', 'REJECTED',
+    'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']).optional(),
+  identityId: resourceId.optional(),
+  accountId: resourceId.optional(),
+  from: z.iso.date().optional(),
+  through: z.iso.date().optional(),
+}).refine(({ from, through }) => (!from || from >= '0001-01-01') && (!through || through >= '0001-01-01')
+  && (!from || !through || from <= through), 'Choose a valid inclusive UTC date range')
+
 export const simulationRunSummary = z.object({
   id: resourceId, state: z.string(), identityId: resourceId, accountId: resourceId,
   platform: z.string(), createdAt: timestamp,
