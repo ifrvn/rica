@@ -192,18 +192,24 @@ export async function createAccount(tx: Tx, scope: Scope, input: Input<typeof co
   return { id: account.id, status: account.status, version: account.bindingVersion }
 }
 
-export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>) {
+export type VerifyConnector = (endpoint: string, agentId: string) => Promise<boolean>
+
+export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>, verifyConnector?: VerifyConnector) {
   const { characterId } = scope
   const { scopeId: id, operation } = input
   const entityStatus = operation === 'RESUME' ? 'ACTIVE' : 'PAUSED'
   if (input.scope === 'ACCOUNT') {
-    const account = await tx.platformAccount.findFirst({ where: { characterId, id }, select: { status: true, platform: true } })
+    const account = await tx.platformAccount.findFirst({ where: { characterId, id }, select: { status: true, platform: true, instanceKey: true, remoteAccountId: true } })
     if (!account) unavailable()
     if (account.status === 'REVOKED' || (operation === 'RESUME' && account.status !== 'PAUSED' && account.status !== 'ACTIVE')) {
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account cannot perform this transition')
     }
     if (operation === 'RESUME' && account.platform !== 'mock-a' && account.platform !== 'mock-b' && account.platform !== 'newbi') {
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
+    }
+    if (operation === 'RESUME' && account.platform === 'newbi'
+      && !await verifyConnector?.(account.instanceKey, account.remoteAccountId)) {
+      throw new ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Connector read identity could not be verified')
     }
     // Pausing a reauthentication or pending account must not make it eligible for activation.
     if (operation === 'PAUSE' && account.status !== 'ACTIVE' && account.status !== 'PAUSED') {

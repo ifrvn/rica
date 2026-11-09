@@ -3,17 +3,18 @@ import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
+import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
 import { request, RequestError } from './request.js'
 
 type Workspace = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>
 type Page<T> = { items: T[]; nextCursor: string | null }
-type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'control'
-type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string }
+type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'connector-account' | 'control'
+type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; connector?: boolean; revoke?: boolean }
 
-const props = defineProps<{ characterId: string; canCreate: boolean }>()
-const emit = defineEmits<{ created: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']] }>()
+const props = defineProps<{ characterId: string; canCreate: boolean; accountsOnly?: boolean; accountDetail?: string }>()
+const emit = defineEmits<{ created: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']]; account: [id?: string]; proposals: [id: string] }>()
 const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
@@ -28,11 +29,14 @@ const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style:
   identityId: '', platform: '', instance: '', remoteId: '', reason: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
+const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
+const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && platform === 'newbi'))
 const isCharacter = computed(() => editor.value === 'character' || editor.value === 'core')
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
   character: '创建角色', core: '编辑核心', identity: '创建身份', 'identity-edit': '编辑身份',
-  account: '登记模拟账号', control: target.value?.status === 'ACTIVE' ? '暂停' : '恢复',
+  account: '登记模拟账号', 'connector-account': '登记本机连接器账号',
+  control: target.value?.revoke ? '撤销账号' : target.value?.status === 'ACTIVE' ? '暂停' : '恢复',
 })[editor.value ?? 'character'])
 const styles = [
   { label: '中性', value: 'neutral' }, { label: '正式', value: 'formal' },
@@ -87,6 +91,10 @@ async function run(task: () => Promise<void>) {
       emit('expired')
       return
     }
+    if (code === 409 && target.value?.connector && target.value.status === 'PAUSED' && !target.value.revoke) {
+      error.value = '恢复未完成。请核对部署中的读取凭据、服务地址和 Agent ID，再重试。'
+      return
+    }
     error.value = ({
       403: '当前账号无权执行此操作。', 404: '当前角色或资源不可访问。', 409: '操作冲突，请核对当前状态。',
       412: '配置已更新。请取消编辑，刷新后重新核对。', 422: '请核对标识、时区和输入内容。',
@@ -109,7 +117,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     timezone: kind === 'character' ? 'UTC' : identity?.profile?.timezone ?? '',
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     identityId: identities.value[0]?.id ?? '', platform: workspace.value?.simulationPlatforms[0] ?? '',
-    instance: 'local', remoteId: '', reason: '' })
+    instance: kind === 'connector-account' ? '' : 'local', remoteId: '', reason: '' })
 }
 
 function command(path: string, data: object, version?: number) {
@@ -148,9 +156,14 @@ async function save() {
     } else if (kind === 'account') {
       await command(base.value + '/accounts', { identityId: form.identityId, platform: form.platform,
         instanceKey: form.instance.trim(), remoteAccountId: form.remoteId.trim() })
+    } else if (kind === 'connector-account') {
+      const result = await command(base.value + '/newbi/accounts', {
+        identityId: form.identityId, endpoint: form.instance.trim(), agentId: form.remoteId.trim(),
+      })
+      if (active) emit('account', result.id)
     } else if (kind === 'control' && target.value) {
-      const { scope, id: scopeId, status } = target.value
-      await command(base.value + '/controls', { scope, scopeId, operation: status === 'ACTIVE' ? 'PAUSE' : 'RESUME', reason })
+      const { scope, id: scopeId, status, revoke } = target.value
+      await command(base.value + '/controls', { scope, scopeId, operation: revoke ? 'REVOKE_ACCOUNT' : status === 'ACTIVE' ? 'PAUSE' : 'RESUME', reason })
     } else return
     if (!active) return
     editor.value = undefined
@@ -165,6 +178,7 @@ const valid = computed(() => {
   if (editor.value === 'core') return !!(form.disclosure.trim() && form.reason.trim())
   if (editor.value === 'identity') return !!form.slug.trim()
   if (editor.value === 'identity-edit' || editor.value === 'control') return !!form.reason.trim()
+  if (editor.value === 'connector-account') return !!(form.identityId && form.instance.trim() && form.remoteId.trim())
   return !!(form.identityId && form.platform && form.instance.trim() && form.remoteId.trim())
 })
 
@@ -181,6 +195,9 @@ onMounted(() => { if (props.characterId) void run(load) })
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
     <NCard v-if="editor" :title="title" size="small">
       <p v-if="editor === 'control' && target">{{ target.name }} · {{ status(target.status) }}</p>
+      <p v-if="target?.connector">{{ target.revoke ? '撤销后，此绑定无法恢复。待核对记录和回执仍可查看。'
+        : target.status === 'ACTIVE' ? '暂停后，此账号无法领取新的读取任务或发送许可。'
+          : '恢复前会核对读取权限。发送仍需独立审批和执行许可。' }}</p>
       <NForm @submit.prevent="save">
         <NFormItem v-if="editor === 'character' || editor === 'identity'" label="标识" :label-props="{ for: 'workspace-slug' }">
           <NInput v-model:value="form.slug" :input-props="{ id: 'workspace-slug' }" placeholder="小写字母、数字和连字符" maxlength="63" />
@@ -197,19 +214,19 @@ onMounted(() => { if (props.characterId) void run(load) })
         <NFormItem v-if="isIdentity" label="写作风格" :label-props="{ for: 'workspace-style' }">
           <NSelect v-model:value="form.style" :options="styles" :input-props="{ id: 'workspace-style' }" />
         </NFormItem>
-        <template v-if="editor === 'account'">
+        <template v-if="editor === 'account' || editor === 'connector-account'">
           <NFormItem label="身份" :label-props="{ for: 'workspace-identity' }">
-            <NSelect v-model:value="form.identityId" :input-props="{ id: 'workspace-identity' }"
+            <NSelect filterable v-model:value="form.identityId" :input-props="{ id: 'workspace-identity' }"
               :options="identities.map(item => ({ label: item.profile?.displayName || item.slug, value: item.id }))" />
           </NFormItem>
-          <NFormItem label="模拟平台" :label-props="{ for: 'workspace-platform' }">
+          <NFormItem v-if="editor === 'account'" label="模拟平台" :label-props="{ for: 'workspace-platform' }">
             <NSelect v-model:value="form.platform" :input-props="{ id: 'workspace-platform' }"
               :options="workspace?.simulationPlatforms.map(value => ({ label: value, value }))" />
           </NFormItem>
-          <NFormItem label="实例标识" :label-props="{ for: 'workspace-instance' }">
-            <NInput v-model:value="form.instance" :input-props="{ id: 'workspace-instance' }" maxlength="120" />
+          <NFormItem :label="editor === 'account' ? '实例标识' : '本机 API 地址'" :label-props="{ for: 'workspace-instance' }">
+            <NInput v-model:value="form.instance" :input-props="{ id: 'workspace-instance' }" :maxlength="editor === 'account' ? 120 : 160" />
           </NFormItem>
-          <NFormItem label="模拟平台账号标识" :label-props="{ for: 'workspace-remote' }">
+          <NFormItem :label="editor === 'account' ? '模拟平台账号标识' : 'Agent ID'" :label-props="{ for: 'workspace-remote' }">
             <NInput v-model:value="form.remoteId" :input-props="{ id: 'workspace-remote' }" maxlength="240" />
           </NFormItem>
         </template>
@@ -226,7 +243,7 @@ onMounted(() => { if (props.characterId) void run(load) })
     <NSpin v-else-if="busy && !workspace" />
     <NEmpty v-else-if="!workspace && !error" :description="canCreate ? '尚未创建角色。' : '当前账号没有可访问的角色。'" />
     <template v-else-if="workspace && !editor">
-      <NCard :title="workspace.profile?.name || workspace.slug" size="small">
+      <NCard v-if="!accountsOnly" :title="workspace.profile?.name || workspace.slug" size="small">
         <div class="workspace-row">
           <div>{{ workspace.timezone }} · 核心 v{{ workspace.version ?? '—' }} <NTag size="small">{{ status(workspace.status) }}</NTag></div>
           <div v-if="admin" class="workspace-actions">
@@ -238,7 +255,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </div>
         </div>
       </NCard>
-      <NCard title="身份" size="small">
+      <NCard v-if="!accountsOnly" title="身份" size="small">
         <template v-if="admin" #header-extra><NButton size="small" :disabled="busy" @click="open('identity')">创建身份</NButton></template>
         <NEmpty v-if="!identities.length" description="暂无身份。" />
         <ul v-else class="workspace-list">
@@ -256,10 +273,13 @@ onMounted(() => { if (props.characterId) void run(load) })
       </NCard>
       <NCard title="平台账号" size="small">
         <template v-if="admin" #header-extra>
-          <NButton size="small" :disabled="busy || !identities.length || !workspace.simulationPlatforms.length"
-            @click="open('account')">登记模拟账号</NButton>
+          <div class="workspace-actions">
+            <NButton v-if="!accountsOnly" size="small" :disabled="busy || !identities.length || !workspace.simulationPlatforms.length"
+              @click="open('account')">登记模拟账号</NButton>
+            <NButton size="small" :disabled="busy || !identities.length" @click="open('connector-account')">登记连接器账号</NButton>
+          </div>
         </template>
-        <NAlert v-if="admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
+        <NAlert v-if="!accountsOnly && admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
         <NEmpty v-if="!accounts.length" description="暂无平台账号。" />
         <ul v-else class="workspace-list">
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
@@ -268,14 +288,28 @@ onMounted(() => { if (props.characterId) void run(load) })
                 || identities.find(item => item.id === account.identityId)?.slug }}
               <NTag size="small">{{ status(account.status) }}</NTag>
             </span>
-            <NButton v-if="admin && ['mock-a', 'mock-b'].includes(account.platform) && ['ACTIVE', 'PAUSED'].includes(account.status)"
-              size="small" :disabled="busy" @click="open('control', undefined,
-                { scope: 'ACCOUNT', id: account.id, name: account.platform + ' · ' + account.instanceKey, status: account.status })">
-              {{ account.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
-            </NButton>
+            <div class="workspace-actions">
+              <NButton v-if="inspectConnector && account.platform === 'newbi'" size="small"
+                @click="emit('account', account.id)">查看读取状态</NButton>
+              <NButton v-if="admin && ['mock-a', 'mock-b', 'newbi'].includes(account.platform) && ['ACTIVE', 'PAUSED'].includes(account.status)"
+                size="small" :disabled="busy" @click="open('control', undefined,
+                  { scope: 'ACCOUNT', id: account.id, name: account.platform + ' · ' + account.instanceKey,
+                    status: account.status, connector: account.platform === 'newbi' })">
+                {{ account.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
+              </NButton>
+              <NButton v-if="admin && account.platform === 'newbi' && account.status !== 'REVOKED'"
+                size="small" quaternary :disabled="busy" @click="open('control', undefined,
+                  { scope: 'ACCOUNT', id: account.id, name: account.instanceKey, status: account.status, connector: true, revoke: true })">
+                撤销账号
+              </NButton>
+            </div>
           </li>
         </ul>
       </NCard>
+      <ConnectorAccountStatus v-if="connector && inspectConnector" :key="connector.id + '/' + connector.version"
+        :character-id="characterId" :account-id="connector.id" :account-status="connector.status" :can-review="!!admin"
+        @expired="emit('expired')" @proposals="emit('proposals', connector.id)" />
+      <NAlert v-else-if="accountDetail" type="warning">找不到当前角色的连接器账号。</NAlert>
     </template>
   </div>
 </template>

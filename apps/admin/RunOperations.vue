@@ -10,7 +10,7 @@ type Event = z.infer<typeof quarantinedOutboxEvent>
 type Quarantine = z.infer<typeof outboxQuarantineView>
 
 const props = defineProps<{ characterId: string; mode: 'backlog' | 'outbox'; canRetry?: boolean }>()
-const emit = defineEmits<{ expired: []; openOutbox: []; openRuns: []; openRun: [id: string] }>()
+const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openRuns: []; openRun: [id: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId)
 const backlog = ref<Backlog>()
 const events = ref<Event[]>([])
@@ -136,9 +136,12 @@ onMounted(() => { void act(load) })
         <small v-if="item.oldestAt">最早 {{ time(item.oldestAt) }}</small>
       </div>
     </dl>
-    <NButton size="small" @click="emit('openOutbox')">
-      查看隔离出箱<template v-if="backlog">（{{ backlog.outbox.quarantined }}）</template>
-    </NButton>
+    <div class="operations-actions">
+      <NButton size="small" @click="emit('openOutbox')">
+        查看隔离出箱<template v-if="backlog">（{{ backlog.outbox.quarantined }}）</template>
+      </NButton>
+      <NButton v-if="backlog?.reconciliation.count" size="small" @click="emit('openReconciliation')">查看待对账</NButton>
+    </div>
   </NCard>
   <section v-else class="operations outbox" aria-label="隔离出箱">
     <div class="operations-actions">

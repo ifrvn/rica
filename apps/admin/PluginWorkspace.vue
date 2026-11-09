@@ -10,7 +10,7 @@ type Account = z.infer<typeof accountView>
 type Service = z.infer<typeof pluginStatusView>['services'][number]
 type Plugin = Service['catalog'][number]
 const props = defineProps<{ characterId: string }>()
-const emit = defineEmits<{ expired: []; accounts: [] }>()
+const emit = defineEmits<{ expired: []; accounts: [id?: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId)
 const services = ref<Service[]>([])
 const bindings = ref<Account[]>([])
@@ -138,7 +138,10 @@ onBeforeUnmount(() => {
       <ul v-if="bindings.length" class="plugin-list">
         <li v-for="account in bindings" :key="account.id" class="plugin-row">
           <span>{{ account.platform }} · {{ account.instanceKey }}</span>
-          <NTag size="small">{{ accountStatus[account.status] ?? account.status }}</NTag>
+          <div class="plugin-actions">
+            <NTag size="small">{{ accountStatus[account.status] ?? account.status }}</NTag>
+            <NButton v-if="account.platform === 'newbi'" size="small" @click="emit('accounts', account.id)">查看读取状态</NButton>
+          </div>
         </li>
       </ul>
     </NCard>

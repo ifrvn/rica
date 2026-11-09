@@ -1,3 +1,4 @@
+import { newbiReadError, type NewbiReadError } from '../contracts/newbi-pilot.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '../contracts/platform-reader.js'
 import type { PrismaClient } from './generated/client.js'
@@ -19,10 +20,10 @@ export async function pollNewbiEvents(db: PrismaClient, reader: PlatformEventRea
   if (!claim) return { status: 'STOPPED' }
   if ('nextAt' in claim) return { status: 'WAITING', nextAt: new Date(claim.nextAt).toISOString() }
 
-  async function finish(ticket: Claim, page: PlatformEventPage | null, delay: number) {
+  async function finish(ticket: Claim, page: PlatformEventPage | null, delay: number, failure?: NewbiReadError) {
     const [row] = await db.$queryRaw<{ committed: Committed | null }[]>`
       SELECT public.rica_finish_newbi_event_page(${accountId}::uuid,${ticket.ticket}::uuid,
-        ${ticket.bindingVersion}::int,${ticket.authEpoch}::int,${page ? JSON.stringify(page) : null}::jsonb,${delay}::int) AS committed
+        ${ticket.bindingVersion}::int,${ticket.authEpoch}::int,${page ? JSON.stringify(page) : null}::jsonb,${delay}::int,${failure ?? null}::text) AS committed
     `
     return row.committed && { ...row.committed, nextAt: new Date(row.committed.nextAt).toISOString() }
   }
@@ -33,7 +34,7 @@ export async function pollNewbiEvents(db: PrismaClient, reader: PlatformEventRea
     stop?.throwIfAborted()
     const identity = await reader.verify()
     if (identity.id !== claim.agentId) {
-      await finish(claim, null, 0)
+      await finish(claim, null, 0, 'AGENT_MISMATCH')
       return { status: 'STOPPED' }
     }
     interval = identity.pollIntervalSeconds
@@ -46,10 +47,11 @@ export async function pollNewbiEvents(db: PrismaClient, reader: PlatformEventRea
       return { status: 'STOPPED' }
     }
     if (error instanceof PlatformReadError && (error.reason === 'RATE_LIMITED' || error.reason === 'SERVICE_UNAVAILABLE')) {
-      const result = await finish(claim, null, error.retrySeconds)
+      const result = await finish(claim, null, error.retrySeconds, error.reason)
       return result ? { status: 'WAITING', reason: error.reason, nextAt: result.nextAt } : { status: 'STOPPED' }
     }
-    await finish(claim, null, error instanceof PlatformReadError ? 0 : 30)
+    const code = newbiReadError.safeParse(error instanceof PlatformReadError ? error.reason : undefined)
+    await finish(claim, null, error instanceof PlatformReadError ? 0 : 30, code.data ?? 'READ_FAILED')
     throw error
   }
 

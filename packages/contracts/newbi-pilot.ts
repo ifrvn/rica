@@ -25,7 +25,7 @@ export const newbiDecisionInput = z.strictObject({
 })
 export const newbiClosureInput = z.strictObject({ reason: z.string().trim().min(1).max(240) })
 const newbiReplyStatus = z.enum(['WAITING', 'READY', 'REJECTED', 'IN_FLIGHT', 'UNKNOWN', 'SENT', 'CLOSED'])
-export const newbiReplyQuery = listQuery.extend({ status: newbiReplyStatus.optional() })
+export const newbiReplyQuery = listQuery.extend({ status: newbiReplyStatus.optional(), accountId: resourceId.optional() })
 export const newbiReplySummary = z.object({
   id: resourceId, identity: z.string(), agentId: resourceId, postId: resourceId,
   status: newbiReplyStatus, createdAt: z.iso.datetime(),
@@ -39,7 +39,14 @@ export const newbiReplyView = z.object({
 })
 export type NewbiReplyView = z.infer<typeof newbiReplyView>
 
+export const newbiReadError = z.enum(['AGENT_MISMATCH', 'CREDENTIAL_INVALID', 'ACCESS_DENIED', 'RATE_LIMITED',
+  'SERVICE_UNAVAILABLE', 'COMMUNITY_CLOSED', 'READ_FAILED'])
+export type NewbiReadError = z.infer<typeof newbiReadError>
+
 export const newbiInboxView = z.object({
+  agentId: resourceId,
+  lastSucceededAt: z.iso.datetime().nullable(),
+  readError: newbiReadError.nullable(),
   nextPollAt: z.iso.datetime().nullable(),
   historyLostCount: z.number().int().nonnegative(),
   lastHistoryLostAt: z.iso.datetime().nullable(),
@@ -49,5 +56,5 @@ export const newbiInboxView = z.object({
     postId: resourceId,
     commentId: resourceId.nullable(),
     occurredAt: z.iso.datetime(),
-  })),
+  })).nullable(),
 })

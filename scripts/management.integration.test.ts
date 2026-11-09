@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
-import { startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
+import { startNewbiReader, verifyNewbiBinding } from '../apps/worker/newbi-read-plugin.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -41,9 +41,11 @@ const management = createDatabase(adminUrl.toString())
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
+let connectorEnv: NodeJS.ProcessEnv = {}
 const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
   db: management,
   origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
+  verifyConnector: (endpoint, agentId) => verifyNewbiBinding(endpoint, agentId, connectorEnv),
   authenticate: async (request) => {
     const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
     return subject && subjects.has(subject) ? {
@@ -2425,9 +2427,22 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId, agentId, endpoint } })
     assert.equal(binding.status, 201, JSON.stringify(binding.body))
     const accountId = binding.body.id
-    const resumed = await request('POST', characterPath(a) + '/controls', { key: 'newbi-test-resume',
+    assert.equal(binding.body.status, 'PAUSED')
+    const resume = (key: string, actor = 'admin-a') => request('POST', characterPath(a) + '/controls', { actor, key,
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
+    connectorEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
+    assert.equal((await resume('newbi-reviewer-resume', 'reviewer')).status, 403)
+    currentAgent = randomUUID()
+    const unverified = await resume('newbi-test-resume')
+    assert.equal(unverified.status, 409, JSON.stringify(unverified.body))
+    assert.equal(unverified.body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
+    assert.equal((await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })).status, 'PAUSED')
+    currentAgent = agentId
+    const resumed = await resume('newbi-test-resume')
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
+    connectorEnv = {}
+    assert.equal((await resume('newbi-test-resume')).status, 200)
+    assert.equal(writes, 0)
     const client = createNewbiReplyExecutor(endpoint, secret)
     const executorKey = newbiExecutorKey(newbiExecutorIdentity)
     const inspector = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'inspect', postId], {
@@ -2471,6 +2486,8 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const queuePath = prefix + '/replies'
     const waitingQueue = await request('GET', queuePath + '?status=WAITING', { actor: 'reviewer' })
     assert.equal(waitingQueue.status, 200, JSON.stringify(waitingQueue.body))
+    assert.deepEqual((await request('GET', queuePath + '?status=WAITING&accountId=' + accountId)).body, waitingQueue.body)
+    assert.deepEqual((await request('GET', queuePath + '?accountId=' + accountA)).body, { items: [], nextCursor: null })
     assert.deepEqual(waitingQueue.body.items.map((item: { id: string }) => item.id), [approved.id])
     assert.deepEqual(Object.keys(waitingQueue.body.items[0]).sort(), ['agentId', 'createdAt', 'id', 'identity', 'postId', 'status'])
     assert.equal((await request('GET', queuePath, { actor: 'admin-b' })).status, 404)
@@ -2623,7 +2640,15 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, unrelated.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
     assert.equal((await request('GET', unrelated.path)).body.status, 'CLOSED')
     assert.equal(writes, 7)
+    const paused = await propose('Pause blocks new permits', 'newbi-pause-fixture')
+    assert.equal((await paused.decide('APPROVE')).status, 200)
+    assert.equal((await request('POST', characterPath(a) + '/controls', { key: 'newbi-test-pause',
+      data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'PAUSE', reason: 'Check claim boundary' } })).status, 200)
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, paused.id), { status: 'UNAVAILABLE' })
+    assert.equal((await request('GET', paused.path)).body.attempts, 0)
+    assert.equal(writes, 7)
   } finally {
+    connectorEnv = {}
     await executor.$disconnect()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -2702,13 +2727,16 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
 
     assert.deepEqual(await poll(), { status: 'STOPPED' })
     assert.equal(calls, 0)
+    connectorEnv = readerEnv
     assert.equal((await control('RESUME')).status, 200)
+    connectorEnv = {}
     await assert.rejects(startNewbiReader({ RICA_NEWBI_LOCAL_API_URL: endpoint }), /MISSING_SERVICE/)
     await assert.rejects(startNewbiReader({ ...readerEnv, RICA_NEWBI_LOCAL_API_URL: 'https://fixture.example/agent-api/v1' }),
       /INVALID_CONFIG/)
     verifiedAgent = randomUUID()
     assert.deepEqual(await poll(), { status: 'STOPPED' })
     assert.deepEqual(cursors, [])
+    assert.equal((await request('GET', character + inbox)).body.readError, 'AGENT_MISMATCH')
     verifiedAgent = agentId
     const badHost = await startNewbiReader({ ...readerEnv, NEWBI_AGENT_KEY: 'nbi_agent_' + 'x'.repeat(43) })
     try {
@@ -2717,6 +2745,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
       await badHost.stop()
     }
     assert.equal((await account()).cursor, null)
+    assert.equal((await request('GET', character + inbox)).body.readError, 'CREDENTIAL_INVALID')
     assert.deepEqual(cursors, [])
     assert.equal((await poll()).status, 'READ')
     assert.equal((await account()).cursor, opaque)
@@ -2740,6 +2769,14 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(firstInbox.status, 200, JSON.stringify(firstInbox.body))
     assert.deepEqual(firstInbox.body.items.map((item: { seq: string }) => item.seq).sort(), [seq, '9007199254740995'])
     assert.equal(firstInbox.body.cursor, undefined)
+    assert.equal(firstInbox.body.readError, null)
+    assert.equal(firstInbox.body.agentId, agentId)
+    assert.equal(Date.parse(firstInbox.body.lastSucceededAt), caughtUp.lastSucceededAt?.getTime())
+    const auditorInbox = await request('GET', character + inbox, { actor: 'auditor' })
+    assert.equal(auditorInbox.status, 200, JSON.stringify(auditorInbox.body))
+    assert.equal(auditorInbox.body.lastSucceededAt, firstInbox.body.lastSucceededAt)
+    assert.equal(auditorInbox.body.items, null)
+    assert.equal(JSON.stringify(firstInbox.body).includes(secret), false)
     await assert.rejects(management.$queryRaw`SELECT cursor FROM public.newbi_event_checkpoints`, /permission denied/i)
     assert.equal((await request('GET', character + inbox, { actor: 'reviewer' })).status, 403)
     assert.equal((await request('GET', characterPath(b) + inbox, { actor: 'admin-b' })).status, 404)
@@ -2754,6 +2791,9 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.ok('reason' in limited && limited.reason === 'RATE_LIMITED')
     const checkpoint = await account()
     assert.equal(checkpoint.cursor, 'tail')
+    const failedInbox = await request('GET', character + inbox)
+    assert.equal(failedInbox.body.readError, 'RATE_LIMITED')
+    assert.equal(failedInbox.body.lastSucceededAt, firstInbox.body.lastSucceededAt)
     assert.ok(checkpoint.nextPollAt.getTime() >= atLimit + 30_000)
     const requestsAtLimit = calls
     assert.deepEqual(await poll(), { status: 'WAITING', nextAt: checkpoint.nextPollAt.toISOString() })
@@ -2765,6 +2805,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.ok(reset.status === 'READ' && reset.historyLost && reset.saved === 0)
     assert.equal((await account()).cursor, 'reset')
     const gap = await request('GET', character + inbox)
+    assert.equal(gap.body.readError, null)
     assert.equal(gap.body.historyLostCount, 1)
     assert.ok(gap.body.lastHistoryLostAt)
     assert.equal(gap.body.items.length, 2)

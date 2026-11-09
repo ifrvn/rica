@@ -7,8 +7,8 @@ import { request, RequestError } from './request.js'
 
 type Summary = z.infer<typeof newbiReplySummary>
 type Page = { items: Summary[]; nextCursor: string | null }
-const props = defineProps<{ characterId: string; detailId?: string; canReview: boolean; canClose: boolean }>()
-const emit = defineEmits<{ expired: []; open: [id: string] }>()
+const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; canReview: boolean; canClose: boolean }>()
+const emit = defineEmits<{ expired: []; open: [id: string]; all: [] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId) + '/newbi/replies'
 const statusText: Record<Summary['status'], string> = {
   WAITING: '待审', READY: '待发送', REJECTED: '已拒绝', IN_FLIGHT: '发送中',
@@ -48,6 +48,7 @@ async function list(append = false) {
   listError.value = ''
   const query = new URLSearchParams()
   if (filter.value) query.set('status', filter.value)
+  if (props.accountId) query.set('accountId', props.accountId)
   if (append && cursor.value) query.set('cursor', cursor.value)
   try {
     const page = await request<Page>(base + '?' + query.toString())
@@ -79,13 +80,16 @@ async function detail(id?: string) {
   if (!id) return
   try {
     const view = await request<NewbiReplyView>(base + '/' + encodeURIComponent(id))
-    if (active && current === selection) reply.value = view
+    if (!active || current !== selection) return
+    if (props.accountId && props.accountId !== view.accountId) {
+      detailError.value = '找不到当前账号的提案。'
+    } else reply.value = view
   } catch (cause) {
     if (active && current === selection) detailError.value = message(cause)
   } finally { if (current === selection) loadingDetail.value = false }
 }
 
-watch(() => props.detailId, (id) => {
+watch([() => props.detailId, () => props.accountId], ([id]) => {
   reason.value = ''
   pending = undefined
   notice.value = ''
@@ -121,12 +125,18 @@ async function submit(action: 'APPROVE' | 'REJECT' | 'CLOSE') {
   } finally { submitting.value = false }
 }
 
+watch(() => props.accountId, () => {
+  rows.value = []
+  cursor.value = null
+  void list()
+})
 onMounted(() => { void list() })
 </script>
 
 <template>
   <section class="connector-review" aria-label="本机连接器审批">
-    <NCard title="本机连接器提案" size="small">
+    <NCard :title="accountId ? '当前账号的提案' : '本机连接器提案'" size="small">
+      <template v-if="accountId" #header-extra><NButton size="small" @click="emit('all')">查看全部账号</NButton></template>
       <div class="connector-actions">
         <label for="connector-filter">状态</label>
         <NSelect :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"

@@ -265,6 +265,8 @@ model NewbiEventCheckpoint {
   leaseUntil        DateTime?       @map("lease_until") @db.Timestamptz
   historyLostCount  Int             @default(0) @map("history_lost_count")
   lastHistoryLostAt DateTime?       @map("last_history_lost_at") @db.Timestamptz
+  lastSucceededAt   DateTime?       @map("last_succeeded_at") @db.Timestamptz
+  readError         String?         @map("read_error")
   account           PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("newbi_event_checkpoints")

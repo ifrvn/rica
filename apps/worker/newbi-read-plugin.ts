@@ -4,6 +4,21 @@ import { startPluginHost, type PluginDefinition } from '../../packages/runtime/p
 
 const credentialService = 'local-agent-credential'
 
+export async function verifyNewbiBinding(endpoint: string, agentId: string, env = process.env) {
+  // Only the deployment-configured endpoint may receive the deployment credential.
+  if (newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).data !== endpoint) return false
+  try {
+    const host = await startNewbiReader(env, AbortSignal.timeout(2000))
+    try {
+      return (await host.plugin.implementation.verify()).id === agentId
+    } finally {
+      await host.stop()
+    }
+  } catch {
+    return false
+  }
+}
+
 export async function startNewbiReader(env = process.env, signal?: AbortSignal) {
   const credential = env.NEWBI_AGENT_KEY ?? ''
   const definition: PluginDefinition<ReturnType<typeof createNewbiReadClient>> = {

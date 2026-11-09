@@ -53,10 +53,10 @@ export async function createNewbiReply(tx: Prisma.TransactionClient, scope: Scop
   return { id, status: 'WAITING' }
 }
 
-export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Page, status?: z.infer<typeof newbiReplyQuery>['status']) {
+export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Page, { status, accountId }: z.infer<typeof newbiReplyQuery>) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'REVIEWER'])
-    const where = { characterId: scope.characterId, status }
+    const where = { characterId: scope.characterId, status, accountId }
     const args = await pageArgs(page, (id) => tx.newbiReply.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.newbiReply.findMany({
       ...args, where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -115,19 +115,23 @@ export async function closeNewbiReply(tx: Prisma.TransactionClient, scope: Scope
 
 export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    const roles = await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const canReadEvents = roles.some(({ role }) => role === 'ADMIN')
     const account = await tx.platformAccount.findFirst({ where: { id, characterId: scope.characterId, platform: 'newbi' },
-      select: { newbiCheckpoint: { select: { nextPollAt: true, historyLostCount: true, lastHistoryLostAt: true } },
-        newbiEvents: { orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 50,
-          select: { seq: true, type: true, postId: true, commentId: true, occurredAt: true } } },
+      select: { remoteAccountId: true, newbiCheckpoint: { select: { nextPollAt: true, historyLostCount: true, lastHistoryLostAt: true, lastSucceededAt: true, readError: true } },
+        newbiEvents: canReadEvents ? { orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 50,
+          select: { seq: true, type: true, postId: true, commentId: true, occurredAt: true } } : false },
     })
     if (!account) missing()
     const checkpoint = account.newbiCheckpoint
     return newbiInboxView.parse({
+      agentId: account.remoteAccountId,
+      lastSucceededAt: checkpoint?.lastSucceededAt?.toISOString() ?? null,
+      readError: checkpoint?.readError ?? null,
       nextPollAt: checkpoint?.nextPollAt.toISOString() ?? null,
       historyLostCount: checkpoint?.historyLostCount ?? 0,
       lastHistoryLostAt: checkpoint?.lastHistoryLostAt?.toISOString() ?? null,
-      items: account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })),
+      items: canReadEvents ? account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })) : null,
     })
   }, { isolationLevel: 'RepeatableRead' })
 }

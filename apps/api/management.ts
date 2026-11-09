@@ -22,6 +22,7 @@ import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
+  verifyConnector?: management.VerifyConnector
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -60,7 +61,7 @@ function runVersion(header: string) {
   return value
 }
 
-export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus }: Options) {
+export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, verifyConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -251,7 +252,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'control.apply', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.control(tx, scope, input))
+    }, (tx) => management.control(tx, scope, input, verifyConnector))
     return c.json({ ...result, requestId }, 200)
   })
 
@@ -806,7 +807,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => {
     const query = c.req.valid('query')
     return c.json(await listNewbiReplies(db, { ...c.req.valid('param'), actor: c.get('actor') },
-      management.parsePage(query), query.status), 200)
+      management.parsePage(query), query), 200)
   })
 
   app.openapi(createRoute({

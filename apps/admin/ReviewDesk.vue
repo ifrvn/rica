@@ -27,10 +27,11 @@ const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
 const pageTitle: Record<ConsolePage, string> = {
-  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件', connector: '本机连接器审批',
+  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件', accounts: '平台账号', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
 const runQuery = ref('')
+const connectorAccountId = ref<string>()
 const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
@@ -166,13 +167,14 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
     }
     characterId.value = target
-    const denied = (['runs', 'outbox', 'audit', 'plugins'].includes(location.page) && !canReadRuns.value)
+    const denied = (['runs', 'outbox', 'audit', 'plugins', 'accounts'].includes(location.page) && !canReadRuns.value)
       || (location.page === 'connector' && !canReview.value)
       || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
     tab.value = denied ? 'character'
       : location.page === 'review' && !canReviewSimulation.value ? 'connector' : location.page
     detailId.value = denied ? undefined : location.detail
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
+    connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
     if (denied) error.value = '当前账号无权打开此链接。'
     if (replace || tab.value !== location.page) {
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value, runQuery: runQuery.value }))
@@ -417,11 +419,15 @@ async function decide(decision: Decision) {
           @click="changeTab('connector')">本机连接器</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
-      <CharacterWorkspace v-else-if="tab === 'character'" :key="characterId" :character-id="characterId"
-        :can-create="canCreate" @created="characterCreated" @expired="resetSession" @roles="roles = $event" />
+      <CharacterWorkspace v-else-if="tab === 'character' || tab === 'accounts'" :key="characterId + '/' + tab" :character-id="characterId"
+        :can-create="canCreate && tab === 'character'" :accounts-only="tab === 'accounts'" :account-detail="detailId"
+        @created="characterCreated" @expired="resetSession" @roles="roles = $event"
+        @account="navigate({ characterId, page: 'accounts', detail: $event })"
+        @proposals="navigate({ characterId, page: 'connector', connectorAccountId: $event })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
-          @expired="resetSession" @open-outbox="changeTab('outbox')" />
+          @expired="resetSession" @open-outbox="changeTab('outbox')"
+          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
           :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event })" />
@@ -432,10 +438,11 @@ async function decide(decision: Decision) {
       <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '')"
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
-        :character-id="characterId" @expired="resetSession" @accounts="changeTab('character')" />
+        :character-id="characterId" @expired="resetSession" @accounts="navigate({ characterId, page: 'accounts', detail: $event })" />
       <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
-        :character-id="characterId" :detail-id="detailId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
-        @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event })" />
+        :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
+        @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
+        @all="changeTab('connector')" />
       <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">
