@@ -1,3 +1,5 @@
+.console-section-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; margin-block-end: .75rem; }
+.console-section-heading h3 { margin: 0; font-size: 1rem; font-weight: 650; }
 .console-workspace { margin-top: 1rem; min-width: 0; overflow-wrap: anywhere; }
 .console-stack { display: grid; gap: .75rem; min-width: 0; }
 .console-stack > * { min-width: 0; }

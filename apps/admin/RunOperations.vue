@@ -9,8 +9,8 @@ type Backlog = z.infer<typeof simulationBacklogView>
 type Event = z.infer<typeof quarantinedOutboxEvent>
 type Quarantine = z.infer<typeof outboxQuarantineView>
 
-const props = defineProps<{ characterId: string; mode: 'backlog' | 'outbox'; canRetry?: boolean; canPlan?: boolean }>()
-const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openMetrics: []; openPlanning: []; openRuns: []; openRun: [id: string] }>()
+const props = defineProps<{ characterId: string; mode: 'backlog' | 'outbox'; canRetry?: boolean }>()
+const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openRuns: []; openRun: [id: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId)
 const backlog = ref<Backlog>()
 const events = ref<Event[]>([])
@@ -28,7 +28,7 @@ const metrics = computed(() => {
   const data = backlog.value
   if (!data) return []
   return [
-    { label: '待处理出箱', ...data.outbox },
+    { label: '后台任务', ...data.outbox },
     { label: '待审批', ...data.approvals },
     { label: '待对账', ...data.reconciliation },
     { label: '到期计划', ...data.schedules },
@@ -123,10 +123,11 @@ onMounted(() => { void act(load) })
 </script>
 
 <template>
-  <NCard v-if="mode === 'backlog'" title="角色积压" size="small" class="operations">
-    <template #header-extra>
-      <NButton size="small" :disabled="busy" @click="act(load)">刷新积压</NButton>
-    </template>
+  <section v-if="mode === 'backlog'" class="run-summary" aria-labelledby="run-summary-heading">
+    <div class="console-section-heading">
+      <h3 id="run-summary-heading">待处理</h3>
+      <NButton size="small" quaternary :disabled="busy" @click="act(load)">刷新待处理</NButton>
+    </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NSpin v-if="busy && !backlog" />
     <dl v-if="backlog" class="metrics">
@@ -138,21 +139,19 @@ onMounted(() => { void act(load) })
     </dl>
     <div class="operations-actions">
       <NButton size="small" @click="emit('openOutbox')">
-        查看隔离出箱<template v-if="backlog">（{{ backlog.outbox.quarantined }}）</template>
+        查看失败任务<template v-if="backlog">（{{ backlog.outbox.quarantined }}）</template>
       </NButton>
       <NButton v-if="backlog?.reconciliation.count" size="small" @click="emit('openReconciliation')">查看待对账</NButton>
-      <NButton size="small" @click="emit('openMetrics')">查看模拟指标</NButton>
-      <NButton v-if="canPlan" size="small" @click="emit('openPlanning')">运行配置</NButton>
     </div>
-  </NCard>
-  <section v-else class="operations outbox" aria-label="隔离出箱">
+  </section>
+  <section v-else class="operations outbox" aria-label="失败任务">
     <div class="operations-actions">
       <NButton size="small" @click="emit('openRuns')">返回运行</NButton>
-      <NButton size="small" :disabled="busy || !!selected" @click="act(load)">刷新出箱</NButton>
+      <NButton size="small" :disabled="busy || !!selected" @click="act(load)">刷新任务</NButton>
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NCard v-if="selected" title="恢复隔离事件" size="small">
+    <NCard v-if="selected" title="重新处理任务" size="small">
       <p>{{ eventType[selected.type] }} · 第 {{ selected.generation }} 代</p>
       <p>恢复后由 Worker 重新处理此事件。</p>
       <NForm @submit.prevent="retry">
@@ -167,9 +166,9 @@ onMounted(() => { void act(load) })
         </div>
       </NForm>
     </NCard>
-    <NCard title="隔离事件" size="small">
+    <NCard title="失败任务列表" size="small">
       <NSpin v-if="busy && !events.length" />
-      <NEmpty v-else-if="!events.length && !error" description="暂无隔离事件。" />
+      <NEmpty v-else-if="!events.length && !error" description="暂无失败任务。" />
       <ul v-if="events.length" class="events">
         <li v-for="event in events" :key="event.id">
           <div class="event-info">
@@ -194,6 +193,10 @@ onMounted(() => { void act(load) })
 .operations { margin-top: 1rem; }
 .outbox { display: grid; gap: 1rem; }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .75rem; }
+.run-summary { padding-bottom: 1rem; border-bottom: 1px solid #dfe7e6; }
+.run-summary .metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.75rem), 1fr)); }
+.run-summary .metrics div { min-width: 0; }
+.run-summary small { color: #485c5b; }
 .metrics dd { margin: .25rem 0; font-size: 1.3rem; font-weight: 650; }
 .operations-actions, .events li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .events { list-style: none; padding: 0; margin: 0; }

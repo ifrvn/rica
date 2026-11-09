@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import ConnectorReview from './ConnectorReview.vue'
-import CharacterWorkspace from './CharacterWorkspace.vue'
 import SimulationWorkspace from './SimulationWorkspace.vue'
 import RunOperations from './RunOperations.vue'
 import AuditWorkspace from './AuditWorkspace.vue'
@@ -14,6 +13,7 @@ import type { characterWorkspaceView } from '../../packages/contracts/management
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
+const CharacterWorkspace = defineAsyncComponent(() => import('./CharacterWorkspace.vue'))
 const GrowthWorkspace = defineAsyncComponent(() => import('./GrowthWorkspace.vue'))
 const KnowledgeWorkspace = defineAsyncComponent(() => import('./KnowledgeWorkspace.vue'))
 const MembershipWorkspace = defineAsyncComponent(() => import('./MembershipWorkspace.vue'))
@@ -28,13 +28,21 @@ const usernameInput = ref('')
 const password = ref('')
 const username = ref('')
 const passkeyPassword = ref('')
+const showPasskeyForm = ref(false)
+const accountMenuOpen = ref(false)
+const pageHeading = ref<HTMLElement>()
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
+const runPages: ConsolePage[] = ['runs', 'outbox', 'planning', 'metrics']
+const inRuns = computed(() => runPages.includes(tab.value))
+const mainPage = computed(() => inRuns.value ? 'runs'
+  : tab.value === 'accounts' ? 'character' : tab.value === 'connector' ? 'review' : tab.value)
+watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
   members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '运行配置', metrics: '模拟运行指标',
-  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件', accounts: '平台账号', connector: '本机连接器审批',
+  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
 const runQuery = ref('')
@@ -125,6 +133,7 @@ async function fetchCharacters(cursor?: string) {
 function characterCreated(character: Character) {
   if (!characters.value.some(({ id }) => id === character.id)) characters.value = [...characters.value, character]
   changeCharacter(character.id)
+  notice.value = '角色已创建。'
 }
 
 function navigate(location: ConsoleLocation) {
@@ -139,10 +148,10 @@ function restoreLocation() {
   if (!username.value) return
   const location = readConsoleLocation(window.location.hash)
   const first = characters.value[0]
-  return applyLocation(location ?? (first && { characterId: first.id, page: 'character' }), !location)
+  return applyLocation(location ?? (first && { characterId: first.id, page: 'character' }), !location, !location)
 }
 
-async function applyLocation(location?: ConsoleLocation, replace = false) {
+async function applyLocation(location?: ConsoleLocation, replace = false, landing = false) {
   const current = ++revision
   const target = location?.characterId ?? ''
   const changedCharacter = target !== characterId.value
@@ -174,12 +183,14 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
     }
     characterId.value = target
-    const denied = (['runs', 'outbox', 'audit', 'plugins', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(location.page) && !canReadRuns.value)
-      || (location.page === 'planning' && !roles.value.includes('ADMIN'))
-      || (location.page === 'connector' && !canReview.value)
-      || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
-    tab.value = denied ? 'character'
-      : location.page === 'review' && !canReviewSimulation.value ? 'connector' : location.page
+    const page = landing && !roles.value.includes('ADMIN')
+      ? canReviewSimulation.value ? 'review' : canReadRuns.value ? 'audit' : 'character'
+      : location.page
+    const denied = (['runs', 'outbox', 'audit', 'plugins', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
+      || (page === 'planning' && !roles.value.includes('ADMIN'))
+      || (page === 'connector' && !canReview.value)
+      || (page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
+    tab.value = denied ? 'character' : page === 'review' && !canReviewSimulation.value ? 'connector' : page
     detailId.value = denied ? undefined : location.detail
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
@@ -260,6 +271,7 @@ async function registerPasskey() {
     passkeyPassword.value = ''
     const response = await startRegistration({ optionsJSON: options })
     await authPost('passkeys/register/verify', { challengeId, response })
+    accountMenuOpen.value = false
     notice.value = '已添加 Passkey。'
   })
 }
@@ -273,6 +285,7 @@ function resetReview() {
 async function disconnect() {
   await run(async () => {
     await authPost('logout')
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
     resetSession()
   })
 }
@@ -284,6 +297,8 @@ function resetSession() {
   username.value = ''
   password.value = ''
   passkeyPassword.value = ''
+  accountMenuOpen.value = false
+  showPasskeyForm.value = false
   canCreate.value = false
   tab.value = 'character'
   roles.value = []
@@ -334,7 +349,7 @@ function openAction(id: string) {
   }
 }
 
-function openRun(id: string) {
+function openRun(id?: string) {
   navigate({ characterId: characterId.value, page: 'runs', detail: id, runQuery: runQuery.value })
 }
 
@@ -393,15 +408,24 @@ async function decide(decision: Decision) {
     </NCard>
 
     <template v-else>
-      <div class="workspace-header">
-        <h2 id="review-heading">{{ pageTitle[tab] }}</h2>
-        <div class="account-actions">
-          <NTag size="small" :bordered="false" class="account-name">{{ username }}</NTag>
-          <NPopover v-if="passkeysAvailable" trigger="click" placement="bottom-end" :width="248">
-            <template #trigger>
-              <NButton size="small" :disabled="busy">添加 Passkey</NButton>
-            </template>
-            <NForm :show-feedback="false" @submit.prevent="registerPasskey">
+      <div class="workspace-toolbar">
+        <div v-if="characters.length" class="role-picker">
+          <label for="review-character">角色</label>
+          <NSelect :value="characterId || null" :options="characterOptions" :disabled="busy"
+            :input-props="{ id: 'review-character' }" placeholder="选择角色" filterable @update:value="changeCharacter" />
+          <NButton v-if="characterCursor" size="small" :disabled="busy"
+            @click="run(() => fetchCharacters(characterCursor ?? undefined))">更多角色</NButton>
+        </div>
+        <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
+          @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
+          <template #trigger>
+            <NButton size="small" quaternary class="account-name" :aria-expanded="accountMenuOpen"
+              :aria-label="'账号设置 · ' + username">{{ username }} <span aria-hidden="true">⌄</span></NButton>
+          </template>
+          <div class="account-menu">
+            <NButton v-if="passkeysAvailable && !showPasskeyForm" size="small" quaternary
+              :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</NButton>
+            <NForm v-if="showPasskeyForm" :show-feedback="false" @submit.prevent="registerPasskey">
               <NFormItem label="确认密码" :label-props="{ for: 'review-passkey-password' }">
                 <NInput v-model:value="passkeyPassword" type="password"
                   :input-props="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
@@ -409,34 +433,36 @@ async function decide(decision: Decision) {
               </NFormItem>
               <NButton attr-type="submit" type="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</NButton>
             </NForm>
-          </NPopover>
-          <NButton size="small" :disabled="busy" @click="disconnect">退出登录</NButton>
-        </div>
+            <NButton size="small" quaternary :disabled="busy" @click="disconnect">退出登录</NButton>
+          </div>
+        </NPopover>
       </div>
 
+      <nav v-if="characters.length" class="console-navigation" aria-label="控制台导航">
+        <button type="button" :aria-current="mainPage === 'character' ? 'page' : undefined" :disabled="busy" @click="changeTab('character')">角色与身份</button>
+        <button v-if="canReview" type="button" :aria-current="mainPage === 'review' ? 'page' : undefined" :disabled="busy || routing"
+          @click="changeTab(canReviewSimulation ? 'review' : 'connector')">审批</button>
+        <template v-if="canReadRuns">
+          <button type="button" :aria-current="mainPage === 'runs' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('runs')">运行</button>
+          <button type="button" :aria-current="mainPage === 'audit' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('audit')">审计</button>
+          <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('plugins')">插件</button>
+          <button type="button" :aria-current="mainPage === 'knowledge' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('knowledge')">记忆与授权</button>
+          <button type="button" :aria-current="mainPage === 'growth' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('growth')">身份成长</button>
+          <button type="button" :aria-current="mainPage === 'members' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('members')">角色成员</button>
+        </template>
+      </nav>
+      <div class="workspace-header">
+        <h2 id="review-heading" ref="pageHeading" tabindex="-1">{{ pageTitle[tab] }}</h2>
+      </div>
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-
-      <nav class="account-actions" aria-label="控制台导航">
-        <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
-        <NButton :type="tab === 'review' || tab === 'connector' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab(canReviewSimulation ? 'review' : 'connector')">审批</NButton>
-        <NButton :type="tab === 'runs' || tab === 'outbox' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
-        <NButton :type="tab === 'audit' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('audit')">审计</NButton>
-        <NButton :type="tab === 'plugins' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('plugins')">插件</NButton>
-        <NButton v-if="canReadRuns" :type="tab === 'knowledge' ? 'primary' : 'default'" :disabled="busy || routing"
-          @click="changeTab('knowledge')">记忆与授权</NButton>
-        <NButton v-if="canReadRuns" :type="tab === 'growth' ? 'primary' : 'default'" :disabled="busy || routing"
-          @click="changeTab('growth')">身份成长</NButton>
-        <NButton v-if="canReadRuns" :type="tab === 'members' ? 'primary' : 'default'" :disabled="busy || routing"
-          @click="changeTab('members')">角色成员</NButton>
+      <nav v-if="inRuns && characterId" class="run-navigation" aria-label="运行页面">
+        <NButton v-for="page in runPages.filter(page => page !== 'planning' || roles.includes('ADMIN'))" :key="page"
+          text :type="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
+          :disabled="busy || routing" @click="changeTab(page)">
+          {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : page === 'planning' ? '计划与承诺' : '失败任务' }}
+        </NButton>
       </nav>
-      <div v-if="characters.length" class="role-picker">
-        <label for="review-character">角色</label>
-        <NSelect :value="characterId || null" :options="characterOptions" :disabled="busy"
-          :input-props="{ id: 'review-character' }" placeholder="选择角色" filterable @update:value="changeCharacter" />
-        <NButton v-if="characterCursor" size="small" :disabled="busy"
-          @click="run(() => fetchCharacters(characterCursor ?? undefined))">加载更多角色</NButton>
-      </div>
 
       <nav v-if="canReviewSimulation && (tab === 'review' || tab === 'connector')" class="account-actions" aria-label="审批类型">
         <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing"
@@ -453,8 +479,7 @@ async function decide(decision: Decision) {
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')"
-          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })"
-          @open-metrics="changeTab('metrics')" @open-planning="changeTab('planning')" :can-plan="roles.includes('ADMIN')" />
+          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
           :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
@@ -556,11 +581,22 @@ async function decide(decision: Decision) {
 .login-actions { display: grid; gap: .625rem; margin-block-start: .625rem; }
 .login-alert { margin-block: .5rem; }
 .workspace-header, .account-actions, .decision-buttons, .proposal-title { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
-.workspace-header { justify-content: space-between; margin-block-end: .375rem; }
+.workspace-header { justify-content: space-between; }
+.workspace-toolbar { display: flex; justify-content: space-between; align-items: center; gap: .75rem; min-width: 0; }
+.workspace-toolbar > :last-child { margin-inline-start: auto; }
+.account-menu { display: grid; gap: .5rem; min-width: 10rem; justify-items: start; }
+.console-navigation { display: flex; gap: 1.25rem; min-width: 0; overflow-x: auto; border-bottom: 1px solid #dfe7e6; }
+.console-navigation button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: .55rem .125rem;
+  font: inherit; color: #485c5b; white-space: nowrap; cursor: pointer; }
+.console-navigation button[aria-current] { color: #17675d; border-bottom-color: currentColor; font-weight: 650; }
+.console-navigation button:disabled { opacity: .65; cursor: default; }
+.console-navigation button:focus-visible { outline-offset: -2px; }
+.run-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.125rem; }
+.run-navigation [aria-current] { font-weight: 650; }
 .workspace-header h2 { font-size: 1.5rem; line-height: 1.25; letter-spacing: -.025em; }
 .account-name { max-width: 12rem; }
-.account-name :deep(.n-tag__content) { overflow: hidden; text-overflow: ellipsis; }
-.role-picker { display: flex; align-items: center; gap: .75rem; width: min(100%, 20rem); }
+.account-name :deep(.n-button__content) { overflow: hidden; text-overflow: ellipsis; }
+.role-picker { display: flex; align-items: center; gap: .75rem; width: min(100%, 22rem); min-width: 0; }
 .role-picker > label { flex: none; color: #485c5b; }
 .review-layout { display: grid; grid-template-columns: minmax(13rem, 19rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
 .review-layout--single { grid-template-columns: minmax(0, 1fr); }
@@ -586,6 +622,8 @@ async function decide(decision: Decision) {
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) { .review-layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 30rem) {
+  .console-navigation { gap: .875rem; }
+  .workspace-toolbar .account-name { max-width: 7rem; }
   .metadata { grid-template-columns: minmax(0, 1fr); }
 }
 </style>
