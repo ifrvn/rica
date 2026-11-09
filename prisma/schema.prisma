@@ -371,6 +371,7 @@ model AgentRun {
   @@unique([characterId, id])
   identityStateRevisions IdentityStateRevision[]
   contactBoundaryVersion Int? @map("contact_boundary_version")
+  @@index([characterId, createdAt, id], map: "agent_runs_character_created_id_idx")
   @@map("agent_runs")
 }
 

@@ -2876,3 +2876,93 @@ test('three identities on two platforms reach separate approved simulation recei
     await Promise.all([executor.$disconnect(), runtime.$disconnect()])
   }
 })
+
+test('console simulation runs use an isolated conversation, one approval and one receipt', { timeout: 30_000 }, async () => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-console') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const character = characterPath(characterId)
+  const identity = await request('POST', character + '/identities', {
+    key: randomUUID(), data: { slug: 'console-persona', roleProfile: {} },
+  })
+  assert.equal(identity.status, 201, JSON.stringify(identity.body))
+  const identityId: string = identity.body.id
+  assert.equal((await request('POST', character + '/memberships', {
+    key: randomUUID(), data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Console fixture' },
+  })).status, 200)
+  const path = character + '/runs'
+  const input = { accountId: accountA, message: 'Console simulation fixture for an isolated public discussion' }
+  const denied = await request('POST', path, { actor: 'reviewer', key: randomUUID(), data: input })
+  assert.equal(denied.status, 403)
+  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', characterPath(b) + '/runs')).status, 404)
+  const foreign = await request('POST', characterPath(b) + '/runs', { actor: 'admin-b', key: randomUUID(), data: input })
+  assert.equal(foreign.status, 404)
+
+  const account = await owner.platformAccount.create({ data: {
+    characterId, identityId, platform: 'mock-a', instanceKey: 'console-fixture',
+    remoteAccountId: randomUUID(), status: 'PAUSED',
+  } })
+  const inactive = await request('POST', path, { key: randomUUID(), data: { ...input, accountId: account.id } })
+  assert.equal(inactive.status, 409)
+  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
+  await owner.platformAccount.update({ where: { id: account.id }, data: { status: 'ACTIVE' } })
+  const data = { ...input, accountId: account.id }
+  const key = randomUUID()
+  const [first, duplicate] = await Promise.all([
+    request('POST', path, { key, data }), request('POST', path, { key, data }),
+  ])
+  assert.equal(first.status, 201, JSON.stringify(first.body))
+  assert.equal(duplicate.status, 201)
+  assert.equal(first.body.id, duplicate.body.id)
+  const id = first.body.id
+  const run = await owner.agentRun.findUniqueOrThrow({ where: { id }, include: { inboundEvent: { include: { conversation: true } } } })
+  assert.equal(run.accountId, account.id)
+  assert.equal(run.inboundEvent.conversation?.channel, 'PUBLIC')
+  assert.equal(run.inboundEvent.conversation?.privateContactId, null)
+  assert.equal(run.inboundEvent.adapterId, 'mock-a')
+  assert.equal(await owner.conversation.count({ where: { accountId: account.id } }), 1)
+  assert.equal(await owner.outboxEvent.count({ where: { runId: id, type: runQueuedEvent } }), 1)
+  const listing = await request('GET', path + '?limit=1')
+  assert.equal(listing.status, 200)
+  assert.deepEqual(listing.body.items.map(({ id: itemId }: { id: string }) => itemId), [id])
+  assert.equal('message' in listing.body.items[0], false)
+  assert.equal((await request('GET', path + '?limit=1&cursor=' + id)).body.items.some((item: { id: string }) => item.id === id), false)
+
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  try {
+    const queued = await owner.outboxEvent.findFirstOrThrow({ where: { runId: id, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, queued.eventId)
+    const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: id, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, draft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)
+    const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: id } })
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
+    const actionPath = character + '/actions/' + action.id
+    const preview = await request('GET', actionPath, { actor: 'reviewer' })
+    assert.equal(preview.status, 200)
+    assert.ok(preview.body.content)
+    const decision = await request('POST', actionPath + '/decisions', {
+      actor: 'reviewer', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
+      data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Console fixture checked' },
+    })
+    assert.equal(decision.status, 200, JSON.stringify(decision.body))
+    await executeSimulation(executor, action.id, simulationPlatforms.resolveAdapter)
+    const replay = await request('GET', path + '/' + id + '/replay')
+    assert.equal(replay.status, 200)
+    assert.equal(replay.body.state, 'SIMULATED')
+    assert.ok(replay.body.proposal.receiptAt)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 1)
+    const second = await request('POST', path, { key: randomUUID(), data })
+    assert.equal(second.status, 201)
+    const recent = await request('GET', path + '?limit=1')
+    assert.equal(recent.body.nextCursor, second.body.id)
+    const older = await request('GET', path + '?limit=1&cursor=' + recent.body.nextCursor)
+    assert.deepEqual(older.body.items.map((item: { id: string }) => item.id), [id])
+    assert.equal(older.body.nextCursor, null)
+  } finally {
+    await Promise.all([runtime.$disconnect(), executor.$disconnect()])
+  }
+})

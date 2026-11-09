@@ -4,8 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
-import { dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
-import { readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
+import { consoleSimulationInput, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
+import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
 import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
@@ -686,6 +686,30 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       input: { input, expected }, requestId,
     }, (tx) => management.updateCommitment(tx, scope, commitmentId, expected, input))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/runs`, security,
+    request: { params: characterParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(simulationRunSummary)) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    return c.json(await listSimulationRuns(db, scope, management.parsePage(c.req.valid('query'))), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/runs`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(consoleSimulationInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'simulation.start', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => startConsoleSimulation(tx, scope, input, resolveAdapter))
+    return c.json({ ...result, requestId }, 201)
   })
 
   app.openapi(createRoute({

@@ -54,6 +54,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `POST /c/memberships` | ADMIN 授予或撤销本地用户名的角色权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
+| `GET /c/runs`、`POST /c/runs` | ADMIN 与 AUDITOR 按最近运行分页。ADMIN 用幂等键提交 `accountId` 和 `message`，在独立公开模拟会话中排队。角色、身份与账号须启用，账号须匹配已启用的模拟适配器。 |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
 | `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 或 AUDITOR 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
 | `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 或 AUDITOR 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |

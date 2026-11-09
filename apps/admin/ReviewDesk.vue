@@ -4,6 +4,7 @@ import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NForm, NFormI
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import CharacterWorkspace from './CharacterWorkspace.vue'
+import SimulationWorkspace from './SimulationWorkspace.vue'
 import { request, RequestError } from './request.js'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
@@ -18,9 +19,10 @@ const passkeyPassword = ref('')
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
-const tab = ref<'character' | 'review'>('character')
+const tab = ref<'character' | 'review' | 'runs'>('character')
 const characterCursor = ref<string | null>(null)
 const roles = ref<string[]>([])
+const canReadRuns = computed(() => roles.value.some((role) => role === 'ADMIN' || role === 'AUDITOR'))
 const canReviewSimulation = computed(() => roles.value.includes('REVIEWER'))
 const canReview = computed(() => canReviewSimulation.value || roles.value.includes('ADMIN'))
 const characterId = ref('')
@@ -111,7 +113,7 @@ function characterCreated(character: Character) {
   changeCharacter(character.id)
 }
 
-function changeTab(value: 'character' | 'review') {
+function changeTab(value: 'character' | 'review' | 'runs') {
   tab.value = value
   if (value === 'review') void loadQueue()
   else {
@@ -305,7 +307,7 @@ async function decideNewbi(decision: Decision) {
 
     <template v-else>
       <div class="workspace-header">
-        <h2 id="review-heading">{{ tab === 'character' ? '角色与身份' : '人工审批' }}</h2>
+        <h2 id="review-heading">{{ tab === 'character' ? '角色与身份' : tab === 'runs' ? '运行' : '人工审批' }}</h2>
         <div class="account-actions">
           <NTag size="small" :bordered="false" class="account-name">{{ username }}</NTag>
           <NPopover v-if="passkeysAvailable" trigger="click" placement="bottom-end" :width="248">
@@ -331,6 +333,7 @@ async function decideNewbi(decision: Decision) {
       <nav class="account-actions" aria-label="控制台导航">
         <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
         <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || !canReview" @click="changeTab('review')">审批</NButton>
+        <NButton :type="tab === 'runs' ? 'primary' : 'default'" :disabled="busy || !canReadRuns" @click="changeTab('runs')">运行</NButton>
       </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
@@ -342,7 +345,9 @@ async function decideNewbi(decision: Decision) {
 
       <CharacterWorkspace v-if="tab === 'character'" :key="characterId" :character-id="characterId"
         :can-create="canCreate" @created="characterCreated" @expired="resetSession" @roles="roles = $event" />
-      <div v-else-if="characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
+      <SimulationWorkspace v-else-if="tab === 'runs' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" :can-start="roles.includes('ADMIN')" @expired="resetSession" />
+      <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">
             <h3>待办</h3>

@@ -1,6 +1,17 @@
 import { z } from '@hono/zod-openapi'
 
+import { resourceId } from './management.js'
+import { maxSimulatedTextLength } from '../runtime/model-provider.js'
+
 const timestamp = z.iso.datetime({ offset: true })
+export const consoleSimulationInput = z.strictObject({
+  accountId: resourceId,
+  message: z.string().trim().min(1).max(maxSimulatedTextLength).refine((value) => !value.includes('\0')),
+})
+export const simulationRunSummary = z.object({
+  id: resourceId, state: z.string(), identityId: resourceId, accountId: resourceId,
+  platform: z.string(), createdAt: timestamp,
+})
 const evidence = z.discriminatedUnion('available', [
   z.object({ rank: z.number().int(), available: z.literal(true), memoryId: z.uuid(), revision: z.number().int() }),
   z.object({ rank: z.number().int(), available: z.literal(false) }),

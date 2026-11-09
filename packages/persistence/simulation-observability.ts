@@ -1,7 +1,37 @@
 import type { z } from '@hono/zod-openapi'
-import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, type simulationDailyMetricsView } from '../contracts/simulation-observability.js'
+import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView } from '../contracts/simulation-observability.js'
+import type { ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, ManagementError, type Scope } from './management.js'
+
+export async function startConsoleSimulation(
+  tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof consoleSimulationInput>, resolveAdapter: ResolveSimulationAdapter,
+) {
+  const account = await tx.platformAccount.findFirst({
+    where: { characterId: scope.characterId, id: input.accountId, platform: { in: ['mock-a', 'mock-b'] } },
+    select: { platform: true },
+  })
+  if (!account) throw new ManagementError(404, 'NOT_FOUND', 'Simulation account not found')
+  const adapter = resolveAdapter(account.platform)
+  if (!adapter) throw new ManagementError(409, 'SIMULATION_ADAPTER_UNAVAILABLE', 'Simulation adapter is unavailable')
+  const [row] = await tx.$queryRaw<{ id: string | null }[]>`
+    SELECT public.rica_start_console_simulation(${scope.characterId}::uuid, ${input.accountId}::uuid,
+      ${adapter.adapterId}, ${adapter.adapterVersion}, ${input.message}) AS id
+  `
+  if (!row?.id) throw new ManagementError(409, 'SIMULATION_BINDING_INACTIVE', 'Simulation binding is inactive')
+  return { id: row.id, status: 'QUEUED' }
+}
+
+export async function listSimulationRuns(db: PrismaClient, scope: Scope, { limit, cursor }: { limit: number; cursor?: string }) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const rows = await tx.$queryRaw<(Omit<z.infer<typeof simulationRunSummary>, 'createdAt'> & { createdAt: Date })[]>`
+      SELECT * FROM public.rica_console_simulation_runs(${scope.characterId}::uuid, ${cursor ?? null}::uuid, ${limit + 1}::int)
+    `
+    const items = rows.slice(0, limit).map((row) => simulationRunSummary.parse({ ...row, createdAt: row.createdAt.toISOString() }))
+    return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null }
+  }, { isolationLevel: 'RepeatableRead' })
+}
 
 export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId: string) {
   return db.$transaction(async (tx) => {
