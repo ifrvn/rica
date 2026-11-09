@@ -406,12 +406,12 @@ async function decide(decision: Decision) {
       <NForm :show-feedback="false" @submit.prevent="connect">
         <NFormItem label="用户名" :label-props="{ for: 'review-username' }">
           <NInput v-model:value="usernameInput" :input-props="{ id: 'review-username', autocomplete: 'username', required: true }"
-            :disabled="busy" placeholder="" />
+            :disabled="busy" placeholder="输入本地用户名" />
         </NFormItem>
         <NFormItem label="密码" :label-props="{ for: 'review-password' }">
           <NInput v-model:value="password" type="password"
             :input-props="{ id: 'review-password', autocomplete: 'current-password', required: true }"
-            :disabled="busy" placeholder="" />
+            :disabled="busy" placeholder="输入账号密码" />
         </NFormItem>
         <NAlert v-if="error" type="error" role="alert" class="login-alert">{{ error }}</NAlert>
         <div class="login-actions">
@@ -443,7 +443,7 @@ async function decide(decision: Decision) {
               <NFormItem label="确认密码" :label-props="{ for: 'review-passkey-password' }">
                 <NInput v-model:value="passkeyPassword" type="password"
                   :input-props="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
-                  :disabled="busy" placeholder="" />
+                  :disabled="busy" placeholder="输入当前密码以确认身份" />
               </NFormItem>
               <NButton attr-type="submit" type="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</NButton>
             </NForm>
@@ -577,7 +577,7 @@ async function decide(decision: Decision) {
               @submit.prevent="decide('APPROVE')">
               <NFormItem label="审批理由" :label-props="{ for: 'review-reason' }">
                 <NInput v-model:value="reason" type="textarea" :rows="3" :maxlength="240"
-                  :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="" />
+                  :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="例如：已核对目标和拟发送内容" />
               </NFormItem>
               <div class="decision-buttons">
                 <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">批准模拟回复</NButton>

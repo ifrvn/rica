@@ -157,7 +157,7 @@ onMounted(() => { void act(load) })
       <p>恢复后由 Worker 重新处理此事件。</p>
       <NForm @submit.prevent="retry">
         <NFormItem label="恢复理由" :label-props="{ for: 'outbox-reason' }">
-          <NInput v-model:value="reason" :input-props="{ id: 'outbox-reason' }" :maxlength="240" :disabled="busy" />
+          <NInput placeholder="例如：已排除故障，可以重新处理" v-model:value="reason" :input-props="{ id: 'outbox-reason' }" :maxlength="240" :disabled="busy" />
         </NFormItem>
         <div class="operations-actions">
           <NButton v-if="stale && currentEvent" :disabled="busy" @click="select(currentEvent)">重新核对</NButton>

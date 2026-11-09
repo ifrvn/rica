@@ -151,7 +151,7 @@ onMounted(() => { void list() })
       </div>
       <div class="connector-actions">
         <label for="connector-filter">状态</label>
-        <NSelect filterable :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"
+        <NSelect placeholder="选择提案状态" filterable :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"
           class="filter" :disabled="loadingList || submitting" @update:value="changeFilter" />
       </div>
       <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
@@ -205,7 +205,7 @@ onMounted(() => { void list() })
           @submit.prevent="submit(reply.status === 'UNKNOWN' ? 'CLOSE' : 'APPROVE')">
           <p v-if="reply.status === 'UNKNOWN'">结案会停止对此提案的发送尝试。</p>
           <NFormItem :label="reply.status === 'UNKNOWN' ? '结案理由' : '审批理由'" :label-props="{ for: 'connector-reason' }">
-            <NInput v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
+            <NInput :placeholder="reply.status === 'UNKNOWN' ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
               :input-props="{ id: 'connector-reason' }" />
           </NFormItem>
           <div class="connector-actions">

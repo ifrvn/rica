@@ -85,14 +85,14 @@ onMounted(() => { void run(load) })
       <h4 id="member-editor-heading" ref="editorHeading" tabindex="-1">{{ action === 'GRANT' ? '授予角色权限' : '撤销角色权限' }}</h4>
       <div class="console-form-grid">
         <NFormItem label="本地用户名" :label-props="{ for: 'member-subject' }">
-          <NInput v-model:value="subject" :disabled="busy || action === 'REVOKE'" maxlength="64" :input-props="{ id: 'member-subject' }" />
+          <NInput placeholder="例如：alice" v-model:value="subject" :disabled="busy || action === 'REVOKE'" maxlength="64" :input-props="{ id: 'member-subject' }" />
         </NFormItem>
         <NFormItem label="权限" :label-props="{ for: 'member-role' }">
-          <NSelect filterable v-model:value="role" :options="roleOptions" :disabled="busy || action === 'REVOKE'"
+          <NSelect placeholder="选择要变更的权限" filterable v-model:value="role" :options="roleOptions" :disabled="busy || action === 'REVOKE'"
             :input-props="{ id: 'member-role' }" />
         </NFormItem>
         <NFormItem label="变更理由" :label-props="{ for: 'member-reason' }">
-          <NInput v-model:value="reason" maxlength="240" :disabled="busy" :input-props="{ id: 'member-reason' }" />
+          <NInput placeholder="例如：负责审核该角色的回复" v-model:value="reason" maxlength="240" :disabled="busy" :input-props="{ id: 'member-reason' }" />
         </NFormItem>
       </div>
       <div class="console-actions">

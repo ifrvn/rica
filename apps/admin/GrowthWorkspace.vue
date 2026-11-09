@@ -26,7 +26,7 @@ onMounted(() => {
   <section class="console-workspace console-stack" aria-label="身份成长记录">
     <div class="growth-identity-picker">
       <NFormItem label="身份" :label-props="{ for: 'growth-identity' }">
-        <NSelect filterable :value="selected?.id ?? null" :disabled="busy"
+        <NSelect placeholder="搜索或选择身份" filterable :value="selected?.id ?? null" :disabled="busy"
           :options="identities.map(({ id, profile, slug }) => ({ value: id, label: profile?.displayName || slug }))"
           :input-props="{ id: 'growth-identity' }" @update:value="emit('open', $event)" />
       </NFormItem>

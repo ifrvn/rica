@@ -295,7 +295,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <NFormItem v-if="isCharacter || isIdentity" label="名称" :label-props="{ for: 'workspace-name' }" :validation-status="fieldError('name') ? 'error' : undefined">
-          <NInput v-model:value="form.name" :input-props="fieldInput('name')" @blur="touched.add('name')" maxlength="120" />
+          <NInput placeholder="例如：小黎" v-model:value="form.name" :input-props="fieldInput('name')" @blur="touched.add('name')" maxlength="120" />
           <template v-if="fieldError('name')" #feedback>
             <span id="workspace-name-error">{{ fieldError('name') }}</span>
           </template>
@@ -308,33 +308,33 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <NFormItem v-if="isCharacter" label="AI 身份说明" :label-props="{ for: 'workspace-disclosure' }" :validation-status="fieldError('disclosure') ? 'error' : undefined">
-          <NInput v-model:value="form.disclosure" :input-props="fieldInput('disclosure')" @blur="touched.add('disclosure')" maxlength="240" />
+          <NInput placeholder="例如：我是由 AI 驱动的虚拟角色" v-model:value="form.disclosure" :input-props="fieldInput('disclosure')" @blur="touched.add('disclosure')" maxlength="240" />
           <template v-if="fieldError('disclosure')" #feedback>
             <span id="workspace-disclosure-error">{{ fieldError('disclosure') }}</span>
           </template>
         </NFormItem>
         <NFormItem v-if="isIdentity" label="写作风格" :label-props="{ for: 'workspace-style' }" :validation-status="fieldError('style') ? 'error' : undefined">
-          <NSelect filterable v-model:value="form.style" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
+          <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
           <template v-if="fieldError('style')" #feedback>
             <span id="workspace-style-error">{{ fieldError('style') }}</span>
           </template>
         </NFormItem>
         <template v-if="editor === 'account' || editor === 'connector-account'">
           <NFormItem v-if="editor === 'account'" label="模拟平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
-            <NSelect filterable v-model:value="form.platform" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
+            <NSelect placeholder="选择模拟平台" filterable v-model:value="form.platform" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
               :options="workspace?.simulationPlatforms.map(value => ({ label: value, value }))" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
             </template>
           </NFormItem>
           <NFormItem :label="editor === 'account' ? '实例标识' : '本机 API 地址'" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
-            <NInput v-model:value="form.instance" :input-props="fieldInput('instance')" @blur="touched.add('instance')" :maxlength="editor === 'account' ? 120 : 160" />
+            <NInput :placeholder="editor === 'account' ? '例如：sandbox' : '例如：http://127.0.0.1:5000/agent-api/v1'" v-model:value="form.instance" :input-props="fieldInput('instance')" @blur="touched.add('instance')" :maxlength="editor === 'account' ? 120 : 160" />
             <template v-if="fieldError('instance')" #feedback>
               <span id="workspace-instance-error">{{ fieldError('instance') }}</span>
             </template>
           </NFormItem>
           <NFormItem :label="editor === 'account' ? '模拟平台账号标识' : 'Agent ID'" :label-props="{ for: 'workspace-remote' }" :validation-status="fieldError('remote') ? 'error' : undefined">
-            <NInput v-model:value="form.remoteId" :input-props="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
+            <NInput :placeholder="editor === 'account' ? '例如：demo-account' : '输入连接器分配的 Agent ID'" v-model:value="form.remoteId" :input-props="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
             <template v-if="fieldError('remote')" #feedback>
               <span id="workspace-remote-error">{{ fieldError('remote') }}</span>
             </template>
@@ -352,9 +352,9 @@ onMounted(() => { if (props.characterId) void run(load) })
             </template>
           </NFormItem>
         </template>
-        <NFormItem v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="理由"
+        <NFormItem v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明"
           :label-props="{ for: 'workspace-reason' }" :validation-status="fieldError('reason') ? 'error' : undefined">
-          <NInput v-model:value="form.reason" :input-props="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
+          <NInput :placeholder="editor === 'core' ? '例如：统一 AI 身份披露文案' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model:value="form.reason" :input-props="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
           <template v-if="fieldError('reason')" #feedback>
             <span id="workspace-reason-error">{{ fieldError('reason') }}</span>
           </template>

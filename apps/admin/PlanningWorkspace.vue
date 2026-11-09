@@ -207,16 +207,16 @@ onMounted(() => {
         <div v-if="editing === 'schedule'" class="console-form-grid">
           <template v-if="!schedule">
             <NFormItem label="计划标识" :label-props="{ for: 'plan-key' }" :validation-status="planKeyError ? 'error' : undefined">
-              <NInput v-model:value="form.key" maxlength="63" :disabled="busy"
+              <NInput placeholder="例如：daily-check" v-model:value="form.key" maxlength="63" :disabled="busy"
                 :input-props="{ id: 'plan-key', 'aria-invalid': planKeyError || undefined, 'aria-describedby': planKeyError ? 'plan-key-error' : undefined }" />
               <template v-if="planKeyError" #feedback><span id="plan-key-error">用小写字母或数字开头，可加短横线。</span></template>
             </NFormItem>
             <NFormItem label="模拟账号" :label-props="{ for: 'plan-account' }">
-              <NSelect filterable :value="form.accountId" :options="accountOptions" :disabled="busy"
+              <NSelect placeholder="选择用于运行计划的账号" filterable :value="form.accountId" :options="accountOptions" :disabled="busy"
                 :input-props="{ id: 'plan-account' }" @update:value="selectAccount" />
             </NFormItem>
             <NFormItem label="会话" :label-props="{ for: 'plan-conversation' }">
-              <NSelect filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
+              <NSelect placeholder="搜索联系人或选择会话" filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
                 :options="conversations.map(({ id, channel, contactLabel }) => ({
                   value: id, label: (contactLabel || (channel === 'PRIVATE' ? '私聊' : '公开会话')) + ' · ' + id.slice(0, 8),
                 }))"
@@ -225,7 +225,7 @@ onMounted(() => {
             <NButton v-if="conversationCursor" size="small" :disabled="busy" @click="run(() => loadConversations(true))">加载更多会话</NButton>
           </template>
           <NFormItem label="计划类型" :label-props="{ for: 'plan-kind' }">
-            <NSelect filterable v-model:value="form.kind" :options="kinds" :disabled="busy" :input-props="{ id: 'plan-kind' }" />
+            <NSelect placeholder="选择每日计划或单次提醒" filterable v-model:value="form.kind" :options="kinds" :disabled="busy" :input-props="{ id: 'plan-kind' }" />
           </NFormItem>
           <NFormItem label="时区" :label-props="{ for: 'plan-zone' }" :validation-status="invalidZone ? 'error' : undefined">
             <TimeZoneSelect v-model:value="form.zone" id="plan-zone" :disabled="busy" :invalid="invalidZone" />
@@ -245,17 +245,17 @@ onMounted(() => {
           <p v-if="editing === 'commitment' && commitment">{{ commitment.title }} · v{{ commitment.version }}</p>
           <div class="console-form-grid">
             <NFormItem v-if="editing === 'new-commitment'" label="承诺标题" :label-props="{ for: 'commit-title' }">
-              <NInput v-model:value="form.title" maxlength="120" :disabled="busy" :input-props="{ id: 'commit-title' }" />
+              <NInput placeholder="例如：跟进模拟回复" v-model:value="form.title" maxlength="120" :disabled="busy" :input-props="{ id: 'commit-title' }" />
             </NFormItem>
             <NFormItem v-else label="处理方式" :label-props="{ for: 'commit-operation' }">
-              <NSelect filterable v-model:value="form.operation" :options="operations" :disabled="busy" :input-props="{ id: 'commit-operation' }" />
+              <NSelect placeholder="选择承诺的处理方式" filterable v-model:value="form.operation" :options="operations" :disabled="busy" :input-props="{ id: 'commit-operation' }" />
             </NFormItem>
             <NFormItem v-if="editing === 'new-commitment' || form.operation === 'DEFER'"
               :label="`截止时间（${browserZone}）`" :label-props="{ for: 'commit-due' }">
               <input id="commit-due" v-model="form.dueAt" type="datetime-local" :disabled="busy" />
             </NFormItem>
             <NFormItem label="理由" :label-props="{ for: 'commit-reason' }">
-              <NInput v-model:value="form.reason" maxlength="240" :disabled="busy" :input-props="{ id: 'commit-reason' }" />
+              <NInput placeholder="例如：需要等待更多资料" v-model:value="form.reason" maxlength="240" :disabled="busy" :input-props="{ id: 'commit-reason' }" />
             </NFormItem>
           </div>
         </template>

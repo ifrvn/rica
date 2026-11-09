@@ -92,7 +92,7 @@ function resolve() {
       </dl>
       <p v-if="evidence.outcome === 'DEFINITELY_NOT_SENT'">结案后释放账号占用与预算，原提案进入「已拦截」。</p>
       <NFormItem label="对账理由" :label-props="{ for: 'reconciliation-reason' }">
-        <NInput v-model:value="reason" :input-props="{ id: 'reconciliation-reason' }" :maxlength="240" :disabled="busy" />
+        <NInput placeholder="例如：已核对封存账本，确认没有回执" v-model:value="reason" :input-props="{ id: 'reconciliation-reason' }" :maxlength="240" :disabled="busy" />
       </NFormItem>
       <div class="ledger-actions">
         <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !reason.trim()">提交对账结论</NButton>

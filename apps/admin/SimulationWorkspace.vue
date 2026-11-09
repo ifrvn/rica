@@ -272,10 +272,10 @@ onMounted(() => { void act(load) })
         <h4 id="run-editor-heading">发起模拟</h4>
         <NForm @submit.prevent="start">
           <NFormItem label="模拟账号" :label-props="{ for: 'run-account' }">
-            <NSelect filterable v-model:value="accountId" :options="options" :input-props="{ id: 'run-account' }" :disabled="busy" />
+            <NSelect placeholder="选择接收模拟消息的账号" filterable v-model:value="accountId" :options="options" :input-props="{ id: 'run-account' }" :disabled="busy" />
           </NFormItem>
           <NFormItem label="模拟消息" :label-props="{ for: 'run-message' }">
-            <NInput v-model:value="message" type="textarea" :rows="3" :input-props="{ id: 'run-message' }"
+            <NInput placeholder="例如：你好，能介绍一下你的工作吗？" v-model:value="message" type="textarea" :rows="3" :input-props="{ id: 'run-message' }"
               :maxlength="4000" :disabled="busy" />
           </NFormItem>
           <div class="run-actions">
@@ -286,14 +286,14 @@ onMounted(() => { void act(load) })
       </section>
       <NForm class="run-filters" @submit.prevent="applyFilters">
         <NFormItem label="状态" :label-props="{ for: 'filter-run-state' }">
-          <NSelect filterable v-model:value="filters.state" :options="stateOptions" :input-props="{ id: 'filter-run-state' }" />
+          <NSelect placeholder="全部状态" filterable v-model:value="filters.state" :options="stateOptions" :input-props="{ id: 'filter-run-state' }" />
         </NFormItem>
         <NFormItem label="身份" :label-props="{ for: 'filter-run-identity' }">
-          <NSelect filterable v-model:value="filters.identityId" :options="identityOptions"
+          <NSelect placeholder="全部身份" filterable v-model:value="filters.identityId" :options="identityOptions"
             :input-props="{ id: 'filter-run-identity' }" @update:value="filters.accountId = ''" />
         </NFormItem>
         <NFormItem label="账号" :label-props="{ for: 'filter-run-account' }">
-          <NSelect filterable v-model:value="filters.accountId" :options="accountOptions" :input-props="{ id: 'filter-run-account' }" />
+          <NSelect placeholder="全部账号" filterable v-model:value="filters.accountId" :options="accountOptions" :input-props="{ id: 'filter-run-account' }" />
         </NFormItem>
         <NFormItem label="开始日期（UTC）" :label-props="{ for: 'filter-run-from' }">
           <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />

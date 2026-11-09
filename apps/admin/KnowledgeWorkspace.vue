@@ -148,16 +148,16 @@ onMounted(() => {
       <NForm @submit.prevent="apply">
         <div class="console-form-grid">
           <NFormItem label="身份" :label-props="{ for: 'memory-identity' }">
-            <NSelect filterable clearable :value="filters.identityId || null"
+            <NSelect placeholder="全部身份" filterable clearable :value="filters.identityId || null"
               :options="identities.map(({ id }) => ({ value: id, label: name(id) ?? id }))"
               :disabled="busy" :input-props="{ id: 'memory-identity' }" @update:value="filters.identityId = $event ?? ''" />
           </NFormItem>
           <NFormItem label="记忆范围" :label-props="{ for: 'memory-scope' }">
-            <NSelect filterable clearable :value="filters.scope || null" :options="scopeOptions" :disabled="busy"
+            <NSelect placeholder="全部范围" filterable clearable :value="filters.scope || null" :options="scopeOptions" :disabled="busy"
               :input-props="{ id: 'memory-scope' }" @update:value="filters.scope = $event ?? ''" />
           </NFormItem>
           <NFormItem label="状态" :label-props="{ for: 'memory-status' }">
-            <NSelect filterable clearable :value="filters.status || null" :options="statusOptions" :disabled="busy"
+            <NSelect placeholder="全部状态" filterable clearable :value="filters.status || null" :options="statusOptions" :disabled="busy"
               :input-props="{ id: 'memory-status' }" @update:value="filters.status = $event ?? ''" />
           </NFormItem>
         </div>
@@ -227,10 +227,10 @@ onMounted(() => {
         </div>
         <NForm v-if="correcting" @submit.prevent="correct">
           <NFormItem label="更正后的正文" :label-props="{ for: 'memory-correction' }">
-            <NInput v-model:value="content" type="textarea" maxlength="1500" :disabled="busy" :input-props="{ id: 'memory-correction' }" />
+            <NInput placeholder="输入更正后应保留的内容" v-model:value="content" type="textarea" maxlength="1500" :disabled="busy" :input-props="{ id: 'memory-correction' }" />
           </NFormItem>
           <NFormItem label="纠错理由" :label-props="{ for: 'memory-reason' }">
-            <NInput v-model:value="reason" maxlength="240" :disabled="busy" :input-props="{ id: 'memory-reason' }" />
+            <NInput placeholder="例如：原记录把时间写错了" v-model:value="reason" maxlength="240" :disabled="busy" :input-props="{ id: 'memory-reason' }" />
           </NFormItem>
           <div class="console-actions">
             <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!content.trim() || !reason.trim()">保存修订</NButton>

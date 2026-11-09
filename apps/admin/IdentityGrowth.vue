@@ -208,7 +208,7 @@ onMounted(() => {
         <p>{{ belief.statement ?? '观点内容当前不可用。' }}</p>
         <NForm v-if="canEdit && belief.version > 1" @submit.prevent="restore">
           <NFormItem label="历史版本" :label-props="{ for: 'belief-version' }">
-            <NInputNumber v-model:value="restoreVersion" :min="1" :max="belief.version - 1" :precision="0"
+            <NInputNumber placeholder="输入要恢复的版本号" v-model:value="restoreVersion" :min="1" :max="belief.version - 1" :precision="0"
               :disabled="busy" :input-props="{ id: 'belief-version' }" @update:value="historical = undefined" />
           </NFormItem>
           <div class="console-actions">
@@ -218,7 +218,7 @@ onMounted(() => {
           <template v-if="historical">
             <p>v{{ historical.version }} · {{ historical.statement ?? '此版本内容当前不可用。' }}</p>
             <NFormItem label="恢复理由" :label-props="{ for: 'belief-reason' }">
-              <NInput v-model:value="restoreReason" maxlength="240" :disabled="busy" :input-props="{ id: 'belief-reason' }" />
+              <NInput placeholder="例如：恢复有来源支持的旧观点" v-model:value="restoreReason" maxlength="240" :disabled="busy" :input-props="{ id: 'belief-reason' }" />
             </NFormItem>
             <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!historical.statement || !restoreReason.trim()">追加恢复版本</NButton>
           </template>
@@ -243,7 +243,7 @@ onMounted(() => {
         <p v-if="contact.reason">{{ contact.reason }}</p>
         <NForm v-if="canEdit" @submit.prevent="saveBoundary">
           <NFormItem label="边界变更理由" :label-props="{ for: 'boundary-reason' }">
-            <NInput v-model:value="boundaryReason" maxlength="240" :disabled="busy" :input-props="{ id: 'boundary-reason' }" />
+            <NInput placeholder="例如：联系人要求停止互动" v-model:value="boundaryReason" maxlength="240" :disabled="busy" :input-props="{ id: 'boundary-reason' }" />
           </NFormItem>
           <div class="console-actions">
             <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!boundaryReason.trim()">

@@ -117,19 +117,19 @@ onMounted(() => { void run(load) })
     <NForm v-if="mode" @submit.prevent="save">
       <div v-if="mode === 'grant'" class="console-form-grid">
         <NFormItem label="用途" :label-props="{ for: 'grant-purpose' }">
-          <NSelect filterable v-model:value="form.purpose" :options="purposeOptions" :disabled="busy"
+          <NSelect placeholder="选择记忆用途" filterable v-model:value="form.purpose" :options="purposeOptions" :disabled="busy"
             :input-props="{ id: 'grant-purpose' }" @update:value="resetChoice" />
         </NFormItem>
         <NFormItem label="接收身份" :label-props="{ for: 'grant-identity' }">
-          <NSelect filterable v-model:value="form.identityId" :options="identities.map(({ id }) => ({ value: id, label: name(id) }))"
+          <NSelect placeholder="选择接收身份" filterable v-model:value="form.identityId" :options="identities.map(({ id }) => ({ value: id, label: name(id) }))"
             :disabled="busy" :input-props="{ id: 'grant-identity' }" @update:value="form.accountId = ''; resetChoice()" />
         </NFormItem>
         <NFormItem :label="channel ? '接收账号' : '接收账号（可选）'" :label-props="{ for: 'grant-account' }">
-          <NSelect clearable filterable :value="form.accountId || null" :options="accountOptions" :disabled="busy || !form.identityId"
+          <NSelect placeholder="选择接收账号" clearable filterable :value="form.accountId || null" :options="accountOptions" :disabled="busy || !form.identityId"
             :input-props="{ id: 'grant-account' }" @update:value="form.accountId = $event ?? ''; resetChoice()" />
         </NFormItem>
         <NFormItem v-if="channel" :label="channel === 'PUBLIC' ? '公开受众会话' : '私聊会话'" :label-props="{ for: 'grant-conversation' }">
-          <NSelect filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
+          <NSelect placeholder="搜索或选择会话" filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
             :options="conversations.map(({ id, channel: kind, contactLabel }) => ({
               value: id, label: (contactLabel || (kind === 'PRIVATE' ? '私聊' : '公开会话')) + ' · ' + id.slice(0, 8),
             }))" :input-props="{ id: 'grant-conversation' }" />
@@ -149,7 +149,7 @@ onMounted(() => { void run(load) })
       <p v-else-if="revoking">撤销 {{ name(revoking.recipientIdentityId) }} 的{{ purposes[revoking.purpose as Purpose] }}授权。</p>
       <NAlert v-if="mode === 'grant' && badDates" type="warning" role="status">截止时间须晚于开始时间和现在。</NAlert>
       <NFormItem label="理由" :label-props="{ for: 'grant-reason' }">
-        <NInput v-model:value="form.reason" :disabled="busy" maxlength="240" :input-props="{ id: 'grant-reason' }" />
+        <NInput :placeholder="revoking ? '例如：协作已结束' : '例如：供该身份回复指定会话'" v-model:value="form.reason" :disabled="busy" maxlength="240" :input-props="{ id: 'grant-reason' }" />
       </NFormItem>
       <div class="console-actions">
         <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!valid">{{ mode === 'grant' ? '保存授权' : '确认撤销' }}</NButton>
