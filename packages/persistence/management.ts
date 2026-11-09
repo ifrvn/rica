@@ -305,13 +305,13 @@ export async function revokeGrant(tx: Tx, scope: Scope, id: string) {
   return { id, authEpoch: await advanceEpoch(tx, characterId) }
 }
 
-type Page = { limit: number; cursor?: string }
+export type Page = { limit: number; cursor?: string }
 
 export function parsePage(input: Input<typeof contracts.listQuery>): Page {
   return { limit: Number(input.limit ?? 25), cursor: input.cursor }
 }
 
-async function pageArgs({ limit, cursor }: Page, visible: (id: string) => Promise<unknown>) {
+export async function pageArgs({ limit, cursor }: Page, visible: (id: string) => Promise<unknown>) {
   if (cursor && !await visible(cursor)) invalid('Invalid cursor')
   // Resolve the native timestamp through its row to preserve PostgreSQL microseconds.
   return {
@@ -321,7 +321,7 @@ async function pageArgs({ limit, cursor }: Page, visible: (id: string) => Promis
   }
 }
 
-function makePage<T extends { id: string }, View>(rows: T[], { limit }: Page, view: (row: T) => View) {
+export function makePage<T extends { id: string }, View>(rows: T[], { limit }: Page, view: (row: T) => View) {
   const items = rows.slice(0, limit).map(view)
   const last = rows.length > limit ? rows[limit - 1] : undefined
   const nextCursor = last?.id ?? null

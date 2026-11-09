@@ -8,8 +8,8 @@ import { consoleSimulationInput, simulationRunSummary, dailyMetricsQuery, outbox
 import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply } from '../../packages/persistence/newbi-management.js'
+import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -796,6 +796,16 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       key: c.req.valid('header')['idempotency-key'],
     }, (tx) => bindNewbiAccount(tx, scope, input))
     return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${newbi}/replies`, security,
+    request: { params: characterParams, query: newbiReplyQuery },
+    responses: { ...errors, 200: success(schema.pageView(newbiReplySummary)) },
+  }), async (c) => {
+    const query = c.req.valid('query')
+    return c.json(await listNewbiReplies(db, { ...c.req.valid('param'), actor: c.get('actor') },
+      management.parsePage(query), query.status), 200)
   })
 
   app.openapi(createRoute({

@@ -2455,6 +2455,20 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     await assert.rejects(executor.newbiReply.count(), /permission denied/i)
 
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
+    const queuePath = prefix + '/replies'
+    const waitingQueue = await request('GET', queuePath + '?status=WAITING', { actor: 'reviewer' })
+    assert.equal(waitingQueue.status, 200, JSON.stringify(waitingQueue.body))
+    assert.deepEqual(waitingQueue.body.items.map((item: { id: string }) => item.id), [approved.id])
+    assert.deepEqual(Object.keys(waitingQueue.body.items[0]).sort(), ['agentId', 'createdAt', 'id', 'identity', 'postId', 'status'])
+    assert.equal((await request('GET', queuePath, { actor: 'admin-b' })).status, 404)
+    assert.equal((await request('GET', queuePath + '?status=WAITING&cursor=' + denied.id)).status, 422)
+    const firstPage = await request('GET', queuePath + '?limit=1')
+    assert.equal(firstPage.body.items.length, 1)
+    assert.equal(firstPage.body.nextCursor, firstPage.body.items[0].id)
+    const secondPage = await request('GET', queuePath + '?limit=1&cursor=' + firstPage.body.nextCursor)
+    assert.deepEqual([...firstPage.body.items, ...secondPage.body.items].map((item: { id: string }) => item.id).sort(),
+      [approved.id, denied.id].sort())
+    assert.equal(secondPage.body.nextCursor, null)
     assert.equal((await approved.decide('APPROVE', 'admin-a')).status, 403)
     await assert.rejects(management.$executeRaw`
       UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid

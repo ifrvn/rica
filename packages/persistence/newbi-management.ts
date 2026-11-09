@@ -2,9 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../contracts/newbi-executor-identity.js'
 import { coreProfile } from '../contracts/management.js'
-import { newbiInboxView, newbiReplyView, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
+import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
-import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
+import { authorize, denyPermission, makePage, ManagementError, pageArgs, type Page, type Scope } from './management.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -51,6 +51,22 @@ export async function createNewbiReply(tx: Prisma.TransactionClient, scope: Scop
       content, reviewDigest, executorKey, proposerId: scope.actor.id, expiresAt: clock.expires },
   })
   return { id, status: 'WAITING' }
+}
+
+export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Page, status?: z.infer<typeof newbiReplyQuery>['status']) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'REVIEWER'])
+    const where = { characterId: scope.characterId, status }
+    const args = await pageArgs(page, (id) => tx.newbiReply.findFirst({ where: { ...where, id }, select: { id: true } }))
+    const rows = await tx.newbiReply.findMany({
+      ...args, where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, status: true, postId: true, createdAt: true,
+        account: { select: { remoteAccountId: true, identity: { select: { slug: true } } } } },
+    })
+    return makePage(rows, page, ({ account, createdAt, ...reply }) => newbiReplySummary.parse({
+      ...reply, identity: account.identity.slug, agentId: account.remoteAccountId, createdAt: createdAt.toISOString(),
+    }))
+  }, { isolationLevel: 'RepeatableRead' })
 }
 
 export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) {

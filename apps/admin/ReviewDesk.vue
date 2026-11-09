@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
-import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import ConnectorReview from './ConnectorReview.vue'
 import CharacterWorkspace from './CharacterWorkspace.vue'
 import SimulationWorkspace from './SimulationWorkspace.vue'
 import RunOperations from './RunOperations.vue'
@@ -27,7 +27,7 @@ const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
 const pageTitle: Record<ConsolePage, string> = {
-  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件',
+  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
 const routing = ref(false)
@@ -48,24 +48,15 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 let pending: { signature: string; key: string } | undefined
-const newbiId = ref('')
-const newbiReply = ref<NewbiReplyView>()
-const newbiReason = ref('')
-let newbiPending: { signature: string; key: string } | undefined
-const newbiPath = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/newbi/replies')
-const newbiStatus: Record<NewbiReplyView['status'], string> = {
-  WAITING: '待审', READY: '已批准', REJECTED: '已拒绝', IN_FLIGHT: '发送中', UNKNOWN: '待核对', SENT: '已发送', CLOSED: '已结案',
-}
-
 const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/actions')
 const statusText: Record<ActionView['state'], string> = {
   WAITING_APPROVAL: '待审', READY: '已批准', REJECTED: '已拒绝', CANCELED: '已失效', EXPIRED: '已过期',
   EXECUTING: '模拟执行中', RECONCILING: '待对账', SIMULATED: '模拟完成', BLOCKED: '执行已拦截',
 }
 
-function statusTone(state: ActionView['state'] | NewbiReplyView['status']) {
-  if (state === 'WAITING_APPROVAL' || state === 'WAITING' || state === 'RECONCILING' || state === 'UNKNOWN') return 'warning'
-  if (state === 'READY' || state === 'SIMULATED' || state === 'SENT') return 'success'
+function statusTone(state: ActionView['state']) {
+  if (state === 'WAITING_APPROVAL' || state === 'RECONCILING') return 'warning'
+  if (state === 'READY' || state === 'SIMULATED') return 'success'
   if (state === 'BLOCKED' || state === 'REJECTED') return 'error'
   return 'default'
 }
@@ -102,7 +93,6 @@ async function run(task: () => Promise<void>, scope?: number) {
     if ([401, 403, 404, 409, 412].includes(status) && selected.value) {
       selected.value = { ...selected.value, content: null }
     }
-    if ([401, 403, 404, 409, 412].includes(status)) newbiReply.value = undefined
   } finally {
     busy.value = false
   }
@@ -152,7 +142,6 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
     actions.value = []
     nextCursor.value = null
     queueLoaded = false
-    resetNewbi()
   }
   resetReview()
   error.value = ''
@@ -177,11 +166,13 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
     }
     characterId.value = target
     const denied = (['runs', 'outbox', 'audit', 'plugins'].includes(location.page) && !canReadRuns.value)
+      || (location.page === 'connector' && !canReview.value)
       || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
-    tab.value = denied ? 'character' : location.page
+    tab.value = denied ? 'character'
+      : location.page === 'review' && !canReviewSimulation.value ? 'connector' : location.page
     detailId.value = denied ? undefined : location.detail
     if (denied) error.value = '当前账号无权打开此链接。'
-    if (replace || denied) {
+    if (replace || tab.value !== location.page) {
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value }))
     }
     if (tab.value === 'review' && canReviewSimulation.value) {
@@ -255,13 +246,6 @@ function resetReview() {
   pending = undefined
 }
 
-function resetNewbi() {
-  newbiId.value = ''
-  newbiReply.value = undefined
-  newbiReason.value = ''
-  newbiPending = undefined
-}
-
 async function disconnect() {
   await run(async () => {
     await authPost('logout')
@@ -273,7 +257,6 @@ function resetSession() {
   ++revision
   routing.value = false
   detailId.value = undefined
-  resetNewbi()
   username.value = ''
   password.value = ''
   passkeyPassword.value = ''
@@ -361,42 +344,6 @@ async function decide(decision: Decision) {
     notice.value = outcome.status === 'READY' ? '已批准模拟提案。' : '已拒绝模拟提案。'
   }, current)
 }
-async function openNewbiReply() {
-  const id = newbiId.value.trim()
-  if (!id) return
-  const current = revision
-  await run(async () => {
-    newbiReply.value = undefined
-    newbiReason.value = ''
-    newbiPending = undefined
-    const reply = await request<NewbiReplyView>(newbiPath.value + '/' + encodeURIComponent(id))
-    if (current === revision) newbiReply.value = reply
-  }, current)
-}
-
-async function decideNewbi(decision: Decision) {
-  const reply = newbiReply.value
-  const reason = newbiReason.value.trim()
-  if (busy.value || !reply?.content || reply.status !== 'WAITING' || !reason) return
-  const data = { decision, reviewDigest: reply.reviewDigest, reason }
-  const signature = JSON.stringify([reply.id, data])
-  if (newbiPending?.signature !== signature) newbiPending = { signature, key: crypto.randomUUID() }
-  const { key } = newbiPending
-  const current = revision
-  await run(async () => {
-    const result = await request<{ status: 'READY' | 'REJECTED' }>(
-      newbiPath.value + '/' + encodeURIComponent(reply.id) + '/decision', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-        body: JSON.stringify(data),
-      },
-    )
-    if (current !== revision) return
-    newbiReply.value = { ...reply, status: result.status }
-    newbiReason.value = ''
-    newbiPending = undefined
-    notice.value = result.status === 'READY' ? '扭笔回复已批准，等待单次执行。' : '扭笔回复已拒绝。'
-  }, current)
-}
 </script>
 
 <template>
@@ -448,7 +395,7 @@ async function decideNewbi(decision: Decision) {
 
       <nav class="account-actions" aria-label="控制台导航">
         <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
-        <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab('review')">审批</NButton>
+        <NButton :type="tab === 'review' || tab === 'connector' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab(canReviewSimulation ? 'review' : 'connector')">审批</NButton>
         <NButton :type="tab === 'runs' || tab === 'outbox' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
         <NButton :type="tab === 'audit' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('audit')">审计</NButton>
         <NButton :type="tab === 'plugins' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('plugins')">插件</NButton>
@@ -461,6 +408,12 @@ async function decideNewbi(decision: Decision) {
           @click="run(() => fetchCharacters(characterCursor ?? undefined))">加载更多角色</NButton>
       </div>
 
+      <nav v-if="canReviewSimulation && (tab === 'review' || tab === 'connector')" class="account-actions" aria-label="审批类型">
+        <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing"
+          @click="changeTab('review')">模拟提案</NButton>
+        <NButton size="small" :type="tab === 'connector' ? 'primary' : 'default'" :disabled="busy || routing"
+          @click="changeTab('connector')">本机连接器</NButton>
+      </nav>
       <NSpin v-if="routing && !characterId" />
       <CharacterWorkspace v-else-if="tab === 'character'" :key="characterId" :character-id="characterId"
         :can-create="canCreate" @created="characterCreated" @expired="resetSession" @roles="roles = $event" />
@@ -477,6 +430,9 @@ async function decideNewbi(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" @accounts="changeTab('character')" />
+      <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
+        :character-id="characterId" :detail-id="detailId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
+        @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event })" />
       <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">
@@ -535,44 +491,6 @@ async function decideNewbi(decision: Decision) {
         </NCard>
       </div>
 
-      <NCard v-if="tab === 'review' && characterId && canReview" size="small">
-        <NCollapse>
-          <NCollapseItem name="pilot" title="扭笔本地试点">
-            <NForm class="lookup" :show-feedback="false" @submit.prevent="openNewbiReply">
-              <NFormItem label="提案 ID" :label-props="{ for: 'newbi-reply-id' }">
-                <NInput v-model:value="newbiId" :input-props="{ id: 'newbi-reply-id', required: true }"
-                  :disabled="busy" placeholder="" />
-              </NFormItem>
-              <NButton attr-type="submit" :disabled="busy || !newbiId.trim()">查看扭笔提案</NButton>
-            </NForm>
-            <section v-if="newbiReply" class="pilot-proposal" aria-labelledby="pilot-proposal-heading">
-              <div class="proposal-title">
-                <h3 id="pilot-proposal-heading">扭笔回复</h3>
-                <NTag size="small" :bordered="false" :type="statusTone(newbiReply.status)">{{ newbiStatus[newbiReply.status] }}</NTag>
-              </div>
-              <dl class="metadata">
-                <div><dt>本机平台</dt><dd>{{ newbiReply.endpoint }}</dd></div>
-                <div><dt>身份与账号</dt><dd>{{ newbiReply.identityId }} / {{ newbiReply.accountId }}</dd></div>
-                <div><dt>扭笔 Agent</dt><dd>{{ newbiReply.agentId }}</dd></div>
-                <div><dt>目标帖子</dt><dd>{{ newbiReply.postId }} · 公开回复</dd></div>
-                <div v-if="newbiReply.remoteCommentId"><dt>评论回执</dt><dd>{{ newbiReply.remoteCommentId }}</dd></div>
-              </dl>
-              <p v-if="newbiReply.content" class="payload">{{ newbiReply.content }}</p>
-              <NForm v-if="newbiReply.status === 'WAITING' && newbiReply.content" :show-feedback="false"
-                @submit.prevent="decideNewbi('APPROVE')">
-                <NFormItem label="审批理由" :label-props="{ for: 'newbi-reason' }">
-                  <NInput v-model:value="newbiReason" type="textarea" :rows="3" :maxlength="240"
-                    :input-props="{ id: 'newbi-reason', required: true }" :disabled="busy" placeholder="" />
-                </NFormItem>
-                <div class="decision-buttons">
-                  <NButton type="primary" attr-type="submit" :disabled="busy || !newbiReason.trim()">批准扭笔回复</NButton>
-                  <NButton :disabled="busy || !newbiReason.trim()" @click="decideNewbi('REJECT')">拒绝</NButton>
-                </div>
-              </NForm>
-            </section>
-          </NCollapseItem>
-        </NCollapse>
-      </NCard>
     </template>
     <span v-if="busy" class="sr-only" role="status">处理中…</span>
   </section>
@@ -613,15 +531,10 @@ async function decideNewbi(decision: Decision) {
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
 .proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
 .payload { margin: 0 0 1rem; padding: .875rem 1rem; border-radius: .5rem; background: #f3f7f6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.lookup { display: flex; gap: .625rem; align-items: flex-end; max-width: 33rem; }
-.lookup :deep(.n-form-item) { flex: 1; min-width: 0; }
 .decision-buttons, .passkey-submit { margin-block-start: .75rem; }
-.pilot-proposal { margin-block-start: 1rem; }
-.pilot-proposal .proposal-title { margin-block-end: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) { .review-layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 30rem) {
   .metadata { grid-template-columns: minmax(0, 1fr); }
-  .lookup { align-items: stretch; flex-direction: column; }
 }
 </style>

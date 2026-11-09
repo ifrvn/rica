@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import { resourceId } from './management.js'
+import { listQuery, resourceId } from './management.js'
 
 export const newbiReaderIdentity = { id: 'newbi-local-reader', version: '1.0.0', contractVersion: 1 } as const
 
@@ -24,10 +24,16 @@ export const newbiDecisionInput = z.strictObject({
   reason: z.string().trim().min(1).max(240),
 })
 export const newbiClosureInput = z.strictObject({ reason: z.string().trim().min(1).max(240) })
+const newbiReplyStatus = z.enum(['WAITING', 'READY', 'REJECTED', 'IN_FLIGHT', 'UNKNOWN', 'SENT', 'CLOSED'])
+export const newbiReplyQuery = listQuery.extend({ status: newbiReplyStatus.optional() })
+export const newbiReplySummary = z.object({
+  id: resourceId, identity: z.string(), agentId: resourceId, postId: resourceId,
+  status: newbiReplyStatus, createdAt: z.iso.datetime(),
+})
 export const newbiReplyView = z.object({
   id: resourceId, accountId: resourceId, identityId: resourceId, agentId: resourceId,
   endpoint: newbiEndpoint, postId: resourceId, content: z.string().nullable(), reviewDigest: z.string(),
-  status: z.enum(['WAITING', 'READY', 'REJECTED', 'IN_FLIGHT', 'UNKNOWN', 'SENT', 'CLOSED']),
+  status: newbiReplyStatus,
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
   retryNotBefore: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })

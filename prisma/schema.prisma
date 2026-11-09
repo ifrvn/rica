@@ -310,6 +310,8 @@ model NewbiReply {
   account         PlatformAccount @relation(fields: [characterId,identityId,accountId], references: [characterId,identityId,id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([accountId,remoteCommentId])
+  @@index([characterId, createdAt, id], map: "newbi_replies_character_created_idx")
+  @@index([characterId, status, createdAt, id], map: "newbi_replies_character_status_created_idx")
   @@map("newbi_replies")
 }
 
