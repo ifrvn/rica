@@ -42,17 +42,20 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取脱敏列表。ADMIN 登记初始暂停的模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。 |
-| `GET /c/memories`、`GET /c/memory-grants` | ADMIN 读取记忆元数据和共享授权。 |
+| `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 或 AUDITOR 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
+| `GET /c/memory-grants` | ADMIN 读取共享授权和接收绑定，可按 `memoryId` 筛选。 |
+| `GET /c/identities/{identityId}/conversations` | ADMIN 按当前身份、指定账号与公开或私聊类型分页获取授权选项。私聊选项含会话绑定的联系人。 |
 | `GET /c/memories/{memoryId}/provenance`、`PUT /c/memories/{memoryId}/correction` | ADMIN 或 AUDITOR 读取来源与修订元数据。ADMIN 用修订号作为 If-Match 提交纠错。原授权和派生正文失效。 |
 | `POST /c/memory-grants`、`POST /c/memory-grants/{grantId}/revoke` | ADMIN 创建或撤销用途授权。公开引用绑定指定会话，私聊回复绑定确切的会话与联系人。 |
+| `GET /c/identities/{identityId}/contacts` | ADMIN 或 AUDITOR 分页查看该身份的联系人和联系边界摘要。 |
 | `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 或 AUDITOR 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
 | `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 或 AUDITOR 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
 | `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 修改手工目标或取消自主目标。 |
 | `GET /c/identities/{identityId}/reflections/{utcDay}` | ADMIN 或 AUDITOR 查看该身份指定 UTC 日的反思和候选引用。 |
-| `POST /c/identities/{identityId}/beliefs` | ADMIN 使用幂等键提交身份观点或偏好及其证据。 |
+| `GET /c/identities/{identityId}/beliefs`、`POST /c/identities/{identityId}/beliefs` | ADMIN 或 AUDITOR 分页查看当前观点版本的摘要。ADMIN 使用幂等键提交观点或偏好及其证据。 |
 | `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 或 AUDITOR 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
 | `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
-| `POST /c/memberships` | ADMIN 授予或撤销本地用户名的角色权限。必须保留至少一名 ADMIN。 |
+| `GET /c/memberships`、`POST /c/memberships` | ADMIN 或 AUDITOR 按用户名分页查看当前角色的成员及权限。ADMIN 授予或撤销现有本地账号权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
 | `GET /c/runs`、`POST /c/runs` | ADMIN 与 AUDITOR 按最近运行分页。ADMIN 用幂等键提交 `accountId` 和 `message`，在独立公开模拟会话中排队。角色、身份与账号须启用，账号须匹配已启用的模拟适配器。 |
@@ -66,7 +69,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 声明幂等键的 POST 请求带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无会话或会话无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
 
-分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求把响应的 `nextCursor` 作为 `cursor` 传回。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
+分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求通常把响应的 `nextCursor` 作为 `cursor` 传回。成员列表按用户名分页，使用 `after`。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
 
 ## 身份状态规则与每日精力
 

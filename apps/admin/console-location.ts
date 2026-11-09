@@ -1,4 +1,4 @@
-export type ConsolePage = 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'connector' | 'accounts'
+export type ConsolePage = 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics'
 export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; connectorAccountId?: string }
 
 export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'through'] as const
@@ -8,10 +8,10 @@ const id = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu
 export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
   const separator = hash.indexOf('?')
   const path = separator < 0 ? hash : hash.slice(0, separator)
-  const match = /^#\/characters\/([^/]+)\/(character|review|runs|outbox|audit|plugins|connector|accounts)(?:\/([^/]+))?$/u.exec(path)
+  const match = /^#\/characters\/([^/]+)\/(character|review|runs|outbox|audit|plugins|connector|accounts|members|knowledge|growth|planning|metrics)(?:\/([^/]+))?$/u.exec(path)
   if (!match) return
   const [, characterId, page, detail] = match
-  if (!id.test(characterId) || (detail && (!id.test(detail) || (['character', 'outbox', 'plugins'].includes(page))))) return
+  if (!id.test(characterId) || (detail && (!id.test(detail) || (['character', 'outbox', 'plugins', 'members', 'metrics'].includes(page))))) return
   const query = new URLSearchParams(separator < 0 ? '' : hash.slice(separator + 1))
   const filters = new URLSearchParams()
   if (page === 'runs') {

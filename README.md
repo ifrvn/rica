@@ -90,11 +90,11 @@ $ricaCharacter.id
 | 要做的事 | 入口 |
 | --- | --- |
 | 查看服务状态和审批提案 | 登录控制台，选择角色，核对身份、账号、目标与正文，再填写理由并批准或拒绝。 |
-| 配置角色、身份、账号、成员与记忆共享 | 使用管理 API。`ADMIN` 管理配置、暂停或恢复绑定、授权或撤销成员权限。 |
-| 查看运行轨迹、审计、额度与队列 | 使用管理 API 的 `/monitoring`、`/runs/{runId}/replay`、`/audit` 和 `/outbox/quarantined`。按接口要求使用 `ADMIN` 或 `AUDITOR`。 |
+| 配置角色、身份、账号、成员与记忆共享 | `ADMIN` 使用「角色与身份」「角色成员」和「记忆与授权」。 |
+| 查看运行轨迹、审计、额度与队列 | `ADMIN` 或 `AUDITOR` 使用「运行」和「审计」。模拟指标和隔离出箱从「运行」打开。 |
 | 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm run dev:simulation` 执行并生成本地回执。先配置专用数据库登录和 `RICA_SIMULATION_EXECUTION_DATABASE_URL`。 |
 
-控制台目前覆盖服务状态和人工审批。创建与配置主要走管理 API。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟调度](docs/simulation-scheduling.md) · [模拟执行与对账](docs/simulation-execution.md) · [控制台功能规划](docs/console-roadmap.md)
+控制台可配置角色、身份和平台账号，管理角色成员、记忆授权和模拟计划，并查询运行、审计与评测。本地登录账号通过 CLI 创建。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟调度](docs/simulation-scheduling.md) · [模拟执行与对账](docs/simulation-execution.md) · [控制台功能规划](docs/console-roadmap.md)
 
 | 现象 | 检查项 |
 | --- | --- |

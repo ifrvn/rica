@@ -268,6 +268,15 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
   assert.equal(adminWorkspace.status, 200)
   assert.deepEqual(adminWorkspace.body.roles, ['ADMIN'])
   assert.deepEqual(adminWorkspace.body.simulationPlatforms, ['mock-a', 'mock-b'])
+  const membersPath = characterPath(a) + '/memberships'
+  const firstMembers = await request('GET', membersPath + '?limit=1')
+  assert.equal(firstMembers.status, 200, JSON.stringify(firstMembers.body))
+  assert.deepEqual(firstMembers.body.items, [{ subject: 'admin-a', roles: ['ADMIN'] }])
+  assert.equal(firstMembers.body.nextCursor, 'admin-a')
+  assert.deepEqual((await request('GET', membersPath + '?limit=1&after=admin-a')).body.items,
+    [{ subject: 'reviewer', roles: ['REVIEWER'] }])
+  assert.equal((await request('GET', membersPath, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', membersPath, { actor: 'admin-b' })).status, 404)
   assert.equal((await request('POST', characterPath(a) + '/identities', {
     actor: 'reviewer', key: 'should-not-create', data: { slug: 'forbidden', roleProfile: {} },
   })).status, 403)
@@ -1228,15 +1237,45 @@ test('grant and account management enforce bound references and revoke access wi
   })
   assert.equal(revoke.status, 200)
   assert.equal(revoke.body.authEpoch, grant.body.authEpoch + 1)
-  const grants = await request('GET', path + '/memory-grants?limit=100')
+  const ownContact = await owner.contact.create({ data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID() } })
+  const otherContact = await owner.contact.create({ data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID() } })
+  const privateConversation = await owner.conversation.create({ data: {
+    characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID(),
+    channel: 'PRIVATE', privateContactId: ownContact.id,
+  } })
+  const options = path + '/identities/' + identityA + '/conversations?accountId=' + accountA + '&channel=PRIVATE&limit=100'
+  const choices = await request('GET', options)
+  assert.equal(choices.status, 200, JSON.stringify(choices.body))
+  assert.ok(choices.body.items.some((item: { id: string; privateContactId: string }) =>
+    item.id === privateConversation.id && item.privateContactId === ownContact.id))
+  assert.ok(choices.body.items.every((item: { channel: string }) => item.channel === 'PRIVATE'))
+  assert.equal((await request('GET', options + '&cursor=' + audience.id)).status, 422)
+  assert.equal((await request('GET', options, { actor: 'auditor' })).status, 403)
+  const wrongIdentity = path + '/identities/' + identityB + '/conversations?accountId=' + accountA
+  assert.equal((await request('GET', wrongIdentity)).status, 404)
+  const privateData = { ...data, purpose: 'PRIVATE_REPLY', audience: undefined,
+    recipientConversationId: privateConversation.id, recipientContactId: ownContact.id }
+  assert.equal((await request('POST', path + '/memory-grants', {
+    key: 'wrong-private-contact', data: { ...privateData, recipientContactId: otherContact.id },
+  })).status, 404)
+  const privateGrant = await request('POST', path + '/memory-grants', { key: 'private-grant', data: privateData })
+  assert.equal(privateGrant.status, 201, JSON.stringify(privateGrant.body))
+  const grants = await request('GET', path + '/memory-grants?memoryId=' + memory.id)
   const savedGrant = grants.body.items.find(({ id }: { id: string }) => id === grant.body.id)
   assert.ok(savedGrant)
   assert.ok(savedGrant.revokedAt)
-  const memories = await request('GET', path + '/memories?limit=100')
+  assert.equal(grants.body.items.length, 2)
+  const privateMetadata = grants.body.items.find(({ id }: { id: string }) => id === privateGrant.body.id)
+  assert.equal(privateMetadata.recipientContactId, ownContact.id)
+  assert.equal(privateMetadata.recipientConversationId, privateConversation.id)
+  const memories = await request('GET', path + '/memories?identityId=' + identityA + '&scope=IDENTITY&status=ACTIVE&limit=100',
+    { actor: 'auditor' })
   assert.equal(memories.status, 200)
   const savedMemory = memories.body.items.find(({ id }: { id: string }) => id === memory.id)
   assert.ok(savedMemory)
   assert.ok(!('content' in savedMemory))
+  assert.ok(memories.body.items.every((item: { identityId: string; scope: string; status: string }) =>
+    item.identityId === identityA && item.scope === 'IDENTITY' && item.status === 'ACTIVE'))
   await assert.rejects(management.memory.findMany({ select: { content: true } }), /permission denied/i)
   const approved = (await approveSimulation()).action
   const account = await request('POST', path + '/controls', {
@@ -1275,6 +1314,13 @@ test('memory correction revokes old citations and descendants and keeps a metada
   assert.equal(initial.status, 200)
   assert.equal(initial.headers.get('etag'), '"1"')
   assert.equal(initial.body.sources.length, 1)
+  const detail = await request('GET', path, { actor: 'auditor' })
+  assert.equal(detail.status, 200, JSON.stringify(detail.body))
+  assert.deepEqual(detail.body.provenance, initial.body)
+  assert.equal(detail.body.memory.id, memoryId)
+  assert.equal('content' in detail.body.memory, false)
+  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', characterPath(b) + '/memories/' + memoryId, { actor: 'admin-b' })).status, 404)
   assert.equal((await request('GET', characterPath(b) + '/memories/' + memoryId + '/provenance', { actor: 'admin-b' })).status, 404)
   const options = { ifMatch: '"1"', data: { content: 'Corrected claim', reason: 'Check source' } }
   assert.equal((await request('PUT', path + '/correction', { ...options, actor: 'reviewer' })).status, 403)
@@ -1337,6 +1383,12 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
     assert.equal(boundary.status, 200)
     assert.equal(boundary.body.blocked, true)
     assert.equal(boundary.body.version, 1)
+    const contactPath = characterPath(a) + '/identities/' + identityA + '/contacts?limit=100'
+    const contactList = await request('GET', contactPath, { actor: 'auditor' })
+    assert.equal(contactList.status, 200, JSON.stringify(contactList.body))
+    const contactRow = contactList.body.items.find((item: { id: string }) => item.id === contact.id)
+    assert.deepEqual(contactRow, { id: contact.id, accountId, version: 1, blocked: true, label: contact.displayLabel })
+    assert.equal((await request('GET', contactPath, { actor: 'reviewer' })).status, 403)
     assert.equal((await owner.contact.findUniqueOrThrow({ where: { id: otherContact.id } })).noContactAt, null)
     assert.equal(await owner.managementAudit.count({ where: { targetId: contact.id, operation: 'contact.opt_out' } }), 1)
 
@@ -1440,6 +1492,12 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
   assert.equal(restored.status, 200, JSON.stringify(restored.body))
   assert.equal(restored.body.version, 3)
   assert.equal((await request('GET', path)).body.restoredFrom, 1)
+  const summaries = await request('GET', collection, { actor: 'auditor' })
+  assert.equal(summaries.status, 200, JSON.stringify(summaries.body))
+  assert.deepEqual(summaries.body.items.find((item: { id: string }) => item.id === initial.body.id),
+    { id: initial.body.id, kind: 'PREFERENCE', version: 3 })
+  assert.equal((await request('GET', beliefCollection(identityB))).status, 404)
+  assert.equal((await request('GET', collection, { actor: 'reviewer' })).status, 403)
 
   assert.equal(await revokeMemoryAccess(owner, { kind: 'SOURCE', characterId: a, id: first.sourceId }), true)
   for (const url of [path, path + '?revision=1']) {

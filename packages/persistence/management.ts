@@ -533,14 +533,34 @@ export async function changeContactBoundary(tx: Tx, scope: Scope, contactId: str
   return { id: contactId, version: expected + Number(row.status === 'UPDATED') }
 }
 
+const memoryMetadata = { id: true, identityId: true, accountId: true, conversationId: true,
+  scope: true, visibility: true, status: true, expiresAt: true } satisfies Prisma.MemorySelect
+
+function memoryView({ expiresAt, ...memory }: Prisma.MemoryGetPayload<{ select: typeof memoryMetadata }>) {
+  return { ...memory, expiresAt: expiresAt?.toISOString() ?? null }
+}
+
+async function memoryProvenance(tx: Tx, characterId: string, memoryId: string) {
+  const [row] = await tx.$queryRaw<{ view: unknown }[]>`
+    SELECT public.rica_memory_provenance(${characterId}::uuid, ${memoryId}::uuid) AS view
+  `
+  if (!row?.view) unavailable()
+  return memoryProvenanceView.parse(row.view)
+}
+
+export async function readMemoryDetail(db: PrismaClient, scope: Scope, memoryId: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const memory = await tx.memory.findFirst({ where: { id: memoryId, characterId: scope.characterId }, select: memoryMetadata })
+    if (!memory) unavailable()
+    return { memory: memoryView(memory), provenance: await memoryProvenance(tx, scope.characterId, memoryId) }
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
 export async function readMemoryProvenance(db: PrismaClient, scope: Scope, memoryId: string) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
-    const [row] = await tx.$queryRaw<{ view: unknown }[]>`
-      SELECT public.rica_memory_provenance(${scope.characterId}::uuid, ${memoryId}::uuid) AS view
-    `
-    if (!row?.view) unavailable()
-    return memoryProvenanceView.parse(row.view)
+    return memoryProvenance(tx, scope.characterId, memoryId)
   }, { isolationLevel: 'RepeatableRead' })
 }
 
@@ -556,30 +576,29 @@ export async function correctMemory(tx: Tx, scope: Scope, memoryId: string, expe
   return { id: memoryId, version: expected + 1 }
 }
 
-export async function listMemories(db: PrismaClient, scope: Scope, page: Page) {
+export async function listMemories(db: PrismaClient, scope: Scope,
+  page: Page, { identityId, scope: memoryScope, status }: Input<typeof contracts.memoryListQuery>) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
-    const where = { characterId: scope.characterId }
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const where = { characterId: scope.characterId, identityId, scope: memoryScope, status }
     const args = await pageArgs(page, (id) => tx.memory.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.memory.findMany({
       ...args, where,
-      select: { id: true, identityId: true, accountId: true, conversationId: true,
-        scope: true, visibility: true, status: true, expiresAt: true },
+      select: memoryMetadata,
     })
-    return makePage(rows, page, ({ expiresAt, ...memory }) => ({
-      ...memory, expiresAt: expiresAt?.toISOString() ?? null,
-    }))
+    return makePage(rows, page, memoryView)
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function listGrants(db: PrismaClient, scope: Scope, page: Page) {
+export async function listGrants(db: PrismaClient, scope: Scope, page: Page, memoryId?: string) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN'])
-    const where = { characterId: scope.characterId }
+    const where = { characterId: scope.characterId, memoryId }
     const args = await pageArgs(page, (id) => tx.memoryGrant.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.memoryGrant.findMany({
       ...args, where,
       select: { id: true, memoryId: true, recipientIdentityId: true, recipientAccountId: true,
+        recipientConversationId: true, recipientContactId: true,
         purpose: true, audience: true, validFrom: true, validUntil: true, revokedAt: true, createdAt: true },
     })
     return makePage(rows, page, ({ createdAt: _, validFrom, validUntil, revokedAt, ...grant }) => ({
@@ -675,10 +694,11 @@ export async function listSchedules(db: PrismaClient, scope: Scope, page: Page) 
     const rows = await tx.simulationSchedule.findMany({
       ...args, where,
       select: { id: true, scheduleKey: true, zone: true, kind: true, localTime: true, dueAt: true,
-        nextAt: true, enabled: true, version: true, accountId: true, conversationId: true, contactId: true },
+        nextAt: true, enabled: true, version: true, accountId: true, conversationId: true, contactId: true,
+        commitment: { select: { id: true } } },
     })
-    return makePage(rows, page, ({ kind, localTime, dueAt, nextAt, ...row }) => ({
-      ...row,
+    return makePage(rows, page, ({ kind, localTime, dueAt, nextAt, commitment, ...row }) => ({
+      ...row, commitmentId: commitment?.id ?? null,
       rule: kind === 'DAILY' ? { kind, localTime: localTime! } : { kind, dueAt: dueAt!.toISOString() },
       nextAt: nextAt?.toISOString() ?? null,
     }))

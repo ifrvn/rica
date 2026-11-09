@@ -9,8 +9,8 @@ type Backlog = z.infer<typeof simulationBacklogView>
 type Event = z.infer<typeof quarantinedOutboxEvent>
 type Quarantine = z.infer<typeof outboxQuarantineView>
 
-const props = defineProps<{ characterId: string; mode: 'backlog' | 'outbox'; canRetry?: boolean }>()
-const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openRuns: []; openRun: [id: string] }>()
+const props = defineProps<{ characterId: string; mode: 'backlog' | 'outbox'; canRetry?: boolean; canPlan?: boolean }>()
+const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openMetrics: []; openPlanning: []; openRuns: []; openRun: [id: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId)
 const backlog = ref<Backlog>()
 const events = ref<Event[]>([])
@@ -141,6 +141,8 @@ onMounted(() => { void act(load) })
         查看隔离出箱<template v-if="backlog">（{{ backlog.outbox.quarantined }}）</template>
       </NButton>
       <NButton v-if="backlog?.reconciliation.count" size="small" @click="emit('openReconciliation')">查看待对账</NButton>
+      <NButton size="small" @click="emit('openMetrics')">查看模拟指标</NButton>
+      <NButton v-if="canPlan" size="small" @click="emit('openPlanning')">运行配置</NButton>
     </div>
   </NCard>
   <section v-else class="operations outbox" aria-label="隔离出箱">

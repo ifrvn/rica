@@ -157,6 +157,28 @@ export const listQuery = z.object({
   limit: z.string().regex(/^(?:[1-9][0-9]?|100)$/).optional(),
   cursor: resourceId.optional(),
 })
+export const memoryListQuery = listQuery.extend({
+  identityId: resourceId.optional(),
+  scope: z.enum(['CORE', 'IDENTITY', 'ACCOUNT', 'CONVERSATION']).optional(),
+  status: z.enum(['ACTIVE', 'REVOKED']).optional(),
+})
+export const grantListQuery = listQuery.extend({ memoryId: resourceId.optional() })
+export const memberListQuery = listQuery.omit({ cursor: true }).extend({ after: membershipInput.shape.subject.optional() })
+export const memberPage = z.object({
+  items: z.array(z.object({ subject: membershipInput.shape.subject, roles: z.array(membershipInput.shape.role) })),
+  nextCursor: membershipInput.shape.subject.nullable(),
+})
+export const conversationListQuery = listQuery.extend({
+  accountId: resourceId,
+  channel: z.enum(['PUBLIC', 'PRIVATE']).optional(),
+})
+export const conversationOption = z.object({
+  id: resourceId, channel: z.enum(['PUBLIC', 'PRIVATE']), privateContactId: resourceId.nullable(),
+})
+export const beliefSummary = beliefView.pick({ id: true, version: true, kind: true })
+export const contactSummary = contactBoundaryView.pick({ id: true, accountId: true, version: true, blocked: true })
+  .extend({ label: z.string().nullable() })
+
 export const auditQuery = listQuery.extend({ runId: resourceId.optional(), order: z.enum(['asc', 'desc']).optional() })
 export const idempotencyHeader = z.object({
   'idempotency-key': z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
@@ -193,9 +215,11 @@ export const memoryView = z.object({
   conversationId: z.uuid().nullable(), scope: z.string(), visibility: z.string(),
   status: z.string(), expiresAt: z.iso.datetime().nullable(),
 })
+export const memoryDetailView = z.object({ memory: memoryView, provenance: memoryProvenanceView })
 export const grantView = z.object({
   id: z.uuid(), memoryId: z.uuid(), recipientIdentityId: z.uuid(),
-  recipientAccountId: z.uuid().nullable(), purpose: z.string(), audience: z.string().nullable(),
+  recipientAccountId: z.uuid().nullable(), recipientConversationId: z.uuid().nullable(),
+  recipientContactId: z.uuid().nullable(), purpose: z.string(), audience: z.string().nullable(),
   validFrom: z.iso.datetime(), validUntil: z.iso.datetime(), revokedAt: z.iso.datetime().nullable(),
 })
 export const auditView = z.object({

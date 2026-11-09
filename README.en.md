@@ -90,11 +90,11 @@ Use the management API to create an identity and bind a platform account. Use `/
 | Task | Where to do it |
 | --- | --- |
 | Check service status and review proposals | Sign in to the console and select a character, check the identity, account, destination, and content, then enter a reason and approve or reject. |
-| Manage characters, identities, accounts, members, and memory sharing | Use the management API. An `ADMIN` can configure resources, pause or resume bindings, and grant or revoke member permissions. |
-| Inspect runs, audit records, budgets, and queue health | Use management API endpoints such as `/monitoring`, `/runs/{runId}/replay`, `/audit`, and `/outbox/quarantined`. Use the `ADMIN` or `AUDITOR` role required by the endpoint. |
+| Manage characters, identities, accounts, members, and memory sharing | An `ADMIN` can configure resources, pause or resume bindings, and grant or revoke member permissions in the console. |
+| Inspect runs, audit records, budgets, and queue health | Open Runs or Audit as an `ADMIN` or `AUDITOR`. Runs links to simulation metrics and quarantined outbox events. |
 | Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process records local receipts for `READY` proposals. Configure its dedicated database login and `RICA_SIMULATION_EXECUTION_DATABASE_URL` first. |
 
-The browser covers service status and human review. Creation and configuration primarily use the management API. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation scheduling](docs/simulation-scheduling.md) · [Simulation execution and reconciliation](docs/simulation-execution.md) (Chinese)
+The console supports character, identity, and account setup, role membership, memory grants, simulation schedules, run history, audit records, and evaluation metrics. Create local sign-in accounts with the CLI. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation scheduling](docs/simulation-scheduling.md) · [Simulation execution and reconciliation](docs/simulation-execution.md) (Chinese)
 
 | Symptom | What to check |
 | --- | --- |

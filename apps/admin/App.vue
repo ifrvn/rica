@@ -84,6 +84,8 @@ onMounted(refresh)
   </NConfigProvider>
 </template>
 
+<style src="./console-layout.css"></style>
+
 <style>
 body { margin: 0; }
 .admin-shell { min-height: 100vh; background: #f4f7f7; }

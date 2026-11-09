@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import ConnectorReview from './ConnectorReview.vue'
@@ -14,6 +14,12 @@ import type { characterWorkspaceView } from '../../packages/contracts/management
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
+const GrowthWorkspace = defineAsyncComponent(() => import('./GrowthWorkspace.vue'))
+const KnowledgeWorkspace = defineAsyncComponent(() => import('./KnowledgeWorkspace.vue'))
+const MembershipWorkspace = defineAsyncComponent(() => import('./MembershipWorkspace.vue'))
+const MetricsWorkspace = defineAsyncComponent(() => import('./MetricsWorkspace.vue'))
+const PlanningWorkspace = defineAsyncComponent(() => import('./PlanningWorkspace.vue'))
+
 type Character = { id: string; slug: string; profile: { name?: string } | null }
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Decision = 'APPROVE' | 'REJECT'
@@ -27,6 +33,7 @@ const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
 const pageTitle: Record<ConsolePage, string> = {
+  members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '运行配置', metrics: '模拟运行指标',
   character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件', accounts: '平台账号', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
@@ -167,7 +174,8 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
     }
     characterId.value = target
-    const denied = (['runs', 'outbox', 'audit', 'plugins', 'accounts'].includes(location.page) && !canReadRuns.value)
+    const denied = (['runs', 'outbox', 'audit', 'plugins', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(location.page) && !canReadRuns.value)
+      || (location.page === 'planning' && !roles.value.includes('ADMIN'))
       || (location.page === 'connector' && !canReview.value)
       || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
     tab.value = denied ? 'character'
@@ -197,6 +205,18 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
   } finally {
     if (current === revision) routing.value = false
   }
+}
+
+function refreshMembership() {
+  const target = characterId.value
+  void run(async () => {
+    await fetchCharacters()
+    if (characterId.value !== target) return
+    characterId.value = ''
+    roles.value = []
+    const next = characters.value.some(({ id }) => id === target) ? target : characters.value[0]?.id
+    await applyLocation(next ? { characterId: next, page: next === target ? 'members' : 'character' } : undefined, true)
+  })
 }
 
 function changeTab(page: ConsolePage) {
@@ -403,6 +423,12 @@ async function decide(decision: Decision) {
         <NButton :type="tab === 'runs' || tab === 'outbox' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
         <NButton :type="tab === 'audit' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('audit')">审计</NButton>
         <NButton :type="tab === 'plugins' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('plugins')">插件</NButton>
+        <NButton v-if="canReadRuns" :type="tab === 'knowledge' ? 'primary' : 'default'" :disabled="busy || routing"
+          @click="changeTab('knowledge')">记忆与授权</NButton>
+        <NButton v-if="canReadRuns" :type="tab === 'growth' ? 'primary' : 'default'" :disabled="busy || routing"
+          @click="changeTab('growth')">身份成长</NButton>
+        <NButton v-if="canReadRuns" :type="tab === 'members' ? 'primary' : 'default'" :disabled="busy || routing"
+          @click="changeTab('members')">角色成员</NButton>
       </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
@@ -427,9 +453,11 @@ async function decide(decision: Decision) {
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')"
-          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
+          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })"
+          @open-metrics="changeTab('metrics')" @open-planning="changeTab('planning')" :can-plan="roles.includes('ADMIN')" />
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
           :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
+          @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event })" />
       </template>
       <RunOperations v-else-if="tab === 'outbox' && characterId && canReadRuns" :key="characterId"
@@ -439,6 +467,19 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" @accounts="navigate({ characterId, page: 'accounts', detail: $event })" />
+      <MembershipWorkspace v-else-if="tab === 'members' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" :username="username" :can-edit="roles.includes('ADMIN')"
+        @expired="resetSession" @permissions="refreshMembership" />
+      <KnowledgeWorkspace v-else-if="tab === 'knowledge' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" :detail-id="detailId" :can-edit="roles.includes('ADMIN')"
+        @expired="resetSession" @open="navigate({ characterId, page: 'knowledge', detail: $event })" />
+      <GrowthWorkspace v-else-if="tab === 'growth' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" :detail-id="detailId" :can-edit="roles.includes('ADMIN')"
+        @expired="resetSession" @open="navigate({ characterId, page: 'growth', detail: $event })" />
+      <PlanningWorkspace v-else-if="tab === 'planning' && characterId && roles.includes('ADMIN')" :key="characterId + '/' + (detailId ?? '')"
+        :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="changeTab('planning')" />
+      <MetricsWorkspace v-else-if="tab === 'metrics' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" @expired="resetSession" />
       <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
         :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"

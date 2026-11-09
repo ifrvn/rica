@@ -18,5 +18,5 @@ export const scheduleInput = scheduleUpdate.extend({
 export const scheduleView = scheduleUpdate.extend({
   id: resourceId, scheduleKey: z.string(), accountId: resourceId,
   conversationId: resourceId, contactId: resourceId.nullable(),
-  version: z.number().int(), nextAt: z.iso.datetime().nullable(),
+  version: z.number().int(), commitmentId: resourceId.nullable(), nextAt: z.iso.datetime().nullable(),
 })

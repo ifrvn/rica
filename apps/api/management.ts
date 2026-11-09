@@ -6,6 +6,7 @@ import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } fr
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
 import { consoleSimulationInput, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
+import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
 import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
@@ -258,11 +259,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/memories`, security,
-    request: { params: characterParams, query: schema.listQuery },
+    request: { params: characterParams, query: schema.memoryListQuery },
     responses: { ...errors, 200: success(schema.pageView(schema.memoryView)) },
-  }), async (c) => c.json(await management.listMemories(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
-  ), 200))
+  }), async (c) => {
+    const query = c.req.valid('query')
+    return c.json(await management.listMemories(db, { ...c.req.valid('param'), actor: c.get('actor') },
+      management.parsePage(query), query), 200)
+  })
 
   const energyParams = characterParams.extend({ utcDay: z.iso.date() })
   app.openapi(createRoute({
@@ -299,6 +302,15 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   })
 
   const beliefs = `${character}/identities/{identityId}/beliefs` as const
+  app.openapi(createRoute({
+    method: 'get', path: beliefs, security,
+    request: { params: identityParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(schema.beliefSummary)) },
+  }), async (c) => {
+    const { characterId, identityId } = c.req.valid('param')
+    return c.json(await listIdentityBeliefs(db, { characterId, actor: c.get('actor') },
+      identityId, management.parsePage(c.req.valid('query'))), 200)
+  })
   const beliefParams = identityParams.extend({ beliefId: schema.resourceId })
   app.openapi(createRoute({
     method: 'get', path: `${beliefs}/{beliefId}`, security,
@@ -422,6 +434,26 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     return c.json({ ...result, requestId }, 200)
   })
 
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/identities/{identityId}/contacts`, security,
+    request: { params: identityParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(schema.contactSummary)) },
+  }), async (c) => {
+    const { characterId, identityId } = c.req.valid('param')
+    return c.json(await listIdentityContacts(db, { characterId, actor: c.get('actor') },
+      identityId, management.parsePage(c.req.valid('query'))), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/identities/{identityId}/conversations`, security,
+    request: { params: identityParams, query: schema.conversationListQuery },
+    responses: { ...errors, 200: success(schema.pageView(schema.conversationOption)) },
+  }), async (c) => {
+    const { characterId, identityId } = c.req.valid('param')
+    return c.json(await listConversationOptions(db, { characterId, actor: c.get('actor') },
+      identityId, c.req.valid('query')), 200)
+  })
+
   const contactParams = characterParams.extend({ contactId: schema.resourceId })
   app.openapi(createRoute({
     method: 'get', path: `${character}/contacts/{contactId}/boundary`, security,
@@ -451,6 +483,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   const memoryParams = characterParams.extend({ memoryId: schema.resourceId })
   app.openapi(createRoute({
+    method: 'get', path: `${character}/memories/{memoryId}`, security,
+    request: { params: memoryParams }, responses: { ...errors, 200: success(schema.memoryDetailView) },
+  }), async (c) => {
+    const { characterId, memoryId } = c.req.valid('param')
+    return c.json(await management.readMemoryDetail(db, { characterId, actor: c.get('actor') }, memoryId), 200)
+  })
+  app.openapi(createRoute({
     method: 'get', path: `${character}/memories/{memoryId}/provenance`, security,
     request: { params: memoryParams }, responses: { ...errors, 200: success(schema.memoryProvenanceView) },
   }), async (c) => {
@@ -478,11 +517,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/memory-grants`, security,
-    request: { params: characterParams, query: schema.listQuery },
+    request: { params: characterParams, query: schema.grantListQuery },
     responses: { ...errors, 200: success(schema.pageView(schema.grantView)) },
-  }), async (c) => c.json(await management.listGrants(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
-  ), 200))
+  }), async (c) => {
+    const query = c.req.valid('query')
+    return c.json(await management.listGrants(db, { ...c.req.valid('param'), actor: c.get('actor') },
+      management.parsePage(query), query.memoryId), 200)
+  })
 
   app.openapi(createRoute({
     method: 'post', path: `${character}/memory-grants`, security,
@@ -526,6 +567,12 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...management.parsePage(query), runId: query.runId, order: query.order,
     }), 200)
   })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/memberships`, security,
+    request: { params: characterParams, query: schema.memberListQuery },
+    responses: { ...errors, 200: success(schema.memberPage) },
+  }), async (c) => c.json(await listMembers(db, { ...c.req.valid('param'), actor: c.get('actor') }, c.req.valid('query')), 200))
 
   app.openapi(createRoute({
     method: 'post', path: `${character}/memberships`, security,
