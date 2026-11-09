@@ -8,8 +8,8 @@
 .console-record-list > li { display: grid; gap: .35rem; padding: .55rem 0; border-bottom: 1px solid #e0e8e7; }
 .console-record-list > li:last-child { border-bottom: 0; }
 .console-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 0 .75rem; }
-.console-form-grid input[type="date"], .console-form-grid input[type="datetime-local"] { box-sizing: border-box; width: 100%; min-height: 34px; font: inherit; }
-.console-workspace .n-card-header { flex-wrap: wrap; gap: .35rem; }
+.console-form-grid input[type="date"], .console-form-grid input[type="datetime-local"], .console-form-grid input[type="time"] { box-sizing: border-box; width: 100%; min-height: 34px; font: inherit; }
+.console-panel { min-width: 0; padding-block: .875rem; border-top: 1px solid #dfe7e6; }
 
 .console-split { display: grid; gap: 1.5rem; min-width: 0; }
 .console-split--detail { grid-template-columns: minmax(16rem, 2fr) minmax(0, 3fr); align-items: start; }

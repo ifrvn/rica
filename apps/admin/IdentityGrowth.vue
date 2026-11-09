@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NInputNumber, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NInputNumber, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { beliefSummary, beliefView, contactBoundaryView, contactSummary, dailyEnergyView, identityReflectionView, manualGoalView } from '../../packages/contracts/management.js'
 import { characterPath, formatTime, queryPath, useConsoleTask, utcToday, type Page } from './console-data.js'
@@ -156,7 +156,8 @@ onMounted(() => {
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
     <NSpin v-if="busy && !shownDate" />
-    <NCard title="反思与精力" size="small">
+    <section class="console-panel" aria-labelledby="growth-reflection-heading">
+      <div class="console-section-heading"><h3 id="growth-reflection-heading">反思与精力</h3></div>
       <NForm @submit.prevent="run(loadDay)">
         <div class="console-form-grid">
           <NFormItem label="日期（UTC）" :label-props="{ for: 'growth-day' }">
@@ -175,8 +176,9 @@ onMounted(() => {
             @click="openBelief(reflection.candidateBeliefId)">查看反思产生的候选观点</NButton>
         </li>
       </ul>
-    </NCard>
-    <NCard title="目标" size="small">
+    </section>
+    <section class="console-panel" aria-labelledby="growth-goals-heading">
+      <div class="console-section-heading"><h3 id="growth-goals-heading">目标</h3></div>
       <NEmpty v-if="!goals.length && !busy && !error" description="暂无目标。" />
       <ul v-if="goals.length" class="console-record-list">
         <li v-for="goal in goals" :key="goal.id">
@@ -186,8 +188,9 @@ onMounted(() => {
           <span v-if="goal.nextStep">{{ goal.nextStep }}</span>
         </li>
       </ul>
-    </NCard>
-    <NCard title="观点与偏好" size="small">
+    </section>
+    <section class="console-panel" aria-labelledby="growth-beliefs-heading">
+      <div class="console-section-heading"><h3 id="growth-beliefs-heading">观点与偏好</h3></div>
       <NEmpty v-if="!beliefs.length && !busy && !error" description="暂无观点或偏好。" />
       <ul v-if="beliefs.length" class="console-record-list">
         <li v-for="item in beliefs" :key="item.id">
@@ -199,7 +202,7 @@ onMounted(() => {
       </ul>
       <NButton v-if="beliefCursor" size="small" :disabled="busy" @click="run(() => loadBeliefs(true))">加载更多观点</NButton>
       <template v-if="belief">
-        <h3>观点详情</h3>
+        <h4>观点详情</h4>
         <p>v{{ belief.version }} · {{ beliefStatus[belief.status] }}<template v-if="belief.confidence !== null">
           · 置信度 {{ Math.round(belief.confidence * 100) }}%</template></p>
         <p>{{ belief.statement ?? '观点内容当前不可用。' }}</p>
@@ -221,8 +224,9 @@ onMounted(() => {
           </template>
         </NForm>
       </template>
-    </NCard>
-    <NCard title="联系边界" size="small">
+    </section>
+    <section class="console-panel" aria-labelledby="growth-boundaries-heading">
+      <div class="console-section-heading"><h3 id="growth-boundaries-heading">联系边界</h3></div>
       <NEmpty v-if="!contacts.length && !busy && !error" description="暂无联系人。" />
       <ul v-if="contacts.length" class="console-record-list">
         <li v-for="item in contacts" :key="item.id">
@@ -234,7 +238,7 @@ onMounted(() => {
       </ul>
       <NButton v-if="contactCursor" size="small" :disabled="busy" @click="run(() => loadContacts(true))">加载更多联系人</NButton>
       <template v-if="contact">
-        <h3>{{ contactLabel }}</h3>
+        <h4>{{ contactLabel }}</h4>
         <p>账号 {{ contact.accountId }} · v{{ contact.version }} · {{ contact.blocked ? '已禁止联系' : '未禁止联系' }}</p>
         <p v-if="contact.reason">{{ contact.reason }}</p>
         <NForm v-if="canEdit" @submit.prevent="saveBoundary">
@@ -249,6 +253,6 @@ onMounted(() => {
           </div>
         </NForm>
       </template>
-    </NCard>
+    </section>
   </section>
 </template>

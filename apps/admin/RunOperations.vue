@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '../../packages/contracts/simulation-observability.js'
 import { request, RequestError } from './request.js'
@@ -151,7 +151,8 @@ onMounted(() => { void act(load) })
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NCard v-if="selected" title="重新处理任务" size="small">
+    <section v-if="selected" class="console-panel" aria-labelledby="outbox-retry-heading">
+      <div class="console-section-heading"><h3 id="outbox-retry-heading">恢复失败任务</h3></div>
       <p>{{ eventType[selected.type] }} · 第 {{ selected.generation }} 代</p>
       <p>恢复后由 Worker 重新处理此事件。</p>
       <NForm @submit.prevent="retry">
@@ -165,8 +166,9 @@ onMounted(() => { void act(load) })
           <NButton :disabled="busy" @click="selected = undefined; reason = ''">取消</NButton>
         </div>
       </NForm>
-    </NCard>
-    <NCard title="失败任务列表" size="small">
+    </section>
+    <section class="console-panel" aria-labelledby="outbox-list-heading">
+      <div class="console-section-heading"><h3 id="outbox-list-heading">失败任务列表</h3></div>
       <NSpin v-if="busy && !events.length" />
       <NEmpty v-else-if="!events.length && !error" description="暂无失败任务。" />
       <ul v-if="events.length" class="events">
@@ -185,7 +187,7 @@ onMounted(() => { void act(load) })
         </li>
       </ul>
       <NButton v-if="cursor" size="small" :disabled="busy" @click="act(() => load(true))">加载更多</NButton>
-    </NCard>
+    </section>
   </section>
 </template>
 

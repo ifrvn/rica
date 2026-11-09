@@ -1,7 +1,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { newbiInboxView } from '../../packages/contracts/newbi-pilot.js'
 import { request, RequestError } from './request.js'
@@ -40,8 +40,11 @@ onBeforeUnmount(() => { active = false })
 </script>
 
 <template>
-  <NCard title="连接器读取状态" size="small">
-    <template #header-extra><NButton size="small" :disabled="busy" @click="load">刷新读取状态</NButton></template>
+  <section class="console-panel" aria-labelledby="connector-read-heading">
+    <div class="console-section-heading">
+      <h3 id="connector-read-heading">连接器读取状态</h3>
+      <NButton size="small" quaternary :disabled="busy" @click="load">刷新读取状态</NButton>
+    </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NSpin v-else-if="busy && !inbox" />
     <template v-if="inbox">
@@ -70,7 +73,7 @@ onBeforeUnmount(() => { active = false })
         </li>
       </ul>
     </template>
-  </NCard>
+  </section>
 </template>
 
 <style scoped>

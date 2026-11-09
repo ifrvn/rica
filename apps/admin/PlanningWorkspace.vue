@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCard, NCheckbox, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { NAlert, NButton, NCheckbox, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, conversationOption } from '../../packages/contracts/management.js'
-import type { scheduleView } from '../../packages/contracts/schedules.js'
-import type { commitmentView } from '../../packages/contracts/commitments.js'
+import { scheduleInput, scheduleUpdate, type scheduleView } from '../../packages/contracts/schedules.js'
+import { commitmentInput, commitmentUpdate, type commitmentView } from '../../packages/contracts/commitments.js'
 import type { runReplayView } from '../../packages/contracts/simulation-observability.js'
 import { characterPath, formatTime, queryPath, readAll, useConsoleTask, type Page } from './console-data.js'
 import { request } from './request.js'
+import TimeZoneSelect from './TimeZoneSelect.vue'
 
 type Schedule = z.infer<typeof scheduleView>
 type Commitment = z.infer<typeof commitmentView>
@@ -15,7 +16,7 @@ type Account = z.infer<typeof accountView>
 type Conversation = z.infer<typeof conversationOption>
 type Replay = z.infer<typeof runReplayView>
 const props = defineProps<{ characterId: string; runId?: string }>()
-const emit = defineEmits<{ expired: []; clear: [] }>()
+const emit = defineEmits<{ expired: []; clear: [feedback?: string] }>()
 const { busy, error, notice, active, run, command } = useConsoleTask(() => emit('expired'))
 const base = characterPath(props.characterId)
 const schedules = ref<Schedule[]>([])
@@ -28,6 +29,10 @@ const zone = ref('UTC')
 const editing = ref<'schedule' | 'commitment' | 'new-commitment'>()
 const schedule = ref<Schedule>()
 const commitment = ref<Commitment>()
+const editorHeading = ref<HTMLElement>()
+const plansHeading = ref<HTMLElement>()
+const commitmentsHeading = ref<HTMLElement>()
+let trigger: HTMLElement | undefined
 const form = reactive({ key: '', accountId: '', conversationId: '', zone: 'UTC', kind: 'DAILY' as Schedule['rule']['kind'],
   enabled: true, localTime: '09:00', dueAt: '', title: '', reason: '', operation: 'DEFER' as 'DEFER' | 'FULFILL' | 'CANCEL' | 'EXPIRE' })
 const stateLabels: Record<Commitment['state'], string> = {
@@ -38,13 +43,29 @@ const operations = [{ value: 'DEFER', label: '延期' }, { value: 'FULFILL', lab
   { value: 'CANCEL', label: '取消承诺' }, { value: 'EXPIRE', label: '标记已到期' }]
 const accountOptions = computed(() => accounts.value.filter(({ platform, status }) => ['mock-a', 'mock-b'].includes(platform) && status !== 'REVOKED')
   .map(({ id }) => ({ value: id, label: accountName(id) })))
-const validDate = computed(() => Number.isFinite(Date.parse(form.dueAt)))
-const valid = computed(() => {
-  if (editing.value === 'schedule') return !!(form.zone.trim() && (form.kind === 'DAILY' ? form.localTime : validDate.value)
-    && (schedule.value || (form.key.trim() && form.accountId && form.conversationId)))
-  if (editing.value === 'new-commitment') return !!(selectedRun.value?.proposal?.receiptAt && form.title.trim() && form.reason.trim() && validDate.value)
-  return !!(commitment.value && form.reason.trim() && (form.operation !== 'DEFER' || validDate.value))
+const dueAt = computed(() => {
+  const date = new Date(form.dueAt)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined
 })
+const schedulePayload = computed(() => {
+  const rule = form.kind === 'DAILY' ? { kind: form.kind, localTime: form.localTime }
+    : { kind: form.kind, dueAt: dueAt.value }
+  const data = { zone: form.zone, enabled: form.enabled, rule }
+  if (schedule.value) return scheduleUpdate.safeParse(data)
+  const conversation = conversations.value.find(({ id }) => id === form.conversationId)
+  return scheduleInput.safeParse({ ...data, scheduleKey: form.key.trim(), accountId: form.accountId,
+    conversationId: conversation?.id, contactId: conversation?.privateContactId ?? undefined })
+})
+const commitmentPayload = computed(() => editing.value === 'new-commitment'
+  ? commitmentInput.safeParse({ actionId: selectedRun.value?.proposal?.id, title: form.title,
+    dueAt: dueAt.value, reason: form.reason })
+  : commitmentUpdate.safeParse({ operation: form.operation, reason: form.reason,
+    ...(form.operation === 'DEFER' ? { dueAt: dueAt.value } : {}) }))
+const valid = computed(() => editing.value === 'schedule' ? schedulePayload.value.success
+  : !!(editing.value === 'new-commitment' ? selectedRun.value?.proposal?.receiptAt : commitment.value) && commitmentPayload.value.success)
+const planKeyError = computed(() => !!form.key && !scheduleInput.shape.scheduleKey.safeParse(form.key.trim()).success)
+const invalidZone = computed(() => !scheduleUpdate.shape.zone.safeParse(form.zone).success)
+const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
 function accountName(id: string) {
   const row = accounts.value.find((item) => item.id === id)
@@ -87,8 +108,16 @@ function selectAccount(id: string) {
   void run(() => loadConversations())
 }
 
+function openEditor(kind: NonNullable<typeof editing.value>) {
+  if (!editing.value) trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  editing.value = kind
+  error.value = ''
+  notice.value = ''
+  void nextTick(() => editorHeading.value?.focus())
+}
+
 function editSchedule(item?: Schedule) {
-  editing.value = 'schedule'
+  openEditor('schedule')
   schedule.value = item
   Object.assign(form, { key: '', accountId: '', conversationId: '', zone: item?.zone ?? zone.value,
     kind: item?.rule.kind ?? 'DAILY', enabled: item?.enabled ?? true,
@@ -96,19 +125,19 @@ function editSchedule(item?: Schedule) {
     dueAt: item?.rule.kind === 'REMINDER' ? toLocalInput(item.rule.dueAt) : '' })
   conversations.value = []
   conversationCursor.value = null
-  error.value = ''
 }
 
 function editCommitment(item: Commitment) {
-  editing.value = 'commitment'
+  openEditor('commitment')
   commitment.value = item
   Object.assign(form, { reason: '', dueAt: toLocalInput(item.dueAt), operation: 'DEFER' })
-  error.value = ''
 }
 
-function close() {
+function close(feedback?: string) {
+  const heading = editing.value === 'schedule' ? plansHeading : commitmentsHeading
   editing.value = undefined
-  if (props.runId) emit('clear')
+  if (props.runId) emit('clear', feedback)
+  else void nextTick(() => (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : heading.value)?.focus())
 }
 
 function refreshDraft() {
@@ -116,10 +145,14 @@ function refreshDraft() {
     await load()
     if (!active()) return
     if (schedule.value && editing.value === 'schedule') {
-      schedule.value = schedules.value.find(({ id }) => id === schedule.value?.id)
+      const latest = schedules.value.find(({ id }) => id === schedule.value?.id)
+      if (!latest) { error.value = '找不到此计划。'; return }
+      schedule.value = latest
     }
     if (commitment.value && editing.value === 'commitment') {
-      commitment.value = commitments.value.find(({ id }) => id === commitment.value?.id)
+      const latest = commitments.value.find(({ id }) => id === commitment.value?.id)
+      if (!latest) { error.value = '找不到此承诺。'; return }
+      commitment.value = latest
     }
     notice.value = '已更新版本，请与下方记录核对后提交。'
   })
@@ -129,27 +162,21 @@ function save() {
   if (!valid.value) return
   void run(async () => {
     if (editing.value === 'schedule') {
-      const rule = form.kind === 'DAILY' ? { kind: form.kind, localTime: form.localTime }
-        : { kind: form.kind, dueAt: new Date(form.dueAt).toISOString() }
-      const data = { zone: form.zone.trim(), enabled: form.enabled, rule }
-      if (schedule.value) await command(base + '/schedules/' + schedule.value.id, data, 'PUT', schedule.value.version)
-      else {
-        const conversation = conversations.value.find(({ id }) => id === form.conversationId)
-        if (!conversation) return
-        await command(base + '/schedules', { ...data, scheduleKey: form.key.trim(), accountId: form.accountId,
-          conversationId: conversation.id, contactId: conversation.privateContactId ?? undefined })
-      }
-    } else if (editing.value === 'new-commitment' && selectedRun.value?.proposal) {
-      await command(base + '/commitments', { actionId: selectedRun.value.proposal.id, title: form.title.trim(),
-        dueAt: new Date(form.dueAt).toISOString(), reason: form.reason.trim() })
-    } else if (commitment.value) {
-      await command(base + '/commitments/' + commitment.value.id, { operation: form.operation, reason: form.reason.trim(),
-        ...(form.operation === 'DEFER' ? { dueAt: new Date(form.dueAt).toISOString() } : {}) }, 'PUT', commitment.value.version)
-    } else return
+      const result = schedulePayload.value
+      if (!result.success) return
+      if (schedule.value) await command(base + '/schedules/' + schedule.value.id, result.data, 'PUT', schedule.value.version)
+      else await command(base + '/schedules', result.data)
+    } else {
+      const result = commitmentPayload.value
+      if (!result.success) return
+      if (editing.value === 'new-commitment') await command(base + '/commitments', result.data)
+      else if (commitment.value) await command(base + '/commitments/' + commitment.value.id, result.data, 'PUT', commitment.value.version)
+      else return
+    }
     if (!active()) return
-    close()
-    notice.value = '运行配置已保存。'
-    await load()
+    notice.value = editing.value === 'schedule' ? '计划已保存。' : '承诺已保存。'
+    close(notice.value)
+    if (!props.runId) await load()
   })
 }
 
@@ -161,23 +188,28 @@ onMounted(() => {
     if (!active()) return
     if (replay.state === 'SIMULATED' && replay.proposal?.receiptAt) {
       selectedRun.value = replay
-      editing.value = 'new-commitment'
+      openEditor('new-commitment')
     } else error.value = '只有已确认模拟回执的运行可以登记承诺。'
   })
 })
 </script>
 
 <template>
-  <section class="console-workspace console-stack" aria-label="运行配置">
+  <section class="console-workspace console-stack" aria-label="计划与承诺">
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NCard v-if="editing" :title="editing === 'schedule' ? (schedule ? '编辑模拟计划' : '新增模拟计划')
-      : editing === 'new-commitment' ? '登记模拟承诺' : '处理模拟承诺'" size="small">
+    <section v-if="editing" class="console-panel" aria-labelledby="plan-editor-heading">
+      <div class="console-section-heading">
+        <h3 id="plan-editor-heading" ref="editorHeading" tabindex="-1">{{ editing === 'schedule'
+          ? (schedule ? '编辑模拟计划' : '新增模拟计划') : editing === 'new-commitment' ? '登记模拟承诺' : '处理模拟承诺' }}</h3>
+      </div>
       <NForm @submit.prevent="save">
         <div v-if="editing === 'schedule'" class="console-form-grid">
           <template v-if="!schedule">
-            <NFormItem label="计划标识" :label-props="{ for: 'plan-key' }">
-              <NInput v-model:value="form.key" maxlength="63" :disabled="busy" :input-props="{ id: 'plan-key' }" />
+            <NFormItem label="计划标识" :label-props="{ for: 'plan-key' }" :validation-status="planKeyError ? 'error' : undefined">
+              <NInput v-model:value="form.key" maxlength="63" :disabled="busy"
+                :input-props="{ id: 'plan-key', 'aria-invalid': planKeyError || undefined, 'aria-describedby': planKeyError ? 'plan-key-error' : undefined }" />
+              <template v-if="planKeyError" #feedback><span id="plan-key-error">用小写字母或数字开头，可加短横线。</span></template>
             </NFormItem>
             <NFormItem label="模拟账号" :label-props="{ for: 'plan-account' }">
               <NSelect filterable :value="form.accountId" :options="accountOptions" :disabled="busy"
@@ -185,7 +217,9 @@ onMounted(() => {
             </NFormItem>
             <NFormItem label="会话" :label-props="{ for: 'plan-conversation' }">
               <NSelect filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
-                :options="conversations.map(({ id, channel }) => ({ value: id, label: (channel === 'PRIVATE' ? '私聊 · ' : '公开 · ') + id }))"
+                :options="conversations.map(({ id, channel, contactLabel }) => ({
+                  value: id, label: (contactLabel || (channel === 'PRIVATE' ? '私聊' : '公开会话')) + ' · ' + id.slice(0, 8),
+                }))"
                 :input-props="{ id: 'plan-conversation' }" />
             </NFormItem>
             <NButton v-if="conversationCursor" size="small" :disabled="busy" @click="run(() => loadConversations(true))">加载更多会话</NButton>
@@ -193,13 +227,14 @@ onMounted(() => {
           <NFormItem label="计划类型" :label-props="{ for: 'plan-kind' }">
             <NSelect filterable v-model:value="form.kind" :options="kinds" :disabled="busy" :input-props="{ id: 'plan-kind' }" />
           </NFormItem>
-          <NFormItem label="时区" :label-props="{ for: 'plan-zone' }">
-            <NInput v-model:value="form.zone" :disabled="busy" :input-props="{ id: 'plan-zone' }" />
+          <NFormItem label="时区" :label-props="{ for: 'plan-zone' }" :validation-status="invalidZone ? 'error' : undefined">
+            <TimeZoneSelect v-model:value="form.zone" id="plan-zone" :disabled="busy" :invalid="invalidZone" />
+            <template v-if="invalidZone" #feedback><span id="plan-zone-error">请选择可用的时区。</span></template>
           </NFormItem>
           <NFormItem v-if="form.kind === 'DAILY'" label="每天触发时间（计划时区）" :label-props="{ for: 'plan-time' }">
             <input id="plan-time" v-model="form.localTime" type="time" :disabled="busy" />
           </NFormItem>
-          <NFormItem v-else label="提醒时间（浏览器本地）" :label-props="{ for: 'plan-due' }">
+          <NFormItem v-else :label="`提醒时间（${browserZone}）`" :label-props="{ for: 'plan-due' }">
             <input id="plan-due" v-model="form.dueAt" type="datetime-local" :disabled="busy" />
           </NFormItem>
           <NCheckbox v-model:checked="form.enabled" :disabled="busy">启用计划</NCheckbox>
@@ -216,7 +251,7 @@ onMounted(() => {
               <NSelect filterable v-model:value="form.operation" :options="operations" :disabled="busy" :input-props="{ id: 'commit-operation' }" />
             </NFormItem>
             <NFormItem v-if="editing === 'new-commitment' || form.operation === 'DEFER'"
-              label="截止时间（本地）" :label-props="{ for: 'commit-due' }">
+              :label="`截止时间（${browserZone}）`" :label-props="{ for: 'commit-due' }">
               <input id="commit-due" v-model="form.dueAt" type="datetime-local" :disabled="busy" />
             </NFormItem>
             <NFormItem label="理由" :label-props="{ for: 'commit-reason' }">
@@ -225,39 +260,43 @@ onMounted(() => {
           </div>
         </template>
         <div class="console-actions">
-          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!valid">保存配置</NButton>
+          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !valid">{{ editing === 'schedule' ? '保存计划' : '保存承诺' }}</NButton>
           <NButton v-if="editing === 'commitment' || (editing === 'schedule' && schedule)" size="small" :disabled="busy"
             @click="refreshDraft">重新读取版本</NButton>
-          <NButton :disabled="busy" @click="close">取消</NButton>
+          <NButton :disabled="busy" @click="close()">取消</NButton>
         </div>
       </NForm>
-    </NCard>
-    <NCard title="模拟计划" size="small">
-      <template #header-extra><NButton size="small" :disabled="busy || !accountOptions.length" @click="editSchedule()">新增计划</NButton></template>
+    </section>
+    <section class="console-panel" aria-labelledby="plans-heading">
+      <div class="console-section-heading">
+        <h3 id="plans-heading" ref="plansHeading" tabindex="-1">模拟计划</h3>
+        <NButton size="small" :disabled="busy || !!editing || !accountOptions.length" @click="editSchedule()">新增计划</NButton>
+      </div>
       <NSpin v-if="busy && !schedules.length && !editing" />
       <NEmpty v-else-if="!schedules.length && !error" description="暂无模拟计划。" />
       <ul v-if="schedules.length" class="console-record-list">
         <li v-for="item in schedules" :key="item.id">
           <div class="console-actions"><strong>{{ item.scheduleKey }}</strong><NTag size="small">{{ item.enabled ? '已启用' : '已暂停' }}</NTag>
             <NTag v-if="item.commitmentId" size="small">承诺提醒</NTag>
-            <NButton v-else size="small" :disabled="busy" @click="editSchedule(item)">编辑计划</NButton></div>
+            <NButton v-else size="small" :disabled="busy || !!editing" @click="editSchedule(item)">编辑计划</NButton></div>
           <span>{{ accountName(item.accountId) }} · {{ item.zone }} · v{{ item.version }}</span>
           <span>{{ item.rule.kind === 'DAILY' ? '每天 ' + item.rule.localTime : '单次 ' + formatTime(item.rule.dueAt) }}
             <template v-if="item.nextAt"> · 下次 {{ formatTime(item.nextAt) }}</template></span>
         </li>
       </ul>
-    </NCard>
-    <NCard title="模拟承诺" size="small">
+    </section>
+    <section class="console-panel" aria-labelledby="commitments-heading">
+      <div class="console-section-heading"><h3 id="commitments-heading" ref="commitmentsHeading" tabindex="-1">模拟承诺</h3></div>
       <NEmpty v-if="!commitments.length && !busy && !error" description="暂无模拟承诺。" />
       <ul v-if="commitments.length" class="console-record-list">
         <li v-for="item in commitments" :key="item.id">
           <div class="console-actions"><strong>{{ item.title }}</strong><NTag size="small">{{ stateLabels[item.state] }}</NTag>
-            <NButton v-if="item.state === 'OPEN' || item.state === 'DEFERRED'" size="small" :disabled="busy"
+            <NButton v-if="item.state === 'OPEN' || item.state === 'DEFERRED'" size="small" :disabled="busy || !!editing"
               @click="editCommitment(item)">处理承诺</NButton></div>
           <span>{{ accountName(item.accountId) }} · 截止 {{ formatTime(item.dueAt) }} · v{{ item.version }}</span>
           <span v-if="item.contactId">联系人 {{ item.contactId }}</span>
         </li>
       </ul>
-    </NCard>
+    </section>
   </section>
 </template>

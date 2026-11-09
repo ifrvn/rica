@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NCard, NEmpty, NFormItem, NSelect, NSpin } from 'naive-ui'
+import { NAlert, NEmpty, NFormItem, NSelect, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { identityView } from '../../packages/contracts/management.js'
 import { characterPath, readAll, useConsoleTask } from './console-data.js'
@@ -23,9 +23,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="console-workspace console-stack" aria-label="身份成长">
-    <NCard title="身份成长" size="small">
-      <NFormItem label="当前身份" :label-props="{ for: 'growth-identity' }">
+  <section class="console-workspace console-stack" aria-label="身份成长记录">
+    <div class="growth-identity-picker">
+      <NFormItem label="身份" :label-props="{ for: 'growth-identity' }">
         <NSelect filterable :value="selected?.id ?? null" :disabled="busy"
           :options="identities.map(({ id, profile, slug }) => ({ value: id, label: profile?.displayName || slug }))"
           :input-props="{ id: 'growth-identity' }" @update:value="emit('open', $event)" />
@@ -34,8 +34,12 @@ onMounted(() => {
       <NSpin v-else-if="busy" />
       <NEmpty v-else-if="!identities.length" description="暂无身份。" />
       <NAlert v-else-if="detailId && !selected" type="warning">找不到当前角色中的身份。</NAlert>
-    </NCard>
+    </div>
     <IdentityGrowth v-if="selected" :key="selected.id" :identity-id="selected.id" :character-id="characterId" :can-edit="canEdit"
       @expired="emit('expired')" />
   </section>
 </template>
+
+<style scoped>
+.growth-identity-picker { max-width: 24rem; }
+</style>

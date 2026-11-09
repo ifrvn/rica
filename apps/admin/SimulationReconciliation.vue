@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { NAlert, NButton, NCard, NForm, NFormItem, NInput } from 'naive-ui'
+import { NAlert, NButton, NForm, NFormItem, NInput } from 'naive-ui'
 import type { ReconciliationView } from '../../packages/contracts/action-review.js'
 import { request, RequestError } from './request.js'
 
@@ -77,7 +77,8 @@ function resolve() {
 </script>
 
 <template>
-  <NCard title="模拟对账" size="small">
+  <section class="console-panel" aria-labelledby="reconciliation-heading">
+      <div class="console-section-heading"><h3 id="reconciliation-heading">模拟对账</h3></div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NButton v-if="!canResolve" :loading="busy" :disabled="busy" @click="readEvidence">
       {{ stale || evidence ? '重新核对账本' : '核对账本' }}
@@ -98,7 +99,7 @@ function resolve() {
         <NButton :disabled="busy" @click="readEvidence">重新核对账本</NButton>
       </div>
     </NForm>
-  </NCard>
+  </section>
 </template>
 
 <style scoped>

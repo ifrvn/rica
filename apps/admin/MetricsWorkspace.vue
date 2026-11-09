@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCard, NForm, NFormItem, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NForm, NFormItem, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { characterPath, queryPath, useConsoleTask } from './console-data.js'
@@ -45,7 +45,7 @@ onMounted(load)
 </script>
 
 <template>
-  <NCard title="模拟运行指标" size="small" class="console-workspace">
+  <section class="console-workspace console-stack" aria-label="指标查询">
     <NForm @submit.prevent="load">
       <div class="console-form-grid">
         <NFormItem label="起始日期（UTC）" :label-props="{ for: 'metrics-from' }">
@@ -61,7 +61,7 @@ onMounted(load)
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NSpin v-if="busy && !metrics" />
     <template v-if="metrics">
-      <p>{{ applied.from }} 至 {{ applied.through }}（UTC）</p>
+      <div>{{ applied.from }} 至 {{ applied.through }}（UTC）</div>
       <div class="console-actions">
         <NTag>预算预留 {{ totals.reserved }}</NTag><NTag>模型调用 {{ totals.calls }}</NTag>
         <NTag :type="totals.denials ? 'warning' : 'default'">预算拒绝 {{ totals.denials }}</NTag>
@@ -85,7 +85,7 @@ onMounted(load)
         </div>
       </details>
     </template>
-  </NCard>
+  </section>
 </template>
 
 <style scoped>

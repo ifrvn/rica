@@ -239,6 +239,11 @@ function refreshMembership() {
   })
 }
 
+function closePlanning(feedback?: string) {
+  changeTab('planning')
+  if (feedback) notice.value = feedback
+}
+
 function changeTab(page: ConsolePage) {
   if (characterId.value) navigate({ characterId: characterId.value, page })
 }
@@ -511,7 +516,7 @@ async function decide(decision: Decision) {
         :character-id="characterId" :detail-id="detailId" :can-edit="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'growth', detail: $event })" />
       <PlanningWorkspace v-else-if="tab === 'planning' && characterId && roles.includes('ADMIN')" :key="characterId + '/' + (detailId ?? '')"
-        :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="changeTab('planning')" />
+        :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="closePlanning" />
       <MetricsWorkspace v-else-if="tab === 'metrics' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" />
       <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
