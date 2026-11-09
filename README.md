@@ -83,7 +83,9 @@ $ricaCharacter = Invoke-RestMethod -Method Post -Uri "$ricaApi/characters" -WebS
 $ricaCharacter.id
 ```
 
-在管理 API 中依次创建身份、绑定平台账号，再通过 `/controls` 按角色、身份、账号的顺序启用。新角色和新身份初始为暂停。用 `/memberships` 将目标角色的 `REVIEWER` 权限授予审批人的本地用户名。`ADMIN` 与 `REVIEWER` 分别授权。带幂等键的请求在重试同一操作时应复用原键和请求体。[管理 API 接口与权限](docs/management-api.md#已开放的入口)
+登录控制台后，在「角色与身份 → 平台账号池」添加账号。体验模拟流程时可选 `mock-a`，实例标识填 `sandbox`，账号标识填 `demo-account`。账号池按角色独立，可以先添加账号再创建身份。到对应身份点「关联账号」，从池里选择一条未关联的账号。关联后的账号初始为暂停，依次恢复角色、身份和账号即可在「运行」发起模拟。
+
+通过管理 API 操作时，可用账号池接口登记和关联，再通过 `/controls` 启用。新角色和新身份初始为暂停。用 `/memberships` 将目标角色的 `REVIEWER` 权限授予审批人的本地用户名。`ADMIN` 与 `REVIEWER` 分别授权。带幂等键的请求在重试同一操作时应复用原键和请求体。[管理 API 接口与权限](docs/management-api.md#已开放的入口)
 
 ## 4. 日常使用和管理
 

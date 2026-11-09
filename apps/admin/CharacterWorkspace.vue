@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
+import type { accountRegistrationView, accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
 import TimeZoneSelect from './TimeZoneSelect.vue'
 import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
 import { request, RequestError } from './request.js'
@@ -10,8 +10,9 @@ import { request, RequestError } from './request.js'
 type Workspace = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>
+type Registration = z.infer<typeof accountRegistrationView>
 type Page<T> = { items: T[]; nextCursor: string | null }
-type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'connector-account' | 'control'
+type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'connector-account' | 'associate' | 'control'
 type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; connector?: boolean; revoke?: boolean }
 
 const props = defineProps<{ characterId: string; canCreate: boolean; accountsOnly?: boolean; accountDetail?: string }>()
@@ -19,6 +20,7 @@ const emit = defineEmits<{ created: [character: Workspace]; expired: []; roles: 
 const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
+const accountPool = ref<Registration[]>([])
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
@@ -27,7 +29,7 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
-  identityId: '', platform: '', instance: '', remoteId: '', reason: '' })
+  registrationId: '', platform: '', instance: '', remoteId: '', reason: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
 const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
@@ -36,7 +38,7 @@ const isCharacter = computed(() => editor.value === 'character' || editor.value 
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
   character: '创建角色', core: '编辑核心', identity: '创建身份', 'identity-edit': '编辑身份',
-  account: '登记模拟账号', 'connector-account': '登记本机连接器账号',
+  account: '添加模拟账号', 'connector-account': '添加连接器账号', associate: '关联平台账号',
   control: target.value?.revoke ? '撤销账号'
     : (target.value?.status === 'ACTIVE' ? '暂停' : '恢复')
       + ({ CHARACTER: '角色', IDENTITY: '身份', ACCOUNT: '账号' }[target.value?.scope ?? 'ACCOUNT']),
@@ -63,8 +65,8 @@ const attempted = ref(false)
 const touched = ref(new Set<string>())
 const parsed = computed(() => {
   if (!schemas.value) return
-  const { accountInput, characterInput, controlInput, coreInput, identityInput, identityUpdate } = schemas.value.management
-  const { newbiAccountInput } = schemas.value.connector
+  const { accountBindingInput, characterInput, controlInput, coreInput, identityInput, identityUpdate, simulationAccountRegistration } = schemas.value.management
+  const { connectorAccountRegistration } = schemas.value.connector
   const reason = form.reason.trim()
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
@@ -74,11 +76,14 @@ const parsed = computed(() => {
     case 'core': return coreInput.safeParse({ coreProfile, reason })
     case 'identity': return identityInput.safeParse({ slug: form.slug.trim(), roleProfile })
     case 'identity-edit': return identityUpdate.safeParse({ roleProfile, reason })
-    case 'account': return accountInput.safeParse({
-      identityId: form.identityId, platform: form.platform, instanceKey: form.instance.trim(), remoteAccountId: form.remoteId.trim(),
+    case 'account': return simulationAccountRegistration.safeParse({
+      platform: form.platform, instanceKey: form.instance.trim(), remoteAccountId: form.remoteId.trim(),
     })
-    case 'connector-account': return newbiAccountInput.safeParse({
-      identityId: form.identityId, endpoint: form.instance.trim(), agentId: form.remoteId.trim(),
+    case 'connector-account': return connectorAccountRegistration.safeParse({
+      endpoint: form.instance.trim(), agentId: form.remoteId.trim(),
+    })
+    case 'associate': return accountBindingInput.safeParse({
+      registrationId: form.registrationId, identityId: editingIdentity.value?.id,
     })
     case 'control': {
       const item = target.value
@@ -93,14 +98,14 @@ const validationMessages: Record<string, string> = {
   timezone: '请选择可用的时区。',
   disclosure: '请输入 1–240 个字符的 AI 身份说明。',
   style: '请选择写作风格。',
-  identity: '请选择身份。',
+  registrationId: '请选择要关联的平台账号。',
   platform: '请选择模拟平台。',
   instance: '请检查实例名称或本机接口地址。',
   remote: '请检查账号标识或 Agent ID。',
   reason: '请输入 1–240 个字符的操作理由。',
 }
 const fieldByPath: Record<string, string> = {
-  displayName: 'name', aiDisclosure: 'disclosure', writingStyle: 'style', identityId: 'identity',
+  displayName: 'name', aiDisclosure: 'disclosure', writingStyle: 'style',
   instanceKey: 'instance', endpoint: 'instance', remoteAccountId: 'remote', agentId: 'remote',
 }
 const invalidFields = computed(() => new Set(parsed.value?.error?.issues.map(({ path }) => {
@@ -126,6 +131,10 @@ let pending: { signature: string; key: string } | undefined
 let active = true
 onBeforeUnmount(() => { active = false })
 
+function accountLabel(account: Registration) {
+  return [account.platform === 'newbi' ? '本机连接器' : account.platform, account.instanceKey, account.remoteAccountId].join(' · ')
+}
+
 function status(value: string) {
   const labels: Record<string, string> = {
     ACTIVE: '运行中', PAUSED: '已暂停', PENDING: '待启用', REVOKED: '已撤销', REAUTH_REQUIRED: '需要重新授权',
@@ -147,13 +156,15 @@ async function all<T>(path: string) {
 async function load() {
   if (!props.characterId) return
   const current = await request<Workspace>(base.value)
-  const [nextIdentities, nextAccounts] = await Promise.all([
+  const [nextIdentities, nextAccounts, pool] = await Promise.all([
     all<Identity>(base.value + '/identities'), all<Account>(base.value + '/accounts'),
+    current.roles.some((role) => role === 'ADMIN' || role === 'AUDITOR') ? all<Registration>(base.value + '/account-pool') : [],
   ])
   if (!active) return
   workspace.value = current
   identities.value = nextIdentities
   accounts.value = nextAccounts
+  accountPool.value = pool
   emit('roles', current.roles)
 }
 
@@ -198,7 +209,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
   Object.assign(form, { slug: '', name: core?.name ?? identity?.profile?.displayName ?? '',
     timezone: kind === 'character' ? Intl.DateTimeFormat().resolvedOptions().timeZone : identity?.profile?.timezone ?? '',
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
-    identityId: identities.value[0]?.id ?? '', platform: workspace.value?.simulationPlatforms[0] ?? '',
+    registrationId: '', platform: workspace.value?.simulationPlatforms[0] ?? '',
     instance: kind === 'connector-account' ? '' : 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
   void loadSchemas().catch(() => {})
@@ -244,11 +255,10 @@ async function save() {
       await command(base.value + '/identities', input.data)
     } else if (kind === 'identity-edit' && identity?.version != null) {
       await command(base.value + '/identities/' + identity.id, input.data, identity.version)
-    } else if (kind === 'account') {
-      await command(base.value + '/accounts', input.data)
-    } else if (kind === 'connector-account') {
-      const result = await command(base.value + '/newbi/accounts', input.data)
-      if (active) emit('account', result.id)
+    } else if (kind === 'account' || kind === 'connector-account') {
+      await command(base.value + '/account-pool', input.data)
+    } else if (kind === 'associate') {
+      await command(base.value + '/account-pool/associations', input.data)
     } else if (kind === 'control') {
       await command(base.value + '/controls', input.data)
     } else return
@@ -256,7 +266,7 @@ async function save() {
     const label = title.value
     pending = undefined
     closeEditor()
-    notice.value = label + '成功。'
+    notice.value = kind === 'associate' ? '账号已关联，当前为暂停状态。' : label + '成功。'
     if (kind !== 'character') await load()
   })
 }
@@ -310,13 +320,6 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <template v-if="editor === 'account' || editor === 'connector-account'">
-          <NFormItem label="身份" :label-props="{ for: 'workspace-identity' }" :validation-status="fieldError('identity') ? 'error' : undefined">
-            <NSelect filterable v-model:value="form.identityId" :input-props="fieldInput('identity')" @blur="touched.add('identity')"
-              :options="identities.map(item => ({ label: item.profile?.displayName || item.slug, value: item.id }))" />
-            <template v-if="fieldError('identity')" #feedback>
-              <span id="workspace-identity-error">{{ fieldError('identity') }}</span>
-            </template>
-          </NFormItem>
           <NFormItem v-if="editor === 'account'" label="模拟平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
             <NSelect filterable v-model:value="form.platform" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
               :options="workspace?.simulationPlatforms.map(value => ({ label: value, value }))" />
@@ -334,6 +337,18 @@ onMounted(() => { if (props.characterId) void run(load) })
             <NInput v-model:value="form.remoteId" :input-props="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
             <template v-if="fieldError('remote')" #feedback>
               <span id="workspace-remote-error">{{ fieldError('remote') }}</span>
+            </template>
+          </NFormItem>
+        </template>
+        <template v-if="editor === 'associate'">
+          <p>关联到 {{ editingIdentity?.profile?.displayName || editingIdentity?.slug }}</p>
+          <NFormItem label="平台账号" :label-props="{ for: 'workspace-registrationId' }"
+            :validation-status="fieldError('registrationId') ? 'error' : undefined">
+            <NSelect v-model:value="form.registrationId" filterable placeholder="从账号池选择未关联账号"
+              :input-props="fieldInput('registrationId')" @blur="touched.add('registrationId')"
+              :options="accountPool.map(item => ({ label: accountLabel(item), value: item.id }))" />
+            <template v-if="fieldError('registrationId')" #feedback>
+              <span id="workspace-registrationId-error">{{ fieldError('registrationId') }}</span>
             </template>
           </NFormItem>
         </template>
@@ -383,6 +398,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           <li v-for="identity in identities" :key="identity.id" class="workspace-row">
             <span>{{ identity.profile?.displayName || identity.slug }} <NTag size="small">{{ status(identity.status) }}</NTag></span>
             <div v-if="admin" class="workspace-actions">
+              <NButton size="small" :disabled="busy || !accountPool.length" @click="open('associate', identity)">关联账号</NButton>
               <NButton size="small" :disabled="busy || !identity.version" @click="open('identity-edit', identity)">编辑</NButton>
               <NButton size="small" :disabled="busy" @click="open('control', undefined,
                 { scope: 'IDENTITY', id: identity.id, name: identity.profile?.displayName || identity.slug, status: identity.status })">
@@ -394,17 +410,23 @@ onMounted(() => { if (props.characterId) void run(load) })
       </section>
       <section class="workspace-section" aria-labelledby="platform-accounts-heading">
         <div class="console-section-heading">
-          <h3 id="platform-accounts-heading" :ref="(node) => { if (accountsOnly) workspaceHeading = node as HTMLElement | undefined }" tabindex="-1">平台账号</h3>
+          <h3 id="platform-accounts-heading" :ref="(node) => { if (accountsOnly) workspaceHeading = node as HTMLElement | undefined }" tabindex="-1">平台账号池</h3>
           <div v-if="admin || accountsOnly" class="workspace-actions">
-            <NButton v-if="admin && !accountsOnly" size="small" :disabled="busy || !identities.length || !workspace.simulationPlatforms.length"
-              @click="open('account')">登记模拟账号</NButton>
-            <NButton v-if="admin" size="small" :disabled="busy || !identities.length" @click="open('connector-account')">登记连接器账号</NButton>
+            <NButton v-if="admin" size="small" :disabled="busy || !workspace.simulationPlatforms.length"
+              @click="open('account')">添加模拟账号</NButton>
+            <NButton v-if="admin" size="small" :disabled="busy" @click="open('connector-account')">添加连接器账号</NButton>
             <NButton v-if="accountsOnly" text :disabled="busy" @click="run(load)">刷新账号</NButton>
           </div>
         </div>
         <NAlert v-if="!accountsOnly && admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
-        <NEmpty v-if="!accounts.length" description="暂无平台账号。" />
-        <ul v-else class="workspace-list">
+        <ul v-if="accountPool.length" class="workspace-list">
+          <li v-for="item in accountPool" :key="item.id" class="workspace-row">
+            <span>{{ accountLabel(item) }}</span>
+            <NTag size="small" :bordered="false">未关联</NTag>
+          </li>
+        </ul>
+        <NEmpty v-if="!accounts.length && !accountPool.length" description="暂无平台账号。" />
+        <ul v-if="accounts.length" class="workspace-list">
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
             <span>{{ account.platform }} · {{ account.instanceKey }} ·
               {{ identities.find(item => item.id === account.identityId)?.profile?.displayName

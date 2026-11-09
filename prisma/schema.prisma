@@ -87,6 +87,7 @@ model Character {
   memorySources         SourceRecord[]
   managementMemberships ManagementMembership[]
   managementAudit       ManagementAudit[]
+  platformAccountPool   PlatformAccountRegistration[]
 
   dailyEnergyProjections DailyEnergyProjection[]
   modelDailyUsage ModelDailyUsage[]
@@ -229,6 +230,21 @@ model IdentityVersion {
 
   @@id([characterId, identityId, version])
   @@map("identity_versions")
+}
+
+model PlatformAccountRegistration {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId     String    @map("character_id") @db.Uuid
+  platform        String
+  instanceKey     String    @map("instance_key")
+  remoteAccountId String    @map("remote_account_id")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  boundAt         DateTime? @map("bound_at") @db.Timestamptz
+  character       Character @relation(fields: [characterId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([platform, instanceKey, remoteAccountId], map: "account_registration_platform_key")
+  @@index([characterId, boundAt, createdAt, id], map: "account_registration_character_idx")
+  @@map("platform_account_registrations")
 }
 
 model PlatformAccount {

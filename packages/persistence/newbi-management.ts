@@ -4,7 +4,7 @@ import { newbiExecutorIdentity, newbiExecutorKey } from '../contracts/newbi-exec
 import { coreProfile } from '../contracts/management.js'
 import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
-import { authorize, denyPermission, makePage, ManagementError, pageArgs, type Page, type Scope } from './management.js'
+import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from './management.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -12,14 +12,8 @@ function missing(): never { throw new ManagementError(404, 'NOT_FOUND', 'Newbi p
 function conflict(): never { throw new ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is no longer eligible') }
 
 export async function bindNewbiAccount(tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof newbiAccountInput>) {
-  const { characterId } = scope
-  if (!await tx.identity.findFirst({ where: { characterId, id: input.identityId }, select: { id: true } })) missing()
-  const account = await tx.platformAccount.create({
-    data: { characterId, identityId: input.identityId, platform: 'newbi', instanceKey: input.endpoint,
-      remoteAccountId: input.agentId, status: 'PAUSED' },
-    select: { id: true, status: true, bindingVersion: true },
-  })
-  return { id: account.id, status: account.status, version: account.bindingVersion }
+  const { id } = await registerAccount(tx, scope, { platform: 'newbi', instanceKey: input.endpoint, remoteAccountId: input.agentId })
+  return associateAccount(tx, scope, { registrationId: id, identityId: input.identityId })
 }
 
 async function boundAccount(tx: Prisma.TransactionClient, characterId: string, id: string) {

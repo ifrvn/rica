@@ -14,7 +14,8 @@ export const newbiEndpoint = z.string().max(160).transform((value, ctx) => {
   ctx.addIssue({ code: 'custom', message: 'Expected a loopback Newbi Agent API endpoint' })
   return z.NEVER
 })
-export const newbiAccountInput = z.strictObject({ identityId: resourceId, agentId: resourceId, endpoint: newbiEndpoint })
+export const connectorAccountRegistration = z.strictObject({ agentId: resourceId, endpoint: newbiEndpoint })
+export const newbiAccountInput = connectorAccountRegistration.extend({ identityId: resourceId })
 export const newbiReplyInput = z.strictObject({
   accountId: resourceId, postId: resourceId,
   content: z.string().trim().min(1).refine((value) => [...value].length <= 4000 && !value.includes('\0')),

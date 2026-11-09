@@ -3176,3 +3176,40 @@ test('console simulation runs use an isolated conversation, one approval and one
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }
 })
+
+test('a role can register an account before its identities and associate it only once', async () => {
+  const created = await request('POST', '/characters', { key: 'pool-character', data: characterData('-pool') })
+  assert.equal(created.status, 201)
+  characterIds.push(created.body.id)
+  const path = characterPath(created.body.id)
+  const pool = path + '/account-pool'
+  const data = { platform: 'mock-a', instanceKey: 'integration', remoteAccountId: prefix + '-pool' }
+  assert.deepEqual((await request('GET', path + '/identities')).body.items, [])
+  const registered = await request('POST', pool, { key: 'register-first', data })
+  assert.equal(registered.status, 201, JSON.stringify(registered.body))
+  const registrationId = registered.body.id
+  assert.equal((await request('POST', pool, { key: 'register-first', data })).body.id, registrationId)
+  assert.deepEqual((await request('GET', pool)).body.items, [{ id: registrationId, ...data }])
+  assert.deepEqual((await request('GET', path + '/accounts')).body.items, [])
+  assert.equal((await request('GET', pool, { actor: 'admin-b' })).status, 404)
+  assert.equal((await request('POST', characterPath(b) + '/account-pool', {
+    actor: 'admin-b', key: 'duplicate-platform-account', data,
+  })).status, 409)
+  assert.equal((await request('POST', characterPath(b) + '/account-pool/associations', {
+    actor: 'admin-b', key: 'foreign-registration', data: { registrationId, identityId: identityB },
+  })).status, 404)
+  assert.equal((await request('POST', pool + '/associations', {
+    key: 'foreign-identity', data: { registrationId, identityId: identityB },
+  })).status, 404)
+  const identity = await request('POST', path + '/identities', { key: 'pool-identity', data: { slug: 'pool-identity', roleProfile: {} } })
+  assert.equal(identity.status, 201, JSON.stringify(identity.body))
+  const identityId = identity.body.id
+  const attempts = await Promise.all(['associate-first', 'associate-second'].map((key) => request('POST', pool + '/associations', {
+    key, data: { registrationId, identityId },
+  })))
+  assert.deepEqual(attempts.map(({ status }) => status).sort(), [201, 409])
+  assert.deepEqual((await request('GET', pool)).body.items, [])
+  const { items } = (await request('GET', path + '/accounts')).body
+  assert.deepEqual(items.map(({ id, identityId, status }: { id: string; identityId: string; status: string }) =>
+    ({ id, identityId, status })), [{ id: registrationId, identityId, status: 'PAUSED' }])
+})

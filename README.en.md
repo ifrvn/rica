@@ -83,7 +83,9 @@ $ricaCharacter = Invoke-RestMethod -Method Post -Uri "$ricaApi/characters" -WebS
 $ricaCharacter.id
 ```
 
-Use the management API to create an identity and bind a platform account. Use `/controls` to enable the character, identity, and account in that order. New characters and identities start paused. Use `/memberships` to grant the character's `REVIEWER` role to the reviewer's local username. Rica grants `ADMIN` and `REVIEWER` independently. When retrying the same idempotent request, reuse its key and body. [Management API endpoints and permissions (Chinese)](docs/management-api.md#已开放的入口)
+In the console, open **Character and identities → Platform account pool** and add an account. To try a simulation, select `mock-a`, enter `sandbox` for the instance and `demo-account` for the account identifier. Each character has its own pool. You can add an account before creating any identities. On the identity you want to use, choose **Associate account** and select an available account. Resume the character, the identity, and the newly associated account in that order before starting a simulation from **Runs**.
+
+The management API also offers separate pool registration and association endpoints. Use `/controls` to enable the resources. New characters and identities start paused. Use `/memberships` to grant the character's `REVIEWER` role to the reviewer's local username. Rica grants `ADMIN` and `REVIEWER` independently. When retrying the same idempotent request, reuse its key and body. [Management API endpoints and permissions (Chinese)](docs/management-api.md#已开放的入口)
 
 ## 4. Daily use and management
 

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
-import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
+import { accountRegistrationView, contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
@@ -182,14 +182,48 @@ export async function updateIdentity(
   return { id, version, authEpoch: await advanceEpoch(tx, characterId) }
 }
 
-export async function createAccount(tx: Tx, scope: Scope, input: Input<typeof contracts.accountInput>) {
+type AccountRegistration = Pick<Prisma.PlatformAccountRegistrationUncheckedCreateInput, 'platform' | 'instanceKey' | 'remoteAccountId'>
+
+export async function registerAccount(tx: Tx, scope: Scope, input: AccountRegistration) {
+  if (await tx.platformAccount.findUnique({ where: { platform_instanceKey_remoteAccountId: input }, select: { id: true } })) {
+    throw new ManagementError(409, 'ACCOUNT_REGISTERED', 'Platform account already registered')
+  }
+  return tx.platformAccountRegistration.create({ data: { ...input, characterId: scope.characterId }, select: { id: true } })
+}
+
+export async function associateAccount(tx: Tx, scope: Scope, input: Input<typeof contracts.accountBindingInput>) {
   const { characterId } = scope
-  if (!await tx.identity.findFirst({ where: { characterId, id: input.identityId }, select: { id: true } })) unavailable()
+  const registration = await tx.platformAccountRegistration.findFirst({ where: { id: input.registrationId, characterId } })
+  if (!registration || !await tx.identity.findFirst({ where: { characterId, id: input.identityId }, select: { id: true } })) unavailable()
+  const claimed = await tx.platformAccountRegistration.updateMany({
+    where: { id: registration.id, characterId, boundAt: null }, data: { boundAt: new Date() },
+  })
+  if (!claimed.count) throw new ManagementError(409, 'ACCOUNT_ALREADY_BOUND', 'Platform account already associated')
+  const { id, platform, instanceKey, remoteAccountId } = registration
   const account = await tx.platformAccount.create({
-    data: { ...input, characterId, status: 'PAUSED' },
+    data: { id, characterId, identityId: input.identityId, platform, instanceKey, remoteAccountId, status: 'PAUSED' },
     select: { id: true, status: true, bindingVersion: true },
   })
   return { id: account.id, status: account.status, version: account.bindingVersion }
+}
+
+export async function createAccount(tx: Tx, scope: Scope, { identityId, ...input }: Input<typeof contracts.accountInput>) {
+  const { id } = await registerAccount(tx, scope, input)
+  return associateAccount(tx, scope, { registrationId: id, identityId })
+}
+
+export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const where = { characterId: scope.characterId, boundAt: null }
+    const args = await pageArgs(page, (id) => tx.platformAccountRegistration.findFirst({
+      where: { id, characterId: scope.characterId }, select: { id: true },
+    }))
+    const rows = await tx.platformAccountRegistration.findMany({
+      ...args, where, select: { id: true, platform: true, instanceKey: true, remoteAccountId: true },
+    })
+    return makePage(rows, page, (row) => accountRegistrationView.parse(row))
+  }, { isolationLevel: 'RepeatableRead' })
 }
 
 export type VerifyConnector = (endpoint: string, agentId: string) => Promise<boolean>

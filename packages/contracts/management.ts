@@ -57,11 +57,16 @@ export const characterInput = z.strictObject({
 export const coreInput = reasonInput.extend({ coreProfile })
 export const identityInput = z.strictObject({ slug, roleProfile: identityProfile })
 export const identityUpdate = reasonInput.extend({ roleProfile: identityProfile })
-export const accountInput = z.strictObject({
-  identityId: resourceId,
+export const simulationAccountRegistration = z.strictObject({
   platform: z.enum(['mock-a', 'mock-b']),
   instanceKey: shortText,
   remoteAccountId: text,
+})
+export const accountInput = simulationAccountRegistration.extend({ identityId: resourceId })
+export const accountBindingInput = z.strictObject({ registrationId: resourceId, identityId: resourceId })
+export const accountRegistrationView = z.strictObject({
+  id: resourceId, platform: z.enum(['mock-a', 'mock-b', 'newbi']),
+  instanceKey: z.string(), remoteAccountId: z.string(),
 })
 export const automationEligibilityView = z.object({
   accountId: resourceId, identityId: resourceId, bindingVersion: z.number().int(),

@@ -9,7 +9,7 @@ import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, read
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import { newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import { connectorAccountRegistration, newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
@@ -216,6 +216,47 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => c.json(await management.listAccounts(
     db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
   ), 200))
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/account-pool`, security,
+    request: { params: characterParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(schema.accountRegistrationView)) },
+  }), async (c) => c.json(await management.listAccountPool(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
+  ), 200))
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/account-pool`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader,
+      body: body(z.union([schema.simulationAccountRegistration, connectorAccountRegistration])) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const account = 'platform' in input ? input
+      : { platform: 'newbi', instanceKey: input.endpoint, remoteAccountId: input.agentId }
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'account.register', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.registerAccount(tx, scope, account))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/account-pool/associations`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(schema.accountBindingInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'account.associate', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.associateAccount(tx, scope, input))
+    return c.json({ ...result, requestId }, 201)
+  })
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/accounts/{accountId}/automation-eligibility`, security,

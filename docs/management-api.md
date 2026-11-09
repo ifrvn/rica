@@ -39,7 +39,10 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本。 |
 | `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
 | `GET /c/plugins` | ADMIN 或 AUDITOR 查看发布清单、API、Worker、模拟执行器与单次连接器的脱敏状态。缺少有效报告时返回空状态。 |
-| `GET /c/accounts`、`POST /c/accounts` | 成员读取脱敏列表。ADMIN 登记初始暂停的模拟账号。 |
+| `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |
+| `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。本机连接器提交 `endpoint` 和 `agentId`。 |
+| `POST /c/account-pool/associations` | ADMIN 提交 `registrationId` 和 `identityId`。两者须属于当前角色，关联后初始为暂停。 |
+| `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。 |
 | `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 或 AUDITOR 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
