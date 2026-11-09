@@ -29,7 +29,7 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
-  registrationId: '', platform: '', instance: '', remoteId: '', reason: '' })
+  registrationId: '', platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
 const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
@@ -70,7 +70,7 @@ const parsed = computed(() => {
   const reason = form.reason.trim()
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
-    timezone: form.timezone || undefined, writingStyle: form.style }
+    timezone: form.timezone || undefined, writingStyle: form.style, writingPrompt: form.writingPrompt.trim() || undefined }
   switch (editor.value) {
     case 'character': return characterInput.safeParse({ slug: form.slug.trim(), timezone: form.timezone, coreProfile })
     case 'core': return coreInput.safeParse({ coreProfile, reason })
@@ -98,6 +98,7 @@ const validationMessages: Record<string, string> = {
   timezone: '请选择可用的时区。',
   disclosure: '请输入 1–240 个字符的 AI 身份说明。',
   style: '请选择写作风格。',
+  writingPrompt: '提示词最多 4000 个字符，可分行填写。',
   registrationId: '请选择要关联的平台账号。',
   platform: '请选择模拟平台。',
   instance: '请检查实例名称或本机接口地址。',
@@ -209,6 +210,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
   Object.assign(form, { slug: '', name: core?.name ?? identity?.profile?.displayName ?? '',
     timezone: kind === 'character' ? Intl.DateTimeFormat().resolvedOptions().timeZone : identity?.profile?.timezone ?? '',
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
+    writingPrompt: identity?.profile?.writingPrompt ?? '',
     registrationId: '', platform: workspace.value?.simulationPlatforms[0] ?? '',
     instance: kind === 'connector-account' ? '' : 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
@@ -317,6 +319,17 @@ onMounted(() => { if (props.characterId) void run(load) })
           <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
           <template v-if="fieldError('style')" #feedback>
             <span id="workspace-style-error">{{ fieldError('style') }}</span>
+          </template>
+        </NFormItem>
+        <NFormItem v-if="isIdentity" label="身份提示词（可选）" :label-props="{ for: 'workspace-writingPrompt' }"
+          :validation-status="fieldError('writingPrompt') ? 'error' : undefined">
+          <NInput v-model:value="form.writingPrompt" type="textarea" :rows="4"
+            :maxlength="schemas?.management.maxIdentityWritingPromptLength" :input-props="fieldInput('writingPrompt')"
+            placeholder="例如：你负责回答产品使用问题。先给操作步骤，遇到不确定的信息就请对方补充背景。"
+            @blur="touched.add('writingPrompt')" />
+          <template #feedback>
+            <span v-if="fieldError('writingPrompt')" id="workspace-writingPrompt-error">{{ fieldError('writingPrompt') }}</span>
+            <span v-else>模拟模型仍按模板生成回复。</span>
           </template>
         </NFormItem>
         <template v-if="editor === 'account' || editor === 'connector-account'">

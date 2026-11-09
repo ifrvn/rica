@@ -2920,13 +2920,19 @@ test('three identities on two platforms reach separate approved simulation recei
     const occurredAt = new Date()
     const runs = []
     const memoryCount = await owner.memory.count({ where: { characterId: a } })
+    const prompts = new Map([
+      ['formal', '先说明结论，再列步骤。'],
+      ['casual', '用轻松的语气回复。\n请对方补充背景。'],
+    ])
     for (const [style, platform, expected] of [
       ['formal', 'mock-a', '感谢您的来信，我会认真考虑。'],
       ['casual', 'mock-b', '收到啦，我会看看。'],
       ['concise', 'mock-a', '收到。'],
     ] as const) {
       const identity = await request('POST', characterPath(a) + '/identities', {
-        key: 'e2e-' + style, data: { slug: 'e2e-' + style, roleProfile: { writingStyle: style } },
+        key: 'e2e-' + style, data: {
+          slug: 'e2e-' + style, roleProfile: { writingStyle: style, writingPrompt: prompts.get(style) },
+        },
       })
       assert.equal(identity.status, 201)
       const account = await request('POST', characterPath(a) + '/accounts', {
@@ -2959,8 +2965,36 @@ test('three identities on two platforms reach separate approved simulation recei
       runs.push({ id: result.runId, accountId, identityId, expected, conversationId: conversation.id })
     }
 
+    const identitiesPath = characterPath(a) + '/identities?limit=100'
+    const adminProfiles = await request('GET', identitiesPath)
+    assert.equal(adminProfiles.status, 200)
+    for (const [style, prompt] of prompts) {
+      assert.equal(adminProfiles.body.items.find(({ slug }: { slug: string }) => slug === 'e2e-' + style).profile.writingPrompt, prompt)
+    }
+    for (const actor of ['auditor', 'reviewer']) {
+      const view = await request('GET', identitiesPath, { actor })
+      assert.equal(view.status, 200)
+      assert.ok(view.body.items.some(({ slug }: { slug: string }) => slug === 'e2e-formal'))
+      assert.ok(!view.body.items.some(({ profile }: { profile?: { writingPrompt?: string } }) => profile?.writingPrompt !== undefined))
+    }
+
     const ids = runs.map(({ id }) => id)
-    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl, simulatedModelPlugin, simulationPlatforms.resolveAdapter)
+    const observedPrompts = new Map<string, string | undefined>()
+    const provider = simulatedModelPlugin.implementation
+    const recordingModel = {
+      ...simulatedModelPlugin,
+      implementation: {
+        async decide(input: Parameters<typeof provider.decide>[0], signal: AbortSignal) {
+          assert.ok(!JSON.stringify(input).includes('writingPrompt'))
+          return provider.decide(input, signal)
+        },
+        async write(input: Parameters<typeof provider.write>[0], signal: AbortSignal) {
+          if (input.text === 'same topic across simulation platforms') observedPrompts.set(input.style, input.identityPrompt)
+          return provider.write(input, signal)
+        },
+      },
+    }
+    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl, recordingModel, simulationPlatforms.resolveAdapter)
     try {
       const deadline = Date.now() + 15_000
       while (Date.now() < deadline) {
@@ -2968,6 +3002,7 @@ test('three identities on two platforms reach separate approved simulation recei
         await sleep(50)
       }
       assert.equal(await owner.actionProposal.count({ where: { runId: { in: ids } } }), runs.length)
+      assert.deepEqual(observedPrompts, new Map([...prompts, ['concise', undefined]]))
     } finally {
       await worker.close()
     }

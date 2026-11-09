@@ -87,6 +87,8 @@ In the console, open **Character and identities → Platform account pool** and 
 
 The management API also offers separate pool registration and association endpoints. Use `/controls` to enable the resources. New characters and identities start paused. Use `/memberships` to grant the character's `REVIEWER` role to the reviewer's local username. Rica grants `ADMIN` and `REVIEWER` independently. When retrying the same idempotent request, reuse its key and body. [Management API endpoints and permissions (Chinese)](docs/management-api.md#已开放的入口)
 
+To set an identity's writing prompt, open that identity in **Character and identities** and fill in **Identity prompt**. The writing model receives the prompt from the identity version used for the run. The built-in simulation model uses template replies.
+
 ## 4. Daily use and management
 
 | Task | Where to do it |

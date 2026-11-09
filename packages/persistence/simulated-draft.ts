@@ -93,11 +93,11 @@ async function buildSimulatedDraft(
   const writing = await db.$transaction(async (tx) => {
     const evidence = await readEvidence(tx, runId, writingRequest)
     if (!evidence) return null
-    const [profile] = await tx.$queryRaw<{ style: WritingStyle | null }[]>`
-      SELECT public.rica_simulated_writing_style(${runId}::uuid) AS style
+    const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null }[]>`
+      SELECT style, prompt FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
-    if (!profile?.style) return null
-    const input = { text, evidence, style: profile.style, time }
+    if (!profile) return null
+    const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
     return await reserveModelBudget(tx, runId, input, outputUnits) ? input : null
   })

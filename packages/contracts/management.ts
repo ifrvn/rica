@@ -34,6 +34,8 @@ export const dailyEnergyView = z.object({
   approvedAt: z.iso.datetime({ offset: true }),
 })
 
+export const maxIdentityWritingPromptLength = 4000
+
 export const identityProfile = z.strictObject({
   displayName: shortText.optional(),
   timezone: timezone.optional(),
@@ -48,6 +50,8 @@ export const identityProfile = z.strictObject({
     budget: z.number().int().min(1).max(100),
   }).optional(),
   writingStyle: z.enum(['neutral', 'formal', 'casual', 'concise']).optional(),
+  writingPrompt: z.string().trim().min(1).max(maxIdentityWritingPromptLength)
+    .refine((value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)).optional(),
 })
 export const characterInput = z.strictObject({
   slug,

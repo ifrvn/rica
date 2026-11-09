@@ -36,7 +36,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | --- | --- |
 | `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。角色详情附当前主体的权限，ADMIN 还可读取已启用的模拟适配器选项。 |
 | `POST /v1/characters`、`PUT /c/core` | 指定主体创建初始暂停角色。ADMIN 提交新核心版本。 |
-| `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本。 |
+| `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本。可选字段 `roleProfile.writingPrompt` 最多 4000 个字符，仅 ADMIN 可读。提交新版本时省略该字段即可清除。 |
 | `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
 | `GET /c/plugins` | ADMIN 或 AUDITOR 查看发布清单、API、Worker、模拟执行器与单次连接器的脱敏状态。缺少有效报告时返回空状态。 |
 | `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |

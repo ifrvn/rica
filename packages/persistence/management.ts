@@ -396,13 +396,14 @@ export async function getCharacter(db: PrismaClient, scope: Scope) {
   })
 }
 
-const publicIdentityProfile = identityProfile.omit({ stateRule: true, autonomousGoal: true, duplicateReview: true }).strip()
+const auditedIdentityProfile = identityProfile.omit({ writingPrompt: true }).strip()
+const publicIdentityProfile = auditedIdentityProfile.omit({ stateRule: true, autonomousGoal: true, duplicateReview: true })
 
 export async function listIdentities(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
     const members = await authorize(tx, scope)
-    const profile = members.some(({ role }) => role === 'ADMIN' || role === 'AUDITOR')
-      ? identityProfile.strip() : publicIdentityProfile
+    const profile = members.some(({ role }) => role === 'ADMIN') ? identityProfile.strip()
+      : members.some(({ role }) => role === 'AUDITOR') ? auditedIdentityProfile : publicIdentityProfile
     const where = { characterId: scope.characterId }
     const args = await pageArgs(page, (id) => tx.identity.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.identity.findMany({
