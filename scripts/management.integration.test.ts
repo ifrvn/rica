@@ -783,6 +783,13 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [lost.id, waiting.id] } } }), 0)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: recorded.id } }), 1)
 
+    const replayPath = characterPath(a) + '/runs/' + lost.runId + '/replay'
+    const unknown = await request('GET', replayPath)
+    assert.equal(unknown.status, 200, JSON.stringify(unknown.body))
+    assert.equal(unknown.body.proposal.attemptStatus, 'UNKNOWN')
+    assert.ok(unknown.body.proposal.permittedAt)
+    assert.equal(unknown.body.proposal.receiptAt, null)
+
     const path = actionPath(lost.id) + '/reconciliation'
     assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
     assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
@@ -815,6 +822,12 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     assert.equal(attempt.status, 'NOT_SENT')
     assert.equal(attempt.resolutionEvidence, decision.evidenceRef)
     assert.equal(attempt.resolutionReason, decision.reason)
+    const closed = await request('GET', replayPath)
+    assert.equal(closed.status, 200, JSON.stringify(closed.body))
+    assert.equal(closed.body.proposal.attemptStatus, 'NOT_SENT')
+    assert.equal(closed.body.proposal.permittedAt, unknown.body.proposal.permittedAt)
+    assert.equal(closed.body.proposal.receiptAt, null)
+    assert.equal(JSON.stringify(closed.body).includes(decision.reason), false)
     await assert.rejects(executor.simulationAttempt.findMany({ select: { resolutionReason: true } }), /permission denied/i)
 
     await runSimulationBatch(executor, null, simulationPlatforms.resolveAdapter)
@@ -2956,6 +2969,16 @@ test('console simulation runs use an isolated conversation, one approval and one
   assert.equal('message' in listing.body.items[0], false)
   assert.equal((await request('GET', path + '?limit=1&cursor=' + id)).body.items.some((item: { id: string }) => item.id === id), false)
 
+  const replayPath = path + '/' + id + '/replay'
+  const initial = await request('GET', replayPath)
+  assert.equal(initial.status, 200, JSON.stringify(initial.body))
+  assert.equal(initial.body.inbound.kind, run.inboundEvent.kind)
+  assert.equal(Date.parse(initial.body.inbound.receivedAt), run.inboundEvent.receivedAt.getTime())
+  assert.deepEqual(Object.keys(initial.body.inbound).sort(), ['kind', 'receivedAt'])
+  assert.equal(initial.body.draft, null)
+  assert.equal(initial.body.proposal, null)
+  assert.equal(JSON.stringify(initial.body).includes(input.message), false)
+
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executor = simulationDatabase()
   try {
@@ -2974,10 +2997,21 @@ test('console simulation runs use an isolated conversation, one approval and one
       data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Console fixture checked' },
     })
     assert.equal(decision.status, 200, JSON.stringify(decision.body))
+    const approved = await request('GET', replayPath)
+    assert.equal(approved.status, 200, JSON.stringify(approved.body))
+    assert.deepEqual(Object.keys(approved.body.draft).sort(), ['createdAt', 'modelId', 'modelVersion'])
+    assert.equal(Date.parse(approved.body.proposal.createdAt), action.createdAt.getTime())
+    assert.equal(approved.body.proposal.reviewDecision, 'APPROVE')
+    assert.ok(approved.body.proposal.reviewedAt)
+    assert.equal(approved.body.proposal.permittedAt, null)
+    assert.equal(approved.body.proposal.receiptAt, null)
+    assert.equal(JSON.stringify(approved.body).includes(preview.body.content), false)
+
     await executeSimulation(executor, action.id, simulationPlatforms.resolveAdapter)
-    const replay = await request('GET', path + '/' + id + '/replay')
+    const replay = await request('GET', replayPath)
     assert.equal(replay.status, 200)
     assert.equal(replay.body.state, 'SIMULATED')
+    assert.ok(replay.body.proposal.permittedAt)
     assert.ok(replay.body.proposal.receiptAt)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 1)
     const second = await request('POST', path, { key: randomUUID(), data })

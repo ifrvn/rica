@@ -25,8 +25,26 @@ const accounts = ref<Account[]>([])
 const character = ref<Character>()
 const cursor = ref<string | null>(null)
 const selected = ref<Replay>()
-const selectedPlatform = computed(() => selected.value?.proposal?.adapterId
-  ?? accounts.value.find(({ id }) => id === selected.value?.accountId)?.platform ?? '—')
+const selectedAccount = computed(() => accounts.value.find(({ id }) => id === selected.value?.accountId))
+const timeline = computed(() => {
+  if (!selected.value) return []
+  const { state, inbound, draft, proposal } = selected.value
+  const inboundKind = { POST: '发帖', REPLY: '回复', MENTION: '提及' }
+  const model = [draft?.modelId, draft?.modelVersion].filter(Boolean).join(' · ')
+  const review = proposal?.reviewDecision === 'APPROVE' ? '已批准'
+    : proposal?.reviewDecision === 'REJECT' ? '已拒绝'
+      : state === 'WAITING_APPROVAL' ? '待审批' : '无决定'
+  const result = proposal?.receiptAt ? '已写入'
+    : proposal?.attemptStatus === 'UNKNOWN' || state === 'RECONCILING' ? '待核对'
+      : proposal?.attemptStatus === 'NOT_SENT' ? '已确认未写入' : '无回执'
+  return [
+    { label: '入站', status: inboundKind[inbound.kind], at: inbound.receivedAt },
+    { label: '草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt, detail: model },
+    { label: '审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt },
+    { label: '执行许可', status: proposal?.permittedAt ? '已发放' : '未发放', at: proposal?.permittedAt },
+    { label: '模拟回执', status: result, at: proposal?.receiptAt },
+  ]
+})
 const detailError = ref('')
 const resolutionNotice = ref('')
 let detailRevision = 0
@@ -257,13 +275,20 @@ onMounted(() => { void act(load) })
       </div>
       <dl>
         <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
-        <div><dt>平台</dt><dd>{{ selectedPlatform }}</dd></div>
+        <div><dt>平台账号</dt><dd>{{ selectedAccount
+          ? selectedAccount.platform + ' · ' + selectedAccount.instanceKey : selected.accountId }}</dd></div>
         <div><dt>运行 ID</dt><dd>{{ selected.id }}</dd></div>
-        <div><dt>审批</dt><dd>{{ selected.proposal?.reviewDecision === 'APPROVE' ? '已批准'
-          : selected.proposal?.reviewDecision === 'REJECT' ? '已拒绝' : '暂无决定' }}</dd></div>
-        <div><dt>模拟回执</dt><dd>{{ selected.proposal?.receiptAt
-          ? new Date(selected.proposal.receiptAt).toLocaleString() : '暂无回执' }}</dd></div>
       </dl>
+      <ol class="run-timeline" aria-label="运行轨迹">
+        <li v-for="stage in timeline" :key="stage.label">
+          <strong>{{ stage.label }}</strong>
+          <div class="run-actions">
+            <NTag size="small">{{ stage.status }}</NTag>
+            <span v-if="stage.detail">{{ stage.detail }}</span>
+            <time v-if="stage.at" :datetime="stage.at">{{ new Date(stage.at).toLocaleString() }}</time>
+          </div>
+        </li>
+      </ol>
     </NCard>
     <SimulationReconciliation v-if="canStart && selected?.state === 'RECONCILING' && selected.proposal"
       :key="selected.proposal.id" :character-id="characterId" :action-id="selected.proposal.id"
@@ -319,6 +344,8 @@ onMounted(() => { void act(load) })
 .run-filters .run-actions { align-self: center; margin-bottom: .75rem; }
 .run-list { list-style: none; margin: 0 0 .5rem; padding: 0; }
 .run-list li + li { border-top: 1px solid #e0e8e7; }
+.run-timeline { list-style: none; margin: 0; padding: 0; }
+.run-timeline li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); align-items: baseline; gap: .5rem; padding: .5rem 0; border-top: 1px solid #e0e8e7; }
 dl { display: grid; gap: .5rem; }
 dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }
