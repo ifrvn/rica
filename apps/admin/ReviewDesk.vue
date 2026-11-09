@@ -5,6 +5,7 @@ import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import CharacterWorkspace from './CharacterWorkspace.vue'
 import SimulationWorkspace from './SimulationWorkspace.vue'
+import RunOperations from './RunOperations.vue'
 import { request, RequestError } from './request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterWorkspaceView } from '../../packages/contracts/management.js'
@@ -170,7 +171,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
     }
     characterId.value = target
-    const denied = (location.page === 'runs' && !canReadRuns.value)
+    const denied = ((location.page === 'runs' || location.page === 'outbox') && !canReadRuns.value)
       || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
     tab.value = denied ? 'character' : location.page
     detailId.value = denied ? undefined : location.detail
@@ -413,7 +414,7 @@ async function decideNewbi(decision: Decision) {
 
     <template v-else>
       <div class="workspace-header">
-        <h2 id="review-heading">{{ tab === 'character' ? '角色与身份' : tab === 'runs' ? '运行' : '人工审批' }}</h2>
+        <h2 id="review-heading">{{ tab === 'character' ? '角色与身份' : tab === 'runs' ? '运行' : tab === 'outbox' ? '隔离出箱' : '人工审批' }}</h2>
         <div class="account-actions">
           <NTag size="small" :bordered="false" class="account-name">{{ username }}</NTag>
           <NPopover v-if="passkeysAvailable" trigger="click" placement="bottom-end" :width="248">
@@ -439,7 +440,7 @@ async function decideNewbi(decision: Decision) {
       <nav class="account-actions" aria-label="控制台导航">
         <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
         <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab('review')">审批</NButton>
-        <NButton :type="tab === 'runs' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
+        <NButton :type="tab === 'runs' || tab === 'outbox' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
       </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
@@ -452,8 +453,15 @@ async function decideNewbi(decision: Decision) {
       <NSpin v-if="routing && !characterId" />
       <CharacterWorkspace v-else-if="tab === 'character'" :key="characterId" :character-id="characterId"
         :can-create="canCreate" @created="characterCreated" @expired="resetSession" @roles="roles = $event" />
-      <SimulationWorkspace v-else-if="tab === 'runs' && characterId && canReadRuns" :key="characterId"
-        :character-id="characterId" :can-start="roles.includes('ADMIN')" :detail-id="detailId" @expired="resetSession" @open="openRun" />
+      <template v-else-if="tab === 'runs' && characterId && canReadRuns">
+        <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
+          @expired="resetSession" @open-outbox="changeTab('outbox')" />
+        <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
+          :detail-id="detailId" @expired="resetSession" @open="openRun" />
+      </template>
+      <RunOperations v-else-if="tab === 'outbox' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" mode="outbox" :can-retry="roles.includes('ADMIN')"
+        @expired="resetSession" @open-runs="changeTab('runs')" @open-run="openRun" />
       <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">

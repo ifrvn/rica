@@ -120,6 +120,8 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 ## 出箱隔离与恢复
 
+在控制台打开「运行 → 查看隔离出箱」。管理员可打开关联运行并填写理由恢复隔离事件，审计员可查看。若代次发生变化，先重新核对事件再提交。
+
 每个出箱代次最多尝试四次，含首次和三次重试。Worker 在开始处理前以 PostgreSQL 记录一次尝试并取得 30 秒租约。进程崩溃后，过期租约不会返还尝试次数。耗尽后隔离事件，保留原运行和事件。监控中的 `outbox.quarantined` 单独计数，`outbox.count` 包含所有未完成事件。
 
 `GET /c/outbox/quarantined` 每页最多 25 条，用响应中的 `nextCursor` 作为下次请求的 `after`。返回事件 ID、运行 ID、类型、当前代次、尝试数和隔离时间。查明失败原因后，ADMIN 调用 `POST /c/outbox/{eventId}/retry`，提交 `reason` 并在 If-Match 传入当前代次，例如 `"0"`。成功会增加代次、重置尝试预算并交给正常 Worker 流程，同时追加审计。并发恢复只允许一次，旧代次返回 412。
