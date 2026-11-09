@@ -6,6 +6,7 @@ import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
 import CharacterWorkspace from './CharacterWorkspace.vue'
 import SimulationWorkspace from './SimulationWorkspace.vue'
 import RunOperations from './RunOperations.vue'
+import AuditWorkspace from './AuditWorkspace.vue'
 import { request, RequestError } from './request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterWorkspaceView } from '../../packages/contracts/management.js'
@@ -24,6 +25,9 @@ const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && wi
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
+const pageTitle: Record<ConsolePage, string> = {
+  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计',
+}
 const detailId = ref<string>()
 const routing = ref(false)
 let revision = 0
@@ -171,7 +175,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
     }
     characterId.value = target
-    const denied = ((location.page === 'runs' || location.page === 'outbox') && !canReadRuns.value)
+    const denied = (['runs', 'outbox', 'audit'].includes(location.page) && !canReadRuns.value)
       || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
     tab.value = denied ? 'character' : location.page
     detailId.value = denied ? undefined : location.detail
@@ -326,6 +330,10 @@ function openRun(id: string) {
   navigate({ characterId: characterId.value, page: 'runs', detail: id })
 }
 
+function openRunAudit(id: string) {
+  navigate({ characterId: characterId.value, page: 'audit', detail: id })
+}
+
 async function decide(decision: Decision) {
   const proposal = selected.value
   const note = reason.value.trim()
@@ -414,7 +422,7 @@ async function decideNewbi(decision: Decision) {
 
     <template v-else>
       <div class="workspace-header">
-        <h2 id="review-heading">{{ tab === 'character' ? '角色与身份' : tab === 'runs' ? '运行' : tab === 'outbox' ? '隔离出箱' : '人工审批' }}</h2>
+        <h2 id="review-heading">{{ pageTitle[tab] }}</h2>
         <div class="account-actions">
           <NTag size="small" :bordered="false" class="account-name">{{ username }}</NTag>
           <NPopover v-if="passkeysAvailable" trigger="click" placement="bottom-end" :width="248">
@@ -441,6 +449,7 @@ async function decideNewbi(decision: Decision) {
         <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
         <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab('review')">审批</NButton>
         <NButton :type="tab === 'runs' || tab === 'outbox' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
+        <NButton :type="tab === 'audit' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('audit')">审计</NButton>
       </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
@@ -457,11 +466,13 @@ async function decideNewbi(decision: Decision) {
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')" />
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
-          :detail-id="detailId" @expired="resetSession" @open="openRun" />
+          :detail-id="detailId" @expired="resetSession" @open="openRun" @audit="openRunAudit" />
       </template>
       <RunOperations v-else-if="tab === 'outbox' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" mode="outbox" :can-retry="roles.includes('ADMIN')"
         @expired="resetSession" @open-runs="changeTab('runs')" @open-run="openRun" />
+      <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '')"
+        :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">

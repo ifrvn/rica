@@ -1968,6 +1968,10 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
     const retried = await Promise.all(Array.from({ length: 2 }, () => request('POST', characterPath(a) + suffix, options)))
     assert.deepEqual(retried.map(({ status }) => status).sort(), [200, 412])
     assert.equal(await owner.managementAudit.count({ where: { targetId: eventId, operation: 'outbox.retry' } }), 1)
+    const audit = await request('GET', characterPath(a) + '/audit?runId=' + runId)
+    assert.equal(audit.status, 200, JSON.stringify(audit.body))
+    assert.deepEqual(audit.body.items.map((item: { targetId: string; operation: string }) => [item.targetId, item.operation]),
+      [[eventId, 'outbox.retry']])
 
     const [stale] = await runtime.$queryRaw<{ ticket: number | null }[]>`
       SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${draftQueuedEvent}, 0) AS ticket
@@ -2958,10 +2962,30 @@ test('console simulation runs use an isolated conversation, one approval and one
     const second = await request('POST', path, { key: randomUUID(), data })
     assert.equal(second.status, 201)
     const recent = await request('GET', path + '?limit=1')
-    assert.equal(recent.body.nextCursor, second.body.id)
+    assert.equal(recent.body.items.length, 1)
+    assert.equal(recent.body.nextCursor, recent.body.items[0].id)
     const older = await request('GET', path + '?limit=1&cursor=' + recent.body.nextCursor)
-    assert.deepEqual(older.body.items.map((item: { id: string }) => item.id), [id])
+    assert.deepEqual([...recent.body.items, ...older.body.items].map((item: { id: string }) => item.id).sort(),
+      [id, second.body.id].sort())
     assert.equal(older.body.nextCursor, null)
+
+    const audit = character + '/audit?runId=' + id
+    assert.equal((await request('GET', audit, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', characterPath(a) + '/audit?runId=' + id)).status, 404)
+    const newestAudit = await request('GET', audit + '&order=desc&limit=1')
+    assert.equal(newestAudit.status, 200, JSON.stringify(newestAudit.body))
+    assert.equal(newestAudit.body.items.length, 1)
+    assert.equal(newestAudit.body.nextCursor, newestAudit.body.items[0].id)
+    assert.deepEqual(Object.keys(newestAudit.body.items[0]).sort(),
+      ['actorId', 'createdAt', 'digest', 'id', 'operation', 'requestId', 'targetId'])
+    const olderAudit = await request('GET', audit + '&order=desc&limit=1&cursor=' + newestAudit.body.nextCursor)
+    const entries = [...newestAudit.body.items, ...olderAudit.body.items]
+    assert.deepEqual(entries.map((item: { operation: string }) => item.operation).sort(), ['action.review', 'simulation.start'])
+    assert.deepEqual(entries.map((item: { targetId: string }) => item.targetId).sort(), [id, action.id].sort())
+    assert.ok(Date.parse(entries[0].createdAt) >= Date.parse(entries[1].createdAt))
+    assert.equal(olderAudit.body.nextCursor, null)
+    const foreignCursor = await request('GET', character + '/audit?runId=' + second.body.id)
+    assert.equal((await request('GET', audit + '&cursor=' + foreignCursor.body.items[0].id)).status, 422)
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }

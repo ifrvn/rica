@@ -582,13 +582,29 @@ export async function listGrants(db: PrismaClient, scope: Scope, page: Page) {
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function listAudit(db: PrismaClient, scope: Scope, page: Page) {
+export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { runId?: string; order?: 'asc' | 'desc' }) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
-    const where = { characterId: scope.characterId }
+    const { runId, order = 'asc' } = page
+    const where: Prisma.ManagementAuditWhereInput = { characterId: scope.characterId }
+    if (runId) {
+      const run = await tx.agentRun.findFirst({ where: { characterId: scope.characterId, id: runId }, select: { id: true } })
+      if (!run) unavailable()
+      const proposal = await tx.actionProposal.findFirst({
+        where: { characterId: scope.characterId, runId }, select: { id: true },
+      })
+      const events = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM public.rica_run_audit_outbox(${scope.characterId}::uuid, ${runId}::uuid) AS event(id)
+      `
+      where.OR = [
+        { targetId: runId, operation: 'simulation.start' },
+        ...(proposal ? [{ targetId: proposal.id, operation: { in: ['action.review', 'action.invalidate', 'simulation.resolve'] } }] : []),
+        { targetId: { in: events.map(({ id }) => id) }, operation: 'outbox.retry' },
+      ]
+    }
     const args = await pageArgs(page, (id) => tx.managementAudit.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.managementAudit.findMany({
-      ...args, where,
+      ...args, where, orderBy: [{ createdAt: order }, { id: order }],
     })
     return makePage(rows, page, ({ characterId: _, createdAt, ...entry }) => ({ ...entry, createdAt: createdAt.toISOString() }))
   }, { isolationLevel: 'RepeatableRead' })

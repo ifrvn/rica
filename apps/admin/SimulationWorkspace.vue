@@ -16,7 +16,7 @@ type Identity = z.infer<typeof identityView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 
 const props = defineProps<{ characterId: string; canStart: boolean; detailId?: string }>()
-const emit = defineEmits<{ expired: []; open: [id: string] }>()
+const emit = defineEmits<{ expired: []; open: [id: string]; audit: [id: string] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -197,6 +197,7 @@ onMounted(() => { void act(load) })
       <div class="run-actions">
         <NTag size="small">模拟</NTag>
         <NTag size="small">{{ stateLabels[selected.state] || selected.state }}</NTag>
+        <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
       </div>
       <dl>
         <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>

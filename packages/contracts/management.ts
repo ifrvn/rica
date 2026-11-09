@@ -157,6 +157,7 @@ export const listQuery = z.object({
   limit: z.string().regex(/^(?:[1-9][0-9]?|100)$/).optional(),
   cursor: resourceId.optional(),
 })
+export const auditQuery = listQuery.extend({ runId: resourceId.optional(), order: z.enum(['asc', 'desc']).optional() })
 export const idempotencyHeader = z.object({
   'idempotency-key': z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
 })

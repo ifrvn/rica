@@ -503,11 +503,15 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/audit`, security,
-    request: { params: characterParams, query: schema.listQuery },
+    request: { params: characterParams, query: schema.auditQuery },
     responses: { ...errors, 200: success(schema.pageView(schema.auditView)) },
-  }), async (c) => c.json(await management.listAudit(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
-  ), 200))
+  }), async (c) => {
+    const query = c.req.valid('query')
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    return c.json(await management.listAudit(db, scope, {
+      ...management.parsePage(query), runId: query.runId, order: query.order,
+    }), 200)
+  })
 
   app.openapi(createRoute({
     method: 'post', path: `${character}/memberships`, security,
