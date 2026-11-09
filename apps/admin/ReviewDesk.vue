@@ -7,6 +7,7 @@ import CharacterWorkspace from './CharacterWorkspace.vue'
 import SimulationWorkspace from './SimulationWorkspace.vue'
 import RunOperations from './RunOperations.vue'
 import AuditWorkspace from './AuditWorkspace.vue'
+import PluginWorkspace from './PluginWorkspace.vue'
 import { request, RequestError } from './request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterWorkspaceView } from '../../packages/contracts/management.js'
@@ -26,7 +27,7 @@ const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
 const pageTitle: Record<ConsolePage, string> = {
-  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计',
+  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '隔离出箱', audit: '审计', plugins: '插件',
 }
 const detailId = ref<string>()
 const routing = ref(false)
@@ -175,7 +176,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
     }
     characterId.value = target
-    const denied = (['runs', 'outbox', 'audit'].includes(location.page) && !canReadRuns.value)
+    const denied = (['runs', 'outbox', 'audit', 'plugins'].includes(location.page) && !canReadRuns.value)
       || (location.page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
     tab.value = denied ? 'character' : location.page
     detailId.value = denied ? undefined : location.detail
@@ -450,6 +451,7 @@ async function decideNewbi(decision: Decision) {
         <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing || !canReview" @click="changeTab('review')">审批</NButton>
         <NButton :type="tab === 'runs' || tab === 'outbox' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('runs')">运行</NButton>
         <NButton :type="tab === 'audit' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('audit')">审计</NButton>
+        <NButton :type="tab === 'plugins' ? 'primary' : 'default'" :disabled="busy || routing || !canReadRuns" @click="changeTab('plugins')">插件</NButton>
       </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
@@ -473,6 +475,8 @@ async function decideNewbi(decision: Decision) {
         @expired="resetSession" @open-runs="changeTab('runs')" @open-run="openRun" />
       <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '')"
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
+      <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" @expired="resetSession" @accounts="changeTab('character')" />
       <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">

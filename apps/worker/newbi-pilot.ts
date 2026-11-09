@@ -5,6 +5,8 @@ import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
 import { newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
 import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
+import { observationError, reportPluginResult } from '../plugin-observation.js'
+import type { PluginDiagnostic } from '../../packages/contracts/plugin-status.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
 import { startNewbiReader } from './newbi-read-plugin.js'
 import { startNewbiExecutor } from './newbi-execution-plugin.js'
@@ -89,9 +91,12 @@ async function main() {
   }
 }
 
+const command = process.argv[2]
+let diagnostic: PluginDiagnostic | undefined
 try {
   await main()
 } catch (error) {
+  diagnostic = observationError(error, 'OPERATION_FAILED')
   if (error instanceof PluginHostError) {
     console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', ...error.diagnostic }))
   } else if (error instanceof PlatformReplyError) {
@@ -102,4 +107,9 @@ try {
       : 'Newbi pilot could not confirm the operation. Inspect the reply status before retrying.')
   }
   process.exitCode = 1
+} finally {
+  if (command === 'events' || command === 'inspect' || command === 'send') {
+    await reportPluginResult(process.env.REDIS_URL, command === 'send' ? 'connector-executor' : 'connector-reader',
+      diagnostic ?? (process.exitCode ? 'OPERATION_FAILED' : undefined))
+  }
 }

@@ -9,6 +9,7 @@ import { outboxQueueName, smokeEvent, startOutboxWorker } from '../apps/worker/o
 import { createDatabase } from '../packages/persistence/client.js'
 import { loadConfig } from '../packages/runtime/config.js'
 import { startCognitionPlugins } from '../apps/runtime-plugins.js'
+import { readPluginStatus } from '../apps/plugin-observation.js'
 
 const config = loadConfig()
 const db = createDatabase(config.databaseUrl)
@@ -39,13 +40,17 @@ function launchWorker(overrides: NodeJS.ProcessEnv = {}) {
   return { child, closed, output: () => output }
 }
 
-async function waitFor(predicate: () => Promise<boolean>, message: string) {
-  const deadline = Date.now() + 15_000
+async function waitFor(predicate: () => Promise<boolean>, message: string, timeout = 15_000) {
+  const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     if (await predicate()) return
     await sleep(100)
   }
   assert.fail(message)
+}
+
+async function workerReport() {
+  return (await readPluginStatus(redis)).services.find(({ service }) => service === 'worker')?.report
 }
 
 try {
@@ -77,6 +82,8 @@ try {
         return persisted === ids.length && (await Promise.all(ids.map((id) => queue.getJob(id)))).every(Boolean)
       }, 'Worker did not enqueue both outbox jobs before the crash')
       assert.match(relay.output(), /"event":"ready","modelId":"simulated"/)
+      await waitFor(async () => (await workerReport())?.plugins.some(({ id, kind }) => id === 'simulated' && kind === 'model') === true,
+        'Worker did not publish its own plugin status')
     } finally {
       relay.child.kill('SIGKILL')
       const [, signal] = await relay.closed
@@ -99,7 +106,8 @@ try {
     await waitFor(async () => await db.outboxEvent.count({
       where: { eventId: { in: ids }, enqueuedAt: { not: null }, processedAt: { not: null } },
     }) === ids.length, 'Expected the surviving and re-published jobs to be processed after restart')
-    console.info('Outbox crash recovery and worker readiness passed')
+    await waitFor(async () => await workerReport() === null, 'Stopped Worker report did not expire', 25_000)
+    console.info('Outbox crash recovery, worker readiness, and plugin status expiry passed')
   } finally {
     await worker.close()
     await plugins.stop()

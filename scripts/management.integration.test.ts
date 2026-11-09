@@ -251,6 +251,13 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
   })).status, 403)
   assert.equal(absent.body.error.requestId, absent.headers.get('x-request-id'))
   assert.equal((await request('GET', characterPath(b))).status, 404)
+  const catalog = await request('GET', characterPath(a) + '/plugins')
+  assert.equal(catalog.status, 200)
+  assert.equal(catalog.body.services.length, 5)
+  assert.ok(catalog.body.services.every(({ report }: { report: unknown }) => report === null))
+  assert.equal((await request('GET', characterPath(a) + '/plugins', { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', characterPath(a) + '/plugins', { actor: 'admin-b' })).status, 404)
+
   const reviewerWorkspace = await request('GET', characterPath(a), { actor: 'reviewer' })
   assert.equal(reviewerWorkspace.status, 200)
   assert.deepEqual(reviewerWorkspace.body.roles, ['REVIEWER'])

@@ -15,10 +15,13 @@ import { decideReviewAction, listReviewActions } from '../../packages/persistenc
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
+import { pluginStatusView } from '../../packages/contracts/plugin-status.js'
+import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
+  pluginStatus?: () => ReturnType<typeof readPluginStatus>
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -57,7 +60,7 @@ function runVersion(header: string) {
   return value
 }
 
-export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter }: Options) {
+export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -192,6 +195,16 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'identity.update', targetScope: characterId + '/' + identityId, input: { input, expected }, requestId,
     }, (tx) => management.updateIdentity(tx, scope, identityId, expected, input))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/plugins`, security,
+    request: { params: characterParams },
+    responses: { ...errors, 200: success(pluginStatusView) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
+    return c.json(await pluginStatus(), 200)
   })
 
   app.openapi(createRoute({

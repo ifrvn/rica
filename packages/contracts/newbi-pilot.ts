@@ -1,6 +1,8 @@
 import { z } from '@hono/zod-openapi'
 import { resourceId } from './management.js'
 
+export const newbiReaderIdentity = { id: 'newbi-local-reader', version: '1.0.0', contractVersion: 1 } as const
+
 export const newbiEndpoint = z.string().max(160).transform((value, ctx) => {
   if (URL.canParse(value)) {
     const url = new URL(value)

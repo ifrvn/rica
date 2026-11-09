@@ -3,6 +3,15 @@ import { PluginHostError, startPluginHost, type PluginDefinition } from '../pack
 import { simulatedModelDefinition } from '../packages/runtime/simulated-model.js'
 import { simulatedPlatformDefinitions } from '../packages/runtime/simulated-platforms.js'
 
+import type { PluginMetadata } from '../packages/contracts/plugin-status.js'
+
+function metadata(kind: PluginMetadata['kind'], { id, version, contractVersion }: Omit<PluginMetadata, 'kind'>): PluginMetadata {
+  return { kind, id, version, contractVersion }
+}
+
+export const simulationPlatformCatalog = simulatedPlatformDefinitions.map((item) => metadata('platform', item))
+export const cognitionCatalog = [...simulationPlatformCatalog, metadata('model', simulatedModelDefinition)]
+
 async function startHost<T>(kind: string, definitions: readonly PluginDefinition<T>[], ids: readonly string[], service?: string) {
   const report = service ? (diagnostic: PluginHostError['diagnostic']) => {
     console.info(JSON.stringify({ service, event: 'plugin_status', ...diagnostic }))
@@ -24,7 +33,7 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
     const plugin = host.find(id)
     return plugin && { adapterId: plugin.id, adapterVersion: plugin.version, adapterContractVersion: plugin.contractVersion }
   }
-  return { ...host, resolveAdapter }
+  return { ...host, resolveAdapter, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
 }
 
 export async function startCognitionPlugins(env = process.env, service?: string) {
@@ -36,6 +45,7 @@ export async function startCognitionPlugins(env = process.env, service?: string)
     return {
       model,
       resolveAdapter: platforms.resolveAdapter,
+      plugins: [...platforms.plugins, metadata('model', model)],
       async stop() {
         await models.stop()
         await platforms.stop()

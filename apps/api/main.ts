@@ -7,10 +7,14 @@ import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
+import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
-const platforms = managementConfig ? await startSimulationPlatforms(process.env, 'api') : undefined
+const platforms = managementConfig ? await startSimulationPlatforms(process.env, 'api').catch(async (error: unknown) => {
+  await reportPluginResult(config.redisUrl, 'api', observationError(error, 'START_FAILED'))
+  throw error
+}) : undefined
 const managementDb = managementConfig ? createDatabase(managementConfig.databaseUrl) : null
 const db = createDatabase(config.databaseUrl)
 const redis = new Redis(config.redisUrl, {
@@ -27,6 +31,7 @@ const auth = managementConfig && managementDb ? createAdminAuth(managementDb, re
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
+  pluginStatus: () => readPluginStatus(redis),
 }) : undefined
 
 const app = createApp({
@@ -37,9 +42,11 @@ const app = createApp({
   redis: () => redis.ping(),
 }, management, auth?.app)
 const server = serve({ fetch: app.fetch, port: config.port, hostname: '127.0.0.1' })
+const observation = platforms && startPluginHeartbeat(config.redisUrl, 'api', platforms.plugins)
 console.info(JSON.stringify({ service: 'api', event: 'started', port: config.port }))
 
 function shutdown() {
+  observation?.stop()
   server.close(() => {
     redis.disconnect()
     void Promise.all([platforms?.stop(), db.$disconnect(), managementDb?.$disconnect()]).catch(() => {
