@@ -32,7 +32,7 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
 | `pnpm run dev:worker` | 认知任务、BullMQ 消费、出箱转发、模拟调度和数据保留期清理。等待日志出现 `ready`。 |
 | `pnpm run dev:admin` | Vue 服务状态和人工审批台。开发代理把 `/health` 与 `/v1` 转发到 API。 |
 
-打开[本地管理台](http://localhost:5173/)并检查 [API 就绪状态](http://127.0.0.1:3000/health/ready)。按 Ctrl+C 停止应用进程。`docker compose stop` 停止数据库和 Redis，保留数据卷。
+打开[本地控制台](http://localhost:5173/)并检查 [API 就绪状态](http://127.0.0.1:3000/health/ready)。按 Ctrl+C 停止应用进程。`docker compose stop` 停止数据库和 Redis，保留数据卷。
 
 ## 2. 启用管理 API 并创建本地账号
 
@@ -54,7 +54,7 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
    Read-Host -MaskInput 'Rica 管理员密码' | pnpm run admin:user add admin --creator
    ```
 
-3. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址一致，重启 API，然后在 [本地管理台](http://localhost:5173/) 用用户名和密码登录。登录后可在「添加 Passkey」中确认密码并登记设备。下次可直接点「使用 Passkey」。
+3. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址一致，重启 API，然后在 [本地控制台](http://localhost:5173/) 用用户名和密码登录。登录后可在「添加 Passkey」中确认密码并登记设备。下次可直接点「使用 Passkey」。
 4. 需要审批人时，用 `pnpm run admin:user add <username>` 创建其本地账号，然后通过管理 API 授权。[账号恢复](docs/management-api.md#本地账号与会话)
 
 本机开发使用 `http://localhost:5173`。部署时使用固定 HTTPS 地址。浏览器会话存入 HttpOnly Cookie。
@@ -89,12 +89,12 @@ $ricaCharacter.id
 
 | 要做的事 | 入口 |
 | --- | --- |
-| 查看服务状态和审批提案 | 登录管理台，选择角色，核对身份、账号、目标与正文，再填写理由并批准或拒绝。 |
+| 查看服务状态和审批提案 | 登录控制台，选择角色，核对身份、账号、目标与正文，再填写理由并批准或拒绝。 |
 | 配置角色、身份、账号、成员与记忆共享 | 使用管理 API。`ADMIN` 管理配置、暂停或恢复绑定、授权或撤销成员权限。 |
 | 查看运行轨迹、审计、额度与队列 | 使用管理 API 的 `/monitoring`、`/runs/{runId}/replay`、`/audit` 和 `/outbox/quarantined`。按接口要求使用 `ADMIN` 或 `AUDITOR`。 |
 | 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm run dev:simulation` 执行并生成本地回执。先配置专用数据库登录和 `RICA_SIMULATION_EXECUTION_DATABASE_URL`。 |
 
-网页目前覆盖服务状态和人工审批。创建与配置主要走管理 API。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟调度](docs/simulation-scheduling.md) · [模拟执行与对账](docs/simulation-execution.md)
+控制台目前覆盖服务状态和人工审批。创建与配置主要走管理 API。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟调度](docs/simulation-scheduling.md) · [模拟执行与对账](docs/simulation-execution.md) · [控制台功能规划](docs/console-roadmap.md)
 
 | 现象 | 检查项 |
 | --- | --- |
@@ -112,9 +112,9 @@ pnpm run build
 pnpm run test:integration
 ```
 
-集成测试使用独立的已迁移 PostgreSQL 和 Redis，运行自带的身份和平台夹具，可以验证审批及回执全链路。请为测试设置专用 `DATABASE_URL` 和 `REDIS_URL`。`pnpm run build` 生成管理台静态文件，位于 `apps/admin/dist`。
+集成测试使用独立的已迁移 PostgreSQL 和 Redis，运行自带的身份和平台夹具，可以验证审批及回执全链路。请为测试设置专用 `DATABASE_URL` 和 `REDIS_URL`。`pnpm run build` 生成控制台静态文件，位于 `apps/admin/dist`。
 
-版本切换使用新的开发数据库和 Redis 队列，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供管理台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
+版本切换使用新的开发数据库和 Redis 队列，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供控制台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
 
 ## 代码入口
 

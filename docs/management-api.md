@@ -6,7 +6,7 @@
 
 1. 使用迁移账号执行 `pnpm run db:migrate`。为管理 API 创建专用 PostgreSQL 登录并授予 `rica_admin_api`，将连接串设置为 `RICA_MANAGEMENT_DATABASE_URL`。
 2. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址完全相同。默认值为 `http://localhost:5173`。部署使用固定的 HTTPS 地址，Passkey 的 RP ID 使用该地址的主机名。
-3. 使用迁移数据库登录初始化本地账号。`--creator` 授予创建新角色的权限。新角色创建者自动成为该角色的 ADMIN。启动 API 后访问管理台登录。
+3. 使用迁移数据库登录初始化本地账号。`--creator` 授予创建新角色的权限。新角色创建者自动成为该角色的 ADMIN。启动 API 后访问控制台登录。
 
 ```sql
 GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
@@ -34,7 +34,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 | 入口 | 权限与操作 |
 | --- | --- |
-| `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。 |
+| `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。角色详情附当前主体的权限，ADMIN 还可读取已启用的模拟适配器选项。 |
 | `POST /v1/characters`、`PUT /c/core` | 指定主体创建初始暂停角色。ADMIN 提交新核心版本。 |
 | `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本。 |
 | `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
@@ -104,7 +104,7 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 ## 模拟审批
 
-用本地账号登录 Vue 管理台，在人工审批区选择角色。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
+用本地账号登录 Vue 控制台，在人工审批区选择角色。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
 
 预览和决定都会复核绑定、正文摘要和授权证据。撤权或配置版本更新时，待审和已批准提案会随授权纪元变化失效。适配器或策略版本不匹配、证据过期以及正文变化时，预览会隐藏正文。提交决定时会记录失效或过期状态和审计。后台过期扫描随调度接入。执行许可和回执由独立执行进程处理。
 

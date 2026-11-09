@@ -131,11 +131,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: character, security, request: { params: characterParams },
-    responses: { ...errors, 200: success(schema.characterView) },
+    responses: { ...errors, 200: success(schema.characterWorkspaceView) },
   }), async (c) => {
     const result = await management.getCharacter(db, { ...c.req.valid('param'), actor: c.get('actor') })
     c.header('ETag', `"${result.version ?? 0}"`)
-    return c.json(result, 200)
+    const platforms = schema.accountInput.shape.platform.options
+    const simulationPlatforms = result.roles.includes('ADMIN') ? platforms.filter((id) => resolveAdapter(id)) : []
+    return c.json({ ...result, simulationPlatforms }, 200)
   })
 
   app.openapi(createRoute({

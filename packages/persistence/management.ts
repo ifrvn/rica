@@ -349,10 +349,10 @@ export async function listCharacters(db: PrismaClient, actor: Subject, page: Pag
 
 export async function getCharacter(db: PrismaClient, scope: Scope) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope)
+    const members = await authorize(tx, scope)
     const row = await tx.character.findUnique({ where: { id: scope.characterId }, select: characterSelect })
     if (!row) unavailable()
-    return characterView(row)
+    return { ...characterView(row), roles: members.map(({ role }) => role) }
   })
 }
 

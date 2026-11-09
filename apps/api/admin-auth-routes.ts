@@ -69,7 +69,7 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
   app.get('/session', async (c) => {
     const user = await sessions.read(getCookie(c, config.cookie))
     if (!user) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
-    return c.json({ username: user.username })
+    return c.json({ username: user.username, canCreate: user.canCreate })
   })
 
   app.post('/login', async (c) => {
@@ -83,7 +83,7 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     const token = await sessions.create(user)
     await sessions.revoke(getCookie(c, config.cookie))
     setCookie(c, config.cookie, token, { ...cookieOptions, maxAge: sessionSeconds })
-    return c.json({ username: user.username })
+    return c.json({ username: user.username, canCreate: user.canCreate })
   })
 
   app.post('/logout', async (c) => {
@@ -119,7 +119,7 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     const token = await sessions.create(key.user)
     await sessions.revoke(getCookie(c, config.cookie))
     setCookie(c, config.cookie, token, { ...cookieOptions, maxAge: sessionSeconds })
-    return c.json({ username: key.user.username })
+    return c.json({ username: key.user.username, canCreate: key.user.canCreate })
   })
 
   app.post('/passkeys/register/options', async (c) => {

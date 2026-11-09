@@ -32,7 +32,7 @@ Start each process in a separate terminal.
 | `pnpm run dev:worker` | Cognition jobs, BullMQ consumers, the outbox relay, simulation schedules, and retention cleanup. Wait for the `ready` log event. |
 | `pnpm run dev:admin` | Vue service status and human review. The development server proxies `/health` and `/v1` to the API. |
 
-Open the [local admin UI](http://localhost:5173/) and check [API readiness](http://127.0.0.1:3000/health/ready). Press Ctrl+C to stop the application processes. Use `docker compose stop` to stop the database and Redis while keeping their volumes.
+Open the [local console](http://localhost:5173/) and check [API readiness](http://127.0.0.1:3000/health/ready). Press Ctrl+C to stop the application processes. Use `docker compose stop` to stop the database and Redis while keeping their volumes.
 
 ## 2. Enable the management API and create a local account
 
@@ -54,7 +54,7 @@ Open the [local admin UI](http://localhost:5173/) and check [API readiness](http
    Read-Host -MaskInput 'Rica administrator password' | pnpm run admin:user add admin --creator
    ```
 
-3. Set `RICA_ADMIN_ORIGIN` to the browser's address and restart the API. Sign in to the [local admin UI](http://localhost:5173/) with your username and password. Open the Passkey section and confirm your password to register a device. Next time, use the Passkey sign-in button.
+3. Set `RICA_ADMIN_ORIGIN` to the browser's address and restart the API. Sign in to the [local console](http://localhost:5173/) with your username and password. Open the Passkey section and confirm your password to register a device. Next time, use the Passkey sign-in button.
 4. Create local reviewer accounts with `pnpm run admin:user add <username>`, then grant their roles through the management API. [Account recovery (Chinese)](docs/management-api.md#本地账号与会话)
 
 Local development uses `http://localhost:5173`. Use a stable HTTPS origin for deployments. The browser stores its session in an HttpOnly cookie.
@@ -89,7 +89,7 @@ Use the management API to create an identity and bind a platform account. Use `/
 
 | Task | Where to do it |
 | --- | --- |
-| Check service status and review proposals | Sign in to the admin UI and select a character, check the identity, account, destination, and content, then enter a reason and approve or reject. |
+| Check service status and review proposals | Sign in to the console and select a character, check the identity, account, destination, and content, then enter a reason and approve or reject. |
 | Manage characters, identities, accounts, members, and memory sharing | Use the management API. An `ADMIN` can configure resources, pause or resume bindings, and grant or revoke member permissions. |
 | Inspect runs, audit records, budgets, and queue health | Use management API endpoints such as `/monitoring`, `/runs/{runId}/replay`, `/audit`, and `/outbox/quarantined`. Use the `ADMIN` or `AUDITOR` role required by the endpoint. |
 | Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process records local receipts for `READY` proposals. Configure its dedicated database login and `RICA_SIMULATION_EXECUTION_DATABASE_URL` first. |
@@ -112,9 +112,9 @@ pnpm run build
 pnpm run test:integration
 ```
 
-Integration tests use their own identity and platform fixtures to verify the approval and receipt flow. Point `DATABASE_URL` and `REDIS_URL` at dedicated test services and apply migrations before running them. `pnpm run build` writes the admin UI's static files to `apps/admin/dist`.
+Integration tests use their own identity and platform fixtures to verify the approval and receipt flow. Point `DATABASE_URL` and `REDIS_URL` at dedicated test services and apply migrations before running them. `pnpm run build` writes the console's static files to `apps/admin/dist`.
 
-Use a fresh development database and Redis queue when switching versions. Run the API, worker, and executor from the same version. In a split deployment, give migration, runtime, management, and executor processes separate credentials. Serve the admin UI through an HTTPS reverse proxy that forwards same-origin `/v1` and `/health` requests to the API. The Compose credentials are for local development. [Database roles (Chinese)](docs/database-roles.md) · [Retention and recovery (Chinese)](docs/management-api.md#模拟数据保留期)
+Use a fresh development database and Redis queue when switching versions. Run the API, worker, and executor from the same version. In a split deployment, give migration, runtime, management, and executor processes separate credentials. Serve the console through an HTTPS reverse proxy that forwards same-origin `/v1` and `/health` requests to the API. The Compose credentials are for local development. [Database roles (Chinese)](docs/database-roles.md) · [Retention and recovery (Chinese)](docs/management-api.md#模拟数据保留期)
 
 ## Project structure
 

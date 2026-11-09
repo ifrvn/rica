@@ -175,6 +175,10 @@ export const characterView = z.object({
   id: z.uuid(), slug: z.string(), timezone: z.string(), status: z.string(),
   version: z.number().int().nullable(), profile: coreProfile.nullable(),
 })
+export const characterWorkspaceView = characterView.extend({
+  roles: z.array(membershipInput.shape.role),
+  simulationPlatforms: z.array(accountInput.shape.platform),
+})
 export const identityView = z.object({
   id: z.uuid(), slug: z.string(), status: z.string(),
   version: z.number().int().nullable(), profile: identityProfile.nullable(),

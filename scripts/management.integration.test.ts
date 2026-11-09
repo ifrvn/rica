@@ -208,7 +208,9 @@ test('local authentication enforces origin, membership and session revocation', 
     const cookie = cookieHeader.split(';')[0]
     assert.match(cookieHeader, /HttpOnly/i)
     assert.match(cookieHeader, /SameSite=Strict/i)
-    assert.equal((await session(cookie)).status, 200)
+    const currentSession = await session(cookie)
+    assert.equal(currentSession.status, 200)
+    assert.deepEqual(await currentSession.json(), { username, canCreate: true })
     assert.equal((await local.request('/v1' + characterPath(b), { headers: { Cookie: cookie } })).status, 200)
     assert.equal((await local.request('/v1' + characterPath(a), { headers: { Cookie: cookie } })).status, 404)
     assert.equal((await local.request('/v1/characters', { method: 'POST', headers: { Cookie: cookie } })).status, 403)
@@ -249,7 +251,14 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
   })).status, 403)
   assert.equal(absent.body.error.requestId, absent.headers.get('x-request-id'))
   assert.equal((await request('GET', characterPath(b))).status, 404)
-  assert.equal((await request('GET', characterPath(a), { actor: 'reviewer' })).status, 200)
+  const reviewerWorkspace = await request('GET', characterPath(a), { actor: 'reviewer' })
+  assert.equal(reviewerWorkspace.status, 200)
+  assert.deepEqual(reviewerWorkspace.body.roles, ['REVIEWER'])
+  assert.deepEqual(reviewerWorkspace.body.simulationPlatforms, [])
+  const adminWorkspace = await request('GET', characterPath(a))
+  assert.equal(adminWorkspace.status, 200)
+  assert.deepEqual(adminWorkspace.body.roles, ['ADMIN'])
+  assert.deepEqual(adminWorkspace.body.simulationPlatforms, ['mock-a', 'mock-b'])
   assert.equal((await request('POST', characterPath(a) + '/identities', {
     actor: 'reviewer', key: 'should-not-create', data: { slug: 'forbidden', roleProfile: {} },
   })).status, 403)

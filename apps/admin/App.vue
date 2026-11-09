@@ -51,7 +51,7 @@ onMounted(refresh)
         <div class="masthead-inner">
           <div class="brand">
             <span class="brand-mark" aria-hidden="true">R</span>
-            <h1>虚拟角色管理台</h1>
+            <h1>Rica 控制台</h1>
           </div>
           <NPopover trigger="click" placement="bottom-end">
             <template #trigger>

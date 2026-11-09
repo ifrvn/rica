@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { NewbiReplyView } from '../../packages/contracts/newbi-pilot.js'
+import CharacterWorkspace from './CharacterWorkspace.vue'
+import { request, RequestError } from './request.js'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
 type Character = { id: string; slug: string; profile: { name?: string } | null }
@@ -15,6 +17,12 @@ const username = ref('')
 const passkeyPassword = ref('')
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
+const canCreate = ref(false)
+const tab = ref<'character' | 'review'>('character')
+const characterCursor = ref<string | null>(null)
+const roles = ref<string[]>([])
+const canReviewSimulation = computed(() => roles.value.includes('REVIEWER'))
+const canReview = computed(() => canReviewSimulation.value || roles.value.includes('ADMIN'))
 const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const actions = ref<ActionView[]>([])
@@ -47,15 +55,6 @@ function statusTone(state: ActionView['state'] | NewbiReplyView['status']) {
   return 'default'
 }
 
-class RequestError extends Error {
-  constructor(readonly status: number) { super() }
-}
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, credentials: 'same-origin', signal: AbortSignal.timeout(10_000) })
-  if (!response.ok) throw new RequestError(response.status)
-  return response.json()
-}
 
 function authPost<T>(path: string, data: object = {}) {
   return request<T>('/v1/auth/' + path, {
@@ -63,7 +62,7 @@ function authPost<T>(path: string, data: object = {}) {
   })
 }
 
-type Session = { username: string }
+type Session = { username: string; canCreate: boolean }
 type AuthenticationOptions = { challengeId: string; options: Parameters<typeof startAuthentication>[0]['optionsJSON'] }
 type RegistrationOptions = { challengeId: string; options: Parameters<typeof startRegistration>[0]['optionsJSON'] }
 
@@ -96,7 +95,29 @@ async function run(task: () => Promise<void>) {
 async function openSession(session: Session) {
   username.value = session.username
   password.value = ''
-  characters.value = (await request<Page<Character>>('/v1/characters?limit=100')).items
+  canCreate.value = session.canCreate
+  await fetchCharacters()
+  characterId.value = characters.value[0]?.id ?? ''
+}
+
+async function fetchCharacters(cursor?: string) {
+  const page = await request<Page<Character>>('/v1/characters?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''))
+  characters.value = cursor ? [...characters.value, ...page.items] : page.items
+  characterCursor.value = page.nextCursor
+}
+
+function characterCreated(character: Character) {
+  if (!characters.value.some(({ id }) => id === character.id)) characters.value = [...characters.value, character]
+  changeCharacter(character.id)
+}
+
+function changeTab(value: 'character' | 'review') {
+  tab.value = value
+  if (value === 'review') void loadQueue()
+  else {
+    resetReview()
+    resetNewbi()
+  }
 }
 
 onMounted(() => run(async () => {
@@ -158,6 +179,10 @@ function resetSession() {
   username.value = ''
   password.value = ''
   passkeyPassword.value = ''
+  canCreate.value = false
+  tab.value = 'character'
+  roles.value = []
+  characterCursor.value = null
   characters.value = []
   characterId.value = ''
   actions.value = []
@@ -168,7 +193,7 @@ function resetSession() {
 }
 
 async function loadQueue(append = false) {
-  if (!characterId.value) return
+  if (!characterId.value || !canReviewSimulation.value) return
   await run(async () => {
     const cursor = append && nextCursor.value ? '?cursor=' + encodeURIComponent(nextCursor.value) : ''
     const result = await request<Page<ActionView>>(path.value + cursor)
@@ -183,11 +208,12 @@ async function loadQueue(append = false) {
 
 function changeCharacter(id: string) {
   characterId.value = id
+  roles.value = []
+  tab.value = 'character'
   resetNewbi()
   actions.value = []
   nextCursor.value = null
   resetReview()
-  void loadQueue()
 }
 
 async function openAction(id: string) {
@@ -258,7 +284,7 @@ async function decideNewbi(decision: Decision) {
 <template>
   <section class="review-desk" aria-labelledby="review-heading" :aria-busy="busy">
     <NCard v-if="!username" class="login-card">
-      <h2 id="review-heading">登录管理台</h2>
+      <h2 id="review-heading">登录控制台</h2>
       <NForm :show-feedback="false" @submit.prevent="connect">
         <NFormItem label="用户名" :label-props="{ for: 'review-username' }">
           <NInput v-model:value="usernameInput" :input-props="{ id: 'review-username', autocomplete: 'username', required: true }"
@@ -279,7 +305,7 @@ async function decideNewbi(decision: Decision) {
 
     <template v-else>
       <div class="workspace-header">
-        <h2 id="review-heading">人工审批</h2>
+        <h2 id="review-heading">{{ tab === 'character' ? '角色与身份' : '人工审批' }}</h2>
         <div class="account-actions">
           <NTag size="small" :bordered="false" class="account-name">{{ username }}</NTag>
           <NPopover v-if="passkeysAvailable" trigger="click" placement="bottom-end" :width="248">
@@ -302,16 +328,21 @@ async function decideNewbi(decision: Decision) {
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
 
-      <NCard v-if="!characters.length && !busy && !error" class="blank-card">
-        <NEmpty description="当前账号没有可访问的角色。" />
-      </NCard>
+      <nav class="account-actions" aria-label="控制台导航">
+        <NButton :type="tab === 'character' ? 'primary' : 'default'" :disabled="busy" @click="changeTab('character')">角色与身份</NButton>
+        <NButton :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || !canReview" @click="changeTab('review')">审批</NButton>
+      </nav>
       <div v-if="characters.length" class="role-picker">
         <label for="review-character">角色</label>
         <NSelect :value="characterId || null" :options="characterOptions" :disabled="busy"
           :input-props="{ id: 'review-character' }" placeholder="选择角色" filterable @update:value="changeCharacter" />
+        <NButton v-if="characterCursor" size="small" :disabled="busy"
+          @click="run(() => fetchCharacters(characterCursor ?? undefined))">加载更多角色</NButton>
       </div>
 
-      <div v-if="characterId" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
+      <CharacterWorkspace v-if="tab === 'character'" :key="characterId" :character-id="characterId"
+        :can-create="canCreate" @created="characterCreated" @expired="resetSession" @roles="roles = $event" />
+      <div v-else-if="characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
         <NCard class="queue" size="small">
           <div class="card-heading">
             <h3>待办</h3>
@@ -369,7 +400,7 @@ async function decideNewbi(decision: Decision) {
         </NCard>
       </div>
 
-      <NCard v-if="characterId" size="small">
+      <NCard v-if="tab === 'review' && characterId && canReview" size="small">
         <NCollapse>
           <NCollapseItem name="pilot" title="扭笔本地试点">
             <NForm class="lookup" :show-feedback="false" @submit.prevent="openNewbiReply">
