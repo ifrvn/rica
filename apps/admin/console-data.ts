@@ -4,6 +4,12 @@ import { request, RequestError } from './request.js'
 export type Page<T> = { items: T[]; nextCursor: string | null }
 export const characterPath = (id: string) => '/v1/characters/' + encodeURIComponent(id)
 export const utcToday = () => new Date().toISOString().slice(0, 10)
+export function focusRecord(prefix: string, current: string | undefined, previous: string | undefined,
+  detailHeading?: HTMLElement, listHeading?: HTMLElement) {
+  if (current) detailHeading?.focus()
+  else if (previous) (document.getElementById(prefix + previous) ?? listHeading)?.focus()
+}
+
 export const formatTime = (value: string) => new Date(value).toLocaleString()
 
 export function queryPath(path: string, params: Record<string, string | null | undefined>) {

@@ -534,10 +534,10 @@ export async function changeContactBoundary(tx: Tx, scope: Scope, contactId: str
 }
 
 const memoryMetadata = { id: true, identityId: true, accountId: true, conversationId: true,
-  scope: true, visibility: true, status: true, expiresAt: true } satisfies Prisma.MemorySelect
+  scope: true, visibility: true, status: true, expiresAt: true, createdAt: true } satisfies Prisma.MemorySelect
 
-function memoryView({ expiresAt, ...memory }: Prisma.MemoryGetPayload<{ select: typeof memoryMetadata }>) {
-  return { ...memory, expiresAt: expiresAt?.toISOString() ?? null }
+function memoryView({ createdAt, expiresAt, ...memory }: Prisma.MemoryGetPayload<{ select: typeof memoryMetadata }>) {
+  return { ...memory, createdAt: createdAt.toISOString(), expiresAt: expiresAt?.toISOString() ?? null }
 }
 
 async function memoryProvenance(tx: Tx, characterId: string, memoryId: string) {

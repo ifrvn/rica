@@ -31,7 +31,7 @@ export const newbiReplySummary = z.object({
   status: newbiReplyStatus, createdAt: z.iso.datetime(),
 })
 export const newbiReplyView = z.object({
-  id: resourceId, accountId: resourceId, identityId: resourceId, agentId: resourceId,
+  id: resourceId, accountId: resourceId, identityId: resourceId, identity: z.string(), agentId: resourceId,
   endpoint: newbiEndpoint, postId: resourceId, content: z.string().nullable(), reviewDigest: z.string(),
   status: newbiReplyStatus,
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),

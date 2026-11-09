@@ -174,6 +174,7 @@ export const conversationListQuery = listQuery.extend({
 })
 export const conversationOption = z.object({
   id: resourceId, channel: z.enum(['PUBLIC', 'PRIVATE']), privateContactId: resourceId.nullable(),
+  contactLabel: z.string().nullable(),
 })
 export const beliefSummary = beliefView.pick({ id: true, version: true, kind: true })
 export const contactSummary = contactBoundaryView.pick({ id: true, accountId: true, version: true, blocked: true })
@@ -213,7 +214,7 @@ export const accountView = z.object({
 export const memoryView = z.object({
   id: z.uuid(), identityId: z.uuid().nullable(), accountId: z.uuid().nullable(),
   conversationId: z.uuid().nullable(), scope: z.string(), visibility: z.string(),
-  status: z.string(), expiresAt: z.iso.datetime().nullable(),
+  status: z.string(), createdAt: z.iso.datetime(), expiresAt: z.iso.datetime().nullable(),
 })
 export const memoryDetailView = z.object({ memory: memoryView, provenance: memoryProvenanceView })
 export const grantView = z.object({

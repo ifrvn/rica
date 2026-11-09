@@ -7,6 +7,7 @@ import SimulationWorkspace from './SimulationWorkspace.vue'
 import RunOperations from './RunOperations.vue'
 import AuditWorkspace from './AuditWorkspace.vue'
 import PluginWorkspace from './PluginWorkspace.vue'
+import { focusRecord } from './console-data.js'
 import { request, RequestError } from './request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterWorkspaceView } from '../../packages/contracts/management.js'
@@ -45,6 +46,14 @@ const pageTitle: Record<ConsolePage, string> = {
   character: '角色与身份', review: '人工审批', runs: '运行', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
+const reviewListHeading = ref<HTMLElement>()
+const reviewDetailHeading = ref<HTMLElement>()
+watch(detailId, (id, previous) => {
+  if (tab.value === 'review') void nextTick(() => {
+    if (tab.value === 'review' && id === detailId.value) focusRecord('review-row-', id, previous,
+      reviewDetailHeading.value, reviewListHeading.value)
+  })
+})
 const runQuery = ref('')
 const connectorAccountId = ref<string>()
 const routing = ref(false)
@@ -67,7 +76,7 @@ const notice = ref('')
 let pending: { signature: string; key: string } | undefined
 const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/actions')
 const statusText: Record<ActionView['state'], string> = {
-  WAITING_APPROVAL: '待审', READY: '已批准', REJECTED: '已拒绝', CANCELED: '已失效', EXPIRED: '已过期',
+  WAITING_APPROVAL: '待审批', READY: '已批准', REJECTED: '已拒绝', CANCELED: '已失效', EXPIRED: '已过期',
   EXECUTING: '模拟执行中', RECONCILING: '待对账', SIMULATED: '模拟完成', BLOCKED: '执行已拦截',
 }
 
@@ -341,8 +350,8 @@ async function fetchAction(id: string, current: number) {
   if (current === revision) selected.value = action
 }
 
-function openAction(id: string) {
-  if (detailId.value !== id) navigate({ characterId: characterId.value, page: 'review', detail: id })
+function openAction(id?: string) {
+  if (!id || detailId.value !== id) navigate({ characterId: characterId.value, page: 'review', detail: id })
   else {
     const current = revision
     void run(() => fetchAction(id, current), current)
@@ -380,7 +389,7 @@ async function decide(decision: Decision) {
     selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version }
     reason.value = ''
     pending = undefined
-    notice.value = outcome.status === 'READY' ? '已批准模拟提案。' : '已拒绝模拟提案。'
+    notice.value = outcome.status === 'READY' ? '已批准，等待模拟执行。' : '已拒绝模拟提案。'
   }, current)
 }
 </script>
@@ -509,62 +518,69 @@ async function decide(decision: Decision) {
         :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
         @all="changeTab('connector')" />
-      <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="review-layout" :class="{ 'review-layout--single': !actions.length && !selected }">
-        <NCard class="queue" size="small">
-          <div class="card-heading">
-            <h3>待办</h3>
-            <NButton size="small" quaternary :disabled="busy" @click="loadQueue()">刷新</NButton>
+      <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="console-split" :class="{ 'console-split--detail': detailId }">
+        <section class="console-split-list" aria-labelledby="review-list-heading">
+          <div class="console-section-heading">
+            <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">待办</h3>
+            <NButton size="small" quaternary :disabled="busy || routing" @click="loadQueue()">刷新待办</NButton>
           </div>
-          <NEmpty v-if="!actions.length && !busy && !routing && !error" description="暂无待审提案。" />
-          <ul v-if="actions.length" class="queue-items">
+          <NSpin v-if="routing && !actions.length" aria-label="正在加载待办" />
+          <NEmpty v-else-if="!actions.length && !busy && !error" description="暂无待审批提案。" />
+          <ul v-if="actions.length" class="console-select-list">
             <li v-for="item in actions" :key="item.id">
-              <NButton block :type="selected?.id === item.id ? 'primary' : 'default'" secondary
-                class="queue-button" :disabled="busy" :aria-pressed="selected?.id === item.id" @click="openAction(item.id)">
-                <span class="queue-item">
-                  <span class="queue-identity">{{ item.target.identity }}</span>
-                  <span class="queue-account">{{ item.target.account }}</span>
-                  <NTag size="tiny" :bordered="false" :type="statusTone(item.state)" class="queue-status">{{ statusText[item.state] }}</NTag>
+              <button :id="'review-row-' + item.id" type="button" class="console-record" :disabled="busy"
+                :aria-current="detailId === item.id ? 'true' : undefined" @click="openAction(item.id)">
+                <span class="console-record-main">
+                  <strong>{{ item.target.identity }}</strong>
+                  <span>{{ item.target.platform }} · {{ item.target.account }}</span>
+                  <span class="console-record-meta">{{ item.target.audience === 'PUBLIC' ? '公开' : '私聊' }} · {{ item.target.conversation }}</span>
                 </span>
-              </NButton>
+                <NTag size="small" :bordered="false" :type="statusTone(item.state)">{{ statusText[item.state] }}</NTag>
+              </button>
             </li>
           </ul>
-          <NButton v-if="nextCursor" block size="small" quaternary :disabled="busy" @click="loadQueue(true)">加载更多</NButton>
-        </NCard>
+          <NButton v-if="nextCursor" size="small" quaternary :disabled="busy" @click="loadQueue(true)">加载更多</NButton>
+        </section>
 
-        <NCard v-if="selected" class="proposal" size="small">
-          <div class="card-heading">
-            <div class="proposal-title">
-              <h3>模拟回复</h3>
-              <NTag size="small" :bordered="false" :type="statusTone(selected.state)">{{ statusText[selected.state] }}</NTag>
-            </div>
+        <section v-if="detailId" class="console-split-detail proposal" aria-labelledby="review-detail-heading">
+          <div class="console-section-heading">
+            <h3 id="review-detail-heading" ref="reviewDetailHeading" tabindex="-1">模拟回复</h3>
+            <NButton size="small" quaternary :disabled="busy" @click="openAction()">返回待办</NButton>
+          </div>
+          <NSpin v-if="routing && !selected" aria-label="正在加载提案" />
+          <div v-if="selected" class="console-actions proposal-actions">
+            <NTag size="small" :bordered="false" :type="statusTone(selected.state)">{{ statusText[selected.state] }}</NTag>
             <NButton size="small" quaternary :disabled="busy" @click="openAction(selected.id)">重新核对</NButton>
           </div>
-          <dl class="metadata">
-            <div><dt>平台</dt><dd>{{ selected.target.platform }} / {{ selected.target.instance }}</dd></div>
-            <div><dt>身份与账号</dt><dd>{{ selected.target.identity }} / {{ selected.target.account }}</dd></div>
-            <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
-            <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
-            <div v-if="selected.riskCodes.length"><dt>风险码</dt><dd>{{ selected.riskCodes.join(' · ') }}</dd></div>
-          </dl>
-          <template v-if="selected.content">
-            <h4>拟发送内容</h4>
-            <p class="payload">{{ selected.content }}</p>
+          <NButton v-else-if="error" size="small" :disabled="busy" @click="openAction(detailId)">重新加载提案</NButton>
+          <template v-if="selected">
+            <dl class="metadata">
+              <div><dt>平台</dt><dd>{{ selected.target.platform }} / {{ selected.target.instance }}</dd></div>
+              <div><dt>身份与账号</dt><dd>{{ selected.target.identity }} / {{ selected.target.account }}</dd></div>
+              <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
+              <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
+            </dl>
+            <NAlert v-if="selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" type="warning">
+              此回复与其他平台的内容相似，请核对后再审批。
+            </NAlert>
+            <template v-if="selected.content">
+              <h4>拟发送内容</h4>
+              <p class="payload">{{ selected.content }}</p>
+            </template>
+            <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
+            <NForm v-if="selected.state === 'WAITING_APPROVAL' && selected.content" :show-feedback="false"
+              @submit.prevent="decide('APPROVE')">
+              <NFormItem label="审批理由" :label-props="{ for: 'review-reason' }">
+                <NInput v-model:value="reason" type="textarea" :rows="3" :maxlength="240"
+                  :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="" />
+              </NFormItem>
+              <div class="decision-buttons">
+                <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">批准模拟回复</NButton>
+                <NButton :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
+              </div>
+            </NForm>
           </template>
-          <NForm v-if="selected.state === 'WAITING_APPROVAL' && selected.content" :show-feedback="false"
-            @submit.prevent="decide('APPROVE')">
-            <NFormItem label="审批理由" :label-props="{ for: 'review-reason' }">
-              <NInput v-model:value="reason" type="textarea" :rows="3" :maxlength="240"
-                :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="" />
-            </NFormItem>
-            <div class="decision-buttons">
-              <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">批准模拟回复</NButton>
-              <NButton :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
-            </div>
-          </NForm>
-        </NCard>
-        <NCard v-else-if="actions.length" class="blank-card">
-          <NEmpty description="选择一条待审提案。" />
-        </NCard>
+        </section>
       </div>
 
     </template>
@@ -580,7 +596,7 @@ async function decide(decision: Decision) {
 .login-card :deep(.n-form-item + .n-form-item) { margin-block-start: .625rem; }
 .login-actions { display: grid; gap: .625rem; margin-block-start: .625rem; }
 .login-alert { margin-block: .5rem; }
-.workspace-header, .account-actions, .decision-buttons, .proposal-title { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
+.workspace-header, .account-actions, .decision-buttons { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
 .workspace-header { justify-content: space-between; }
 .workspace-toolbar { display: flex; justify-content: space-between; align-items: center; gap: .75rem; min-width: 0; }
 .workspace-toolbar > :last-child { margin-inline-start: auto; }
@@ -598,21 +614,7 @@ async function decide(decision: Decision) {
 .account-name :deep(.n-button__content) { overflow: hidden; text-overflow: ellipsis; }
 .role-picker { display: flex; align-items: center; gap: .75rem; width: min(100%, 22rem); min-width: 0; }
 .role-picker > label { flex: none; color: #485c5b; }
-.review-layout { display: grid; grid-template-columns: minmax(13rem, 19rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
-.review-layout--single { grid-template-columns: minmax(0, 1fr); }
-.review-layout > * { min-width: 0; }
-.card-heading { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-block-end: .625rem; }
-.queue h3, .proposal-title h3 { font-size: 1rem; font-weight: 650; }
-.queue-items { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
-.queue-items + .n-button { margin-block-start: .5rem; }
-.queue-button { min-height: 3.25rem; height: auto; padding-block: .5rem; }
-.queue-button :deep(.n-button__content) { width: 100%; text-align: left; }
-.queue-item { line-height: 1.3; display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; column-gap: .5rem; align-items: center; }
-.queue-identity, .queue-account { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.queue-identity { font-weight: 650; }
-.queue-account { grid-column: 1; color: #536866; font-size: .75rem; }
-.queue-status { grid-area: 1 / 2 / span 2 / 3; }
-.blank-card :deep(.n-card__content) { padding-block: 2rem; }
+.proposal-actions { margin-bottom: .75rem; }
 .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
 .metadata dt { color: #536866; font-size: .8125rem; }
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
@@ -620,7 +622,6 @@ async function decide(decision: Decision) {
 .payload { margin: 0 0 1rem; padding: .875rem 1rem; border-radius: .5rem; background: #f3f7f6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .decision-buttons, .passkey-submit { margin-block-start: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-@media (max-width: 46rem) { .review-layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 30rem) {
   .console-navigation { gap: .875rem; }
   .workspace-toolbar .account-name { max-width: 7rem; }

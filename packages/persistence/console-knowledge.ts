@@ -38,8 +38,10 @@ export async function listConversationOptions(db: PrismaClient, scope: Scope, id
       throw new ManagementError(422, 'INVALID_INPUT', 'Invalid cursor')
     }
     const rows = await tx.conversation.findMany({ where: { ...where, id: { gt: page.cursor } },
-      orderBy: { id: 'asc' }, take: page.limit + 1, select: { id: true, channel: true, privateContactId: true } })
-    return makePage(rows, page, (row) => row)
+      orderBy: { id: 'asc' }, take: page.limit + 1, select: {
+        id: true, channel: true, privateContactId: true, privateContact: { select: { displayLabel: true } },
+      } })
+    return makePage(rows, page, ({ privateContact, ...row }) => ({ ...row, contactLabel: privateContact?.displayLabel ?? null }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 

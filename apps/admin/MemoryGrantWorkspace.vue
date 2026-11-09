@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '../../packages/contracts/management.js'
 import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from './console-data.js'
@@ -107,8 +107,11 @@ onMounted(() => { void run(load) })
 </script>
 
 <template>
-  <NCard title="此记忆的授权" size="small">
-    <template #header-extra><NButton v-if="shareable" size="small" :disabled="busy" @click="open('grant')">新增授权</NButton></template>
+  <section class="memory-grants" aria-labelledby="memory-grant-heading">
+    <div class="console-section-heading">
+      <h3 id="memory-grant-heading">授权</h3>
+      <NButton v-if="shareable" size="small" quaternary :disabled="busy" @click="open('grant')">新增授权</NButton>
+    </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
     <NForm v-if="mode" @submit.prevent="save">
@@ -127,10 +130,12 @@ onMounted(() => { void run(load) })
         </NFormItem>
         <NFormItem v-if="channel" :label="channel === 'PUBLIC' ? '公开受众会话' : '私聊会话'" :label-props="{ for: 'grant-conversation' }">
           <NSelect filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
-            :options="conversations.map(({ id }) => ({ value: id, label: id }))" :input-props="{ id: 'grant-conversation' }" />
+            :options="conversations.map(({ id, channel: kind, contactLabel }) => ({
+              value: id, label: (contactLabel || (kind === 'PRIVATE' ? '私聊' : '公开会话')) + ' · ' + id.slice(0, 8),
+            }))" :input-props="{ id: 'grant-conversation' }" />
         </NFormItem>
         <div v-if="channel && form.accountId && !busy" class="console-actions">
-          <span v-if="selected?.privateContactId">联系人 {{ selected.privateContactId }}</span>
+          <span v-if="selected?.privateContactId">联系人 {{ selected.contactLabel || selected.privateContactId }}</span>
           <span v-if="!conversations.length && !error">此账号暂无符合用途的会话。</span>
           <NButton v-if="conversationCursor" size="small" @click="run(() => loadChoices(true))">加载更多会话</NButton>
         </div>
@@ -169,5 +174,9 @@ onMounted(() => { void run(load) })
       </li>
     </ul>
     <NButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多授权</NButton>
-  </NCard>
+  </section>
 </template>
+
+<style scoped>
+.memory-grants { border-top: 1px solid #dfe7e6; margin-top: 1rem; padding-top: .875rem; }
+</style>

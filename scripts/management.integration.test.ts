@@ -1237,7 +1237,9 @@ test('grant and account management enforce bound references and revoke access wi
   })
   assert.equal(revoke.status, 200)
   assert.equal(revoke.body.authEpoch, grant.body.authEpoch + 1)
-  const ownContact = await owner.contact.create({ data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID() } })
+  const ownContact = await owner.contact.create({ data: {
+    characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID(), displayLabel: 'Grant fixture contact',
+  } })
   const otherContact = await owner.contact.create({ data: { characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID() } })
   const privateConversation = await owner.conversation.create({ data: {
     characterId: a, identityId: identityA, accountId: accountA, remoteKey: randomUUID(),
@@ -1246,8 +1248,9 @@ test('grant and account management enforce bound references and revoke access wi
   const options = path + '/identities/' + identityA + '/conversations?accountId=' + accountA + '&channel=PRIVATE&limit=100'
   const choices = await request('GET', options)
   assert.equal(choices.status, 200, JSON.stringify(choices.body))
-  assert.ok(choices.body.items.some((item: { id: string; privateContactId: string }) =>
-    item.id === privateConversation.id && item.privateContactId === ownContact.id))
+  assert.deepEqual(choices.body.items.find((item: { id: string }) => item.id === privateConversation.id), {
+    id: privateConversation.id, channel: 'PRIVATE', privateContactId: ownContact.id, contactLabel: 'Grant fixture contact',
+  })
   assert.ok(choices.body.items.every((item: { channel: string }) => item.channel === 'PRIVATE'))
   assert.equal((await request('GET', options + '&cursor=' + audience.id)).status, 422)
   assert.equal((await request('GET', options, { actor: 'auditor' })).status, 403)
@@ -1318,6 +1321,7 @@ test('memory correction revokes old citations and descendants and keeps a metada
   assert.equal(detail.status, 200, JSON.stringify(detail.body))
   assert.deepEqual(detail.body.provenance, initial.body)
   assert.equal(detail.body.memory.id, memoryId)
+  assert.equal(detail.body.memory.createdAt, (await owner.memory.findUniqueOrThrow({ where: { id: memoryId } })).createdAt.toISOString())
   assert.equal('content' in detail.body.memory, false)
   assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
   assert.equal((await request('GET', characterPath(b) + '/memories/' + memoryId, { actor: 'admin-b' })).status, 404)
@@ -2525,6 +2529,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       const preview = await request('GET', path, { actor: 'reviewer' })
       assert.equal(preview.status, 200, JSON.stringify(preview.body))
       assert.equal(preview.body.agentId, agentId)
+      assert.equal(preview.body.identity, (await owner.identity.findUniqueOrThrow({ where: { id: identityId } })).slug)
       assert.equal(preview.body.postId, postId)
       assert.equal(preview.body.accountId, accountId)
       assert.equal(preview.body.content.split('\n\nAI 披露：')[0], text)

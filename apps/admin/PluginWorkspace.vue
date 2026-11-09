@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NSpin, NTag } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView } from '../../packages/contracts/management.js'
 import type { pluginStatusView, PluginService } from '../../packages/contracts/plugin-status.js'
@@ -14,6 +14,12 @@ const emit = defineEmits<{ expired: []; accounts: [id?: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId)
 const services = ref<Service[]>([])
 const bindings = ref<Account[]>([])
+const expanded = ref(new Set<PluginService>())
+
+function toggle(service: PluginService) {
+  if (expanded.value.has(service)) expanded.value.delete(service)
+  else expanded.value.add(service)
+}
 const busy = ref(false)
 const loadingBindings = ref(false)
 const error = ref('')
@@ -28,7 +34,7 @@ const names: Record<PluginService, string> = {
 const kinds: Record<Plugin['kind'], string> = {
   model: '模型', platform: '模拟适配器', 'platform-reader': '只读连接器', 'platform-reply-executor': '发送执行器',
 }
-const reports = { READY: '已就绪', COMPLETED: '最近命令已完成', FAILED: '最近报告失败' }
+const reports = { READY: '已就绪', COMPLETED: '最近任务已完成', FAILED: '最近任务失败' }
 const accountStatus: Record<string, string> = {
   ACTIVE: '运行中', PAUSED: '已暂停', PENDING: '待启用', REVOKED: '已撤销', REAUTH_REQUIRED: '需重新授权',
 }
@@ -105,54 +111,88 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="plugin-workspace" aria-label="插件状态">
-    <div class="plugin-actions"><NButton size="small" :disabled="busy || loadingBindings" @click="refresh">刷新</NButton></div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-    <NSpin v-if="busy && !services.length" />
-    <NCard v-for="service in services" :key="service.service" :title="names[service.service]" size="small">
-      <template #header-extra>
-        <NTag size="small" :type="service.report?.status === 'READY' ? 'success' : service.report?.status === 'FAILED' ? 'error' : 'default'">
-          {{ service.report ? reports[service.report.status] : '未知' }}
-        </NTag>
-      </template>
-      <div v-if="service.report" class="plugin-report">
-        <time :datetime="service.report.observedAt">报告于 {{ new Date(service.report.observedAt).toLocaleString() }}</time>
-        <code v-if="service.report.diagnostic">{{ service.report.diagnostic }}</code>
+  <div class="plugin-workspace">
+    <section aria-labelledby="plugin-status-heading">
+      <div class="console-section-heading">
+        <h3 id="plugin-status-heading">进程状态</h3>
+        <NButton size="small" quaternary :disabled="busy || loadingBindings" @click="refresh">刷新状态</NButton>
       </div>
-      <ul class="plugin-list">
-        <li v-for="plugin in service.catalog" :key="plugin.kind + '/' + plugin.id" class="plugin-row">
-          <div>
-            <strong>{{ plugin.id }}</strong>
-            <div>{{ kinds[plugin.kind] }} · v{{ observed(service, plugin)?.version ?? plugin.version }} · 契约
-              {{ observed(service, plugin)?.contractVersion ?? plugin.contractVersion }}</div>
-          </div>
-          <NTag size="small">{{ state(service, plugin) }}</NTag>
-        </li>
-      </ul>
-    </NCard>
-    <NCard v-if="!error || services.length" title="当前角色的账号绑定" size="small">
-      <template #header-extra><NButton size="small" @click="emit('accounts')">查看平台账号</NButton></template>
+      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+      <NSpin v-if="busy && !services.length" />
+      <NEmpty v-else-if="!services.length && !error" description="暂无进程报告。" />
+      <table v-if="services.length" class="plugin-status-table" aria-labelledby="plugin-status-heading">
+        <thead><tr><th scope="col">进程</th><th scope="col">状态</th><th scope="col">最近报告</th></tr></thead>
+        <tbody v-for="service in services" :key="service.service">
+          <tr>
+            <th scope="row">
+              {{ names[service.service] }}
+              <NButton text size="small" class="plugin-toggle" :aria-label="(expanded.has(service.service) ? '收起' : '展开') + names[service.service] + '详情'"
+                :aria-expanded="expanded.has(service.service)" :aria-controls="'plugin-details-' + service.service"
+                @click="toggle(service.service)">{{ expanded.has(service.service) ? '收起' : '详情' }}</NButton>
+            </th>
+            <td>
+              <NTag size="small" :bordered="false" :type="service.report?.status === 'READY' ? 'success' : service.report?.status === 'FAILED' ? 'error' : 'default'">
+                {{ service.report ? reports[service.report.status] : '未知' }}
+              </NTag>
+            </td>
+            <td><time v-if="service.report" :datetime="service.report.observedAt">{{ new Date(service.report.observedAt).toLocaleString() }}</time>
+              <span v-else>—</span></td>
+          </tr>
+          <tr v-show="expanded.has(service.service)" :id="'plugin-details-' + service.service">
+            <td colspan="3" class="plugin-details">
+              <p v-if="service.report?.diagnostic">错误码 <code>{{ service.report.diagnostic }}</code></p>
+              <ul class="plugin-list">
+                <li v-for="plugin in service.catalog" :key="plugin.kind + '/' + plugin.id" class="plugin-row">
+                  <div><strong>{{ plugin.id }}</strong>
+                    <div>{{ kinds[plugin.kind] }} · v{{ observed(service, plugin)?.version ?? plugin.version }} · 契约
+                      {{ observed(service, plugin)?.contractVersion ?? plugin.contractVersion }}</div>
+                  </div>
+                  <NTag size="small" :bordered="false">{{ state(service, plugin) }}</NTag>
+                </li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <section v-if="!error || services.length" aria-labelledby="plugin-accounts-heading">
+      <div class="console-section-heading">
+        <h3 id="plugin-accounts-heading">当前角色的账号</h3>
+        <NButton size="small" quaternary @click="emit('accounts')">查看平台账号</NButton>
+      </div>
       <NAlert v-if="bindingError" type="warning" role="status">{{ bindingError }}</NAlert>
       <NSpin v-else-if="loadingBindings && !bindings.length" />
-      <NEmpty v-else-if="!bindings.length" description="暂无平台账号绑定。" />
+      <NEmpty v-else-if="!bindings.length" description="暂无平台账号。" />
       <ul v-if="bindings.length" class="plugin-list">
         <li v-for="account in bindings" :key="account.id" class="plugin-row">
           <span>{{ account.platform }} · {{ account.instanceKey }}</span>
-          <div class="plugin-actions">
-            <NTag size="small">{{ accountStatus[account.status] ?? account.status }}</NTag>
-            <NButton v-if="account.platform === 'newbi'" size="small" @click="emit('accounts', account.id)">查看读取状态</NButton>
+          <div class="console-actions">
+            <NTag size="small" :bordered="false">{{ accountStatus[account.status] ?? account.status }}</NTag>
+            <NButton v-if="account.platform === 'newbi'" size="small" quaternary
+              @click="emit('accounts', account.id)">查看读取状态</NButton>
           </div>
         </li>
       </ul>
-    </NCard>
-  </section>
+    </section>
+  </div>
 </template>
 
 <style scoped>
-.plugin-workspace { display: grid; gap: 1rem; margin-top: 1rem; }
-.plugin-actions, .plugin-report, .plugin-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
-.plugin-report { justify-content: space-between; color: #485c5b; }
-.plugin-row { justify-content: space-between; padding-block: .5rem; overflow-wrap: anywhere; }
+.plugin-workspace { display: grid; gap: 1.5rem; min-width: 0; }
+.plugin-status-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.plugin-status-table th, .plugin-status-table td { text-align: start; padding: .55rem .375rem;
+  border-bottom: 1px solid #dfe7e6; overflow-wrap: anywhere; }
+.plugin-status-table thead th { color: #485c5b; font-size: .875rem; font-weight: 500; }
+.plugin-status-table tbody th { font-weight: 600; }
+.plugin-status-table th:first-child { width: 40%; }
+.plugin-status-table time { font-size: .875rem; color: #485c5b; }
+.plugin-toggle { margin-inline-start: .4rem; }
+.plugin-details { background: #edf3f2; }
+.plugin-details p { margin: .25rem 0 .5rem; }
+.plugin-status-table :deep(.n-tag) { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
+.plugin-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; justify-content: space-between;
+  padding-block: .5rem; overflow-wrap: anywhere; }
 .plugin-list { list-style: none; margin: 0; padding: 0; }
-.plugin-list > li + li { border-top: 1px solid #e0e8e7; }
+.plugin-list > li + li { border-top: 1px solid #dfe7e6; }
+@media (max-width: 30rem) { .plugin-toggle { margin-inline-start: 0; display: flex; } }
 </style>

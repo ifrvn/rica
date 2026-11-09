@@ -73,10 +73,11 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'REVIEWER'])
     const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId },
-      include: { account: { select: { instanceKey: true, remoteAccountId: true } } } })
+      include: { account: { select: { instanceKey: true, remoteAccountId: true, identity: { select: { slug: true } } } } } })
     if (!reply) missing()
     return newbiReplyView.parse({
-      ...reply, agentId: reply.account.remoteAccountId, endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
+      ...reply, identity: reply.account.identity.slug, agentId: reply.account.remoteAccountId,
+      endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
       content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
       retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
     })

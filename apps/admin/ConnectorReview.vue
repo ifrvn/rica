@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { NewbiReplyView, newbiReplySummary } from '../../packages/contracts/newbi-pilot.js'
+import { focusRecord, formatTime } from './console-data.js'
 import { request, RequestError } from './request.js'
 
 type Summary = z.infer<typeof newbiReplySummary>
 type Page = { items: Summary[]; nextCursor: string | null }
 const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; canReview: boolean; canClose: boolean }>()
-const emit = defineEmits<{ expired: []; open: [id: string]; all: [] }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; all: [] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId) + '/newbi/replies'
 const statusText: Record<Summary['status'], string> = {
-  WAITING: '待审', READY: '待发送', REJECTED: '已拒绝', IN_FLIGHT: '发送中',
+  WAITING: '待审批', READY: '待发送', REJECTED: '已拒绝', IN_FLIGHT: '发送中',
   UNKNOWN: '待核对', SENT: '已发送', CLOSED: '已结案',
 }
 const options = [{ label: '全部状态', value: '' }, ...Object.entries(statusText).map(([value, label]) => ({ label, value }))]
@@ -20,6 +21,8 @@ const rows = ref<Summary[]>([])
 const cursor = ref<string | null>(null)
 const reply = ref<NewbiReplyView>()
 const reason = ref('')
+const detailHeading = ref<HTMLElement>()
+const listHeading = ref<HTMLElement>()
 const loadingList = ref(false)
 const loadingDetail = ref(false)
 const submitting = ref(false)
@@ -89,11 +92,14 @@ async function detail(id?: string) {
   } finally { if (current === selection) loadingDetail.value = false }
 }
 
-watch([() => props.detailId, () => props.accountId], ([id]) => {
+watch([() => props.detailId, () => props.accountId], ([id], previous) => {
   reason.value = ''
   pending = undefined
   notice.value = ''
   void detail(id)
+  void nextTick(() => {
+    if (active && id === props.detailId) focusRecord('connector-row-', id, previous?.[0], detailHeading.value, listHeading.value)
+  })
 }, { immediate: true })
 
 async function submit(action: 'APPROVE' | 'REJECT' | 'CLOSE') {
@@ -134,48 +140,67 @@ onMounted(() => { void list() })
 </script>
 
 <template>
-  <section class="connector-review" aria-label="本机连接器审批">
-    <NCard :title="accountId ? '当前账号的提案' : '本机连接器提案'" size="small">
-      <template v-if="accountId" #header-extra><NButton size="small" @click="emit('all')">查看全部账号</NButton></template>
+  <div class="console-split" :class="{ 'console-split--detail': detailId }">
+    <section class="console-split-list" aria-labelledby="connector-list-heading">
+      <div class="console-section-heading">
+        <h3 id="connector-list-heading" ref="listHeading" tabindex="-1">{{ accountId ? '当前账号的提案' : '回复提案' }}</h3>
+        <div class="console-actions">
+          <NButton v-if="accountId" size="small" quaternary :disabled="submitting" @click="emit('all')">查看全部账号</NButton>
+          <NButton size="small" quaternary :disabled="loadingList || submitting" @click="list()">刷新列表</NButton>
+        </div>
+      </div>
       <div class="connector-actions">
         <label for="connector-filter">状态</label>
-        <NSelect :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"
+        <NSelect filterable :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"
           class="filter" :disabled="loadingList || submitting" @update:value="changeFilter" />
-        <NButton :disabled="loadingList || submitting" size="small" @click="list()">刷新列表</NButton>
       </div>
       <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
       <NSpin v-if="loadingList && !rows.length" />
       <NEmpty v-else-if="!rows.length && !listError" description="暂无符合条件的提案。" />
-      <ul v-if="rows.length">
-        <li v-for="item in rows" :key="item.id" class="connector-actions">
-          <NButton quaternary :disabled="submitting" :aria-pressed="detailId === item.id" @click="emit('open', item.id)">
-            {{ item.identity }} · {{ new Date(item.createdAt).toLocaleString() }}
-          </NButton>
-          <NTag size="small">{{ statusText[item.status] }}</NTag>
-          <span class="post-id">{{ item.postId }}</span>
+      <ul v-if="rows.length" class="console-select-list">
+        <li v-for="item in rows" :key="item.id">
+          <button :id="'connector-row-' + item.id" type="button" class="console-record" :disabled="submitting"
+            :aria-current="detailId === item.id ? 'true' : undefined" @click="emit('open', item.id)">
+            <span class="console-record-main">
+              <strong>{{ item.identity }}</strong>
+              <span>公开回复 · 帖子 {{ item.postId.slice(0, 8) }}</span>
+            </span>
+            <span class="console-record-meta">
+              <NTag size="small" :bordered="false">{{ statusText[item.status] }}</NTag>
+              <time :datetime="item.createdAt">{{ formatTime(item.createdAt) }}</time>
+            </span>
+          </button>
         </li>
       </ul>
       <NButton v-if="cursor" size="small" :disabled="loadingList || submitting" @click="list(true)">加载更多</NButton>
-    </NCard>
-    <NCard v-if="detailId" title="回复详情" size="small">
-      <template #header-extra>
-        <NButton size="small" :disabled="loadingDetail || submitting" @click="detail(detailId)">重新核对</NButton>
-      </template>
+    </section>
+    <section v-if="detailId" class="console-split-detail" aria-labelledby="connector-detail-heading">
+      <div class="console-section-heading">
+        <h3 id="connector-detail-heading" ref="detailHeading" tabindex="-1">回复详情</h3>
+        <NSpace size="small">
+          <NButton size="small" quaternary :disabled="loadingDetail || submitting" @click="detail(detailId)">刷新详情</NButton>
+          <NButton size="small" quaternary :disabled="submitting" @click="emit('open')">返回提案列表</NButton>
+        </NSpace>
+      </div>
       <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-      <NSpin v-if="loadingDetail" />
+      <NSpin v-if="loadingDetail" aria-label="正在加载提案" />
       <template v-if="reply">
-        <NTag size="small">{{ statusText[reply.status] }}</NTag>
+        <NTag size="small" :bordered="false">{{ statusText[reply.status] }}</NTag>
         <dl>
           <div><dt>平台</dt><dd>本机连接器 · {{ reply.endpoint }}</dd></div>
-          <div><dt>身份</dt><dd>{{ reply.identityId }}</dd></div>
-          <div><dt>账号</dt><dd>{{ reply.accountId }} · {{ reply.agentId }}</dd></div>
+          <div><dt>身份</dt><dd>{{ reply.identity || reply.identityId }}</dd></div>
+          <div><dt>账号</dt><dd>{{ reply.agentId }}</dd></div>
           <div><dt>目标</dt><dd>{{ reply.postId }} · 公开回复</dd></div>
           <div><dt>到期</dt><dd>{{ new Date(reply.expiresAt).toLocaleString() }}</dd></div>
           <div v-if="reply.remoteCommentId"><dt>评论回执</dt><dd>{{ reply.remoteCommentId }}</dd></div>
           <div v-if="reply.closureReason"><dt>结案理由</dt><dd>{{ reply.closureReason }}</dd></div>
         </dl>
-        <p v-if="reply.content" class="reply-content">{{ reply.content }}</p>
+        <template v-if="reply.content">
+          <h4>拟发送内容</h4>
+          <p class="reply-content">{{ reply.content }}</p>
+        </template>
+        <p v-else-if="reply.status === 'WAITING'">当前无法预览正文，暂不能审批。</p>
         <NForm v-if="(canReview && reply.status === 'WAITING' && reply.content) || (canClose && reply.status === 'UNKNOWN')"
           @submit.prevent="submit(reply.status === 'UNKNOWN' ? 'CLOSE' : 'APPROVE')">
           <p v-if="reply.status === 'UNKNOWN'">结案会停止对此提案的发送尝试。</p>
@@ -185,25 +210,23 @@ onMounted(() => { void list() })
           </NFormItem>
           <div class="connector-actions">
             <NButton type="primary" attr-type="submit" :disabled="submitting || !reason.trim()">
-              {{ reply.status === 'UNKNOWN' ? '确认结案' : '批准回复' }}
+              {{ reply.status === 'UNKNOWN' ? '确认结案' : '批准公开回复' }}
             </NButton>
             <NButton v-if="reply.status === 'WAITING'" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</NButton>
           </div>
         </NForm>
       </template>
-    </NCard>
-  </section>
+    </section>
+  </div>
 </template>
 
 <style scoped>
-.connector-review { display: grid; gap: 1rem; margin-top: 1rem; }
 .connector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .filter { width: min(10rem, 100%); }
-ul { list-style: none; margin: .5rem 0; padding: 0; }
-li + li { border-top: 1px solid #e0e8e7; }
 dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; }
-dd, .post-id, .reply-content { overflow-wrap: anywhere; }
-.reply-content { white-space: pre-wrap; }
+dd, .reply-content { overflow-wrap: anywhere; }
+.reply-content { white-space: pre-wrap; background: #eaf1ef; padding: .75rem; }
+h4 { margin-bottom: .5rem; }
 </style>

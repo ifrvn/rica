@@ -10,3 +10,23 @@
 .console-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 0 .75rem; }
 .console-form-grid input[type="date"], .console-form-grid input[type="datetime-local"] { box-sizing: border-box; width: 100%; min-height: 34px; font: inherit; }
 .console-workspace .n-card-header { flex-wrap: wrap; gap: .35rem; }
+
+.console-split { display: grid; gap: 1.5rem; min-width: 0; }
+.console-split--detail { grid-template-columns: minmax(16rem, 2fr) minmax(0, 3fr); align-items: start; }
+.console-split-list, .console-split-detail { min-width: 0; }
+.console-split-detail { padding-inline-start: 1.25rem; border-inline-start: 1px solid #dfe7e6; }
+.console-select-list { list-style: none; margin: .5rem 0; padding: 0; }
+.console-select-list li { border-top: 1px solid #dfe7e6; }
+.console-record { width: 100%; display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between;
+  gap: .35rem 1rem; padding: .625rem .5rem; background: transparent; border: 0; text-align: start;
+  font: inherit; color: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.console-record-main, .console-record-meta { display: grid; gap: .15rem; min-width: 0; }
+.console-record-meta { color: #485c5b; font-size: .875rem; }
+.console-record:hover, .console-record[aria-current] { background: #e9f1ef; }
+.console-record:focus-visible { outline-offset: -2px; }
+.console-record:disabled { cursor: default; }
+@media (max-width: 46rem) {
+  .console-split--detail { grid-template-columns: minmax(0, 1fr); }
+  .console-split--detail .console-split-list { display: none; }
+  .console-split-detail { padding: 0; border: 0; }
+}
