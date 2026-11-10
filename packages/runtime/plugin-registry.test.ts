@@ -13,7 +13,7 @@ test('registration rejects duplicate IDs, incompatible contracts and unknown mod
   assert.equal(selected.resolveAdapter('mock-a'), undefined)
   assert.equal(selected.resolveAdapter('mock-b')?.adapterVersion, '1.0.0')
   await selected.stop()
-  await assert.rejects(startCognitionPlugins({ RICA_MODEL_PROVIDER: 'unregistered' }), /UNKNOWN_PLUGIN/)
+  await assert.rejects(startCognitionPlugins({}, undefined, { provider: 'unregistered' as never }), /UNKNOWN_PLUGIN/)
   const builtin = definition('builtin')
   await assert.rejects(startPluginHost('model', [builtin, builtin], []), /DUPLICATE_PLUGIN/)
   await assert.rejects(startPluginHost('model', [{ ...builtin, contractVersion: 2 }], []), /INCOMPATIBLE_CONTRACT/)

@@ -101,7 +101,7 @@ try {
   }
 
   const plugins = await startCognitionPlugins({})
-  const worker = await startOutboxWorker(runtimeUrl.toString(), config.redisUrl, plugins.model, plugins.resolveAdapter)
+  const worker = await startOutboxWorker(runtimeUrl.toString(), config.redisUrl, () => plugins.model, plugins.resolveAdapter)
   try {
     await waitFor(async () => await db.outboxEvent.count({
       where: { eventId: { in: ids }, enqueuedAt: { not: null }, processedAt: { not: null } },

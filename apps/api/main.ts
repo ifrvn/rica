@@ -8,6 +8,7 @@ import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
 import { verifyNewbiBinding } from '../worker/newbi-read-plugin.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
+import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
 const config = loadConfig()
@@ -33,6 +34,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
   pluginStatus: () => readPluginStatus(redis),
+  modelSettings: createModelSettingsStore(modelSettingsDirectory(config.databaseUrl)),
   verifyConnector: verifyNewbiBinding,
 }) : undefined
 

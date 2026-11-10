@@ -1,13 +1,14 @@
 import { z } from 'zod'
+import type { ModelSettingsInput } from '../contracts/model-settings.js'
 import type { ModelProvider } from './model-provider.js'
 import type { PluginDefinition } from './plugin-registry.js'
 import { simulatedModel } from './simulated-model.js'
 
 const providers = {
-  openai: { key: 'OPENAI_API_KEY', url: 'https://api.openai.com/v1/chat/completions' },
-  anthropic: { key: 'ANTHROPIC_API_KEY', url: 'https://api.anthropic.com/v1/messages' },
-  gemini: { key: 'GEMINI_API_KEY', url: 'https://generativelanguage.googleapis.com/v1beta/models/' },
-  'openai-compatible': { key: 'RICA_MODEL_API_KEY', url: '' },
+  openai: 'https://api.openai.com/v1/chat/completions',
+  anthropic: 'https://api.anthropic.com/v1/messages',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/models/',
+  'openai-compatible': '',
 } as const
 type Provider = keyof typeof providers
 
@@ -21,14 +22,11 @@ const configSchema = z.object({
 })
 type Config = z.infer<typeof configSchema>
 
-export function hostedModelConfig(id: string, env: NodeJS.ProcessEnv) {
-  if (!Object.hasOwn(providers, id)) return undefined
-  const provider = providers[id as Provider]
-  const base = env.RICA_MODEL_BASE_URL?.trim().replace(/\/+$/, '')
+export function hostedModelConfig({ provider, model, apiKey, baseUrl }: ModelSettingsInput) {
+  if (provider === 'simulated') return undefined
   return {
-    model: env.RICA_MODEL_NAME,
-    key: env[provider.key],
-    url: id === 'openai-compatible' && base ? base + '/chat/completions' : provider.url,
+    model, key: apiKey,
+    url: provider === 'openai-compatible' && baseUrl ? baseUrl.replace(/\/+$/, '') + '/chat/completions' : providers[provider],
   }
 }
 

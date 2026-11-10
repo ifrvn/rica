@@ -25,7 +25,8 @@ export class WorkerDependencyUnavailable extends Error {
 }
 
 export async function startOutboxWorker(
-  databaseUrl: string, redisUrl: string, model: Plugin<ModelProvider>, resolveAdapter: ResolveSimulationAdapter,
+  databaseUrl: string, redisUrl: string, getModel: () => Plugin<ModelProvider> | Promise<Plugin<ModelProvider>>,
+  resolveAdapter: ResolveSimulationAdapter,
 ) {
   const db = createDatabase(databaseUrl)
   const producer = new Redis(redisUrl, {
@@ -50,6 +51,7 @@ export async function startOutboxWorker(
   const worker = new Worker<OutboxJob>(outboxQueueName, async ({ name, data }) => {
     const { eventId, generation } = data
     let ticket: number | null = null
+    let modelId: string | undefined
     try {
       if (name !== runQueuedEvent && name !== draftQueuedEvent && name !== smokeEvent) throw new Error('Unknown outbox job')
       if (!Number.isSafeInteger(generation) || generation < 0) throw new Error('Invalid outbox generation')
@@ -62,6 +64,8 @@ export async function startOutboxWorker(
       if (name === runQueuedEvent) {
         await prepareSimulatedRun(db, eventId, attempt)
       } else if (name === draftQueuedEvent) {
+        const model = await getModel()
+        modelId = model.id
         await processSimulatedDraft(db, eventId, resolveAdapter, model, attempt)
       } else {
         await db.$executeRaw`
@@ -72,7 +76,7 @@ export async function startOutboxWorker(
       }
     } catch (error) {
       if (error instanceof HostedModelError) console.warn(JSON.stringify({
-        service: 'worker', event: 'model_request_failed', modelId: model.id, code: error.code, status: error.status,
+        service: 'worker', event: 'model_request_failed', modelId, code: error.code, status: error.status,
       }))
       try {
         if (ticket !== null) await db.$queryRaw`

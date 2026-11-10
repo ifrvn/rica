@@ -19,16 +19,16 @@ const chatReply = { choices: [{ finish_reason: 'stop', message: { content: '下�
 
 test('built-in model plugins send only writing input and parse their provider replies', async (t) => {
   const fixtures = [
-    ['openai', 'OPENAI_API_KEY', 'authorization', 'Bearer fixture-key', 'https://api.openai.com/v1/chat/completions', chatReply],
-    ['anthropic', 'ANTHROPIC_API_KEY', 'x-api-key', 'fixture-key', 'https://api.anthropic.com/v1/messages',
+    ['openai', 'authorization', 'Bearer fixture-key', 'https://api.openai.com/v1/chat/completions', chatReply],
+    ['anthropic', 'x-api-key', 'fixture-key', 'https://api.anthropic.com/v1/messages',
       { stop_reason: 'end_turn', content: [{ type: 'thinking', text: 'internal' }, { type: 'text', text: '下午三点。' }] }],
-    ['gemini', 'GEMINI_API_KEY', 'x-goog-api-key', 'fixture-key',
+    ['gemini', 'x-goog-api-key', 'fixture-key',
       'https://generativelanguage.googleapis.com/v1beta/models/fixture-model:generateContent',
       { candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'internal' }, { text: '下午三点。' }] } }] }],
-    ['openai-compatible', 'RICA_MODEL_API_KEY', 'authorization', 'Bearer fixture-key',
+    ['openai-compatible', 'authorization', 'Bearer fixture-key',
       'https://models.example/v1/chat/completions', chatReply],
   ] as const
-  for (const [id, keyName, header, keyValue, endpoint, result] of fixtures) {
+  for (const [id, header, keyValue, endpoint, result] of fixtures) {
     const signal = new AbortController().signal
     const fetch = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
       assert.equal(url, endpoint)
@@ -46,9 +46,9 @@ test('built-in model plugins send only writing input and parse their provider re
       if (id === 'openai') assert.equal(body.store, false)
       return Response.json(result)
     })
-    const plugins = await startCognitionPlugins({
-      RICA_MODEL_PROVIDER: id, RICA_MODEL_NAME: 'fixture-model', [keyName]: 'fixture-key',
-      RICA_MODEL_BASE_URL: 'https://models.example/v1/',
+    const plugins = await startCognitionPlugins({}, undefined, {
+      provider: id, model: 'fixture-model', apiKey: 'fixture-key',
+      ...(id === 'openai-compatible' ? { baseUrl: 'https://models.example/v1/' } : {}),
     })
     try {
       const model = plugins.model.implementation
@@ -65,11 +65,11 @@ test('built-in model plugins send only writing input and parse their provider re
 })
 
 test('hosted model refuses to start without its required key or with an insecure compatible endpoint', async () => {
-  await assert.rejects(startCognitionPlugins({ RICA_MODEL_PROVIDER: 'openai', RICA_MODEL_NAME: 'fixture-model' }),
+  await assert.rejects(startCognitionPlugins({}, undefined, { provider: 'openai', model: 'fixture-model' }),
     /INVALID_CONFIG: model\/openai/)
-  await assert.rejects(startCognitionPlugins({
-    RICA_MODEL_PROVIDER: 'openai-compatible', RICA_MODEL_NAME: 'fixture-model',
-    RICA_MODEL_BASE_URL: 'http://models.example/v1', RICA_MODEL_API_KEY: 'fixture-key',
+  await assert.rejects(startCognitionPlugins({}, undefined, {
+    provider: 'openai-compatible', model: 'fixture-model',
+    baseUrl: 'http://models.example/v1', apiKey: 'fixture-key',
   }), /INVALID_CONFIG: model\/openai-compatible/)
 })
 
@@ -79,8 +79,8 @@ test('failed and truncated upstream responses cannot produce a draft', async (t)
     Response.json({ choices: [{ finish_reason: 'length', message: { content: 'truncated reply' } }] }),
   ]
   t.mock.method(globalThis, 'fetch', async () => responses.shift()!)
-  const plugins = await startCognitionPlugins({
-    RICA_MODEL_PROVIDER: 'openai', RICA_MODEL_NAME: 'fixture-model', OPENAI_API_KEY: 'fixture-key',
+  const plugins = await startCognitionPlugins({}, undefined, {
+    provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key',
   })
   try {
     const write = () => plugins.model.implementation.write(input, new AbortController().signal)

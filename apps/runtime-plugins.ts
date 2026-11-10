@@ -1,4 +1,6 @@
 import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
+import type { ModelSettingsInput } from '../packages/contracts/model-settings.js'
+import type { createModelSettingsStore } from '../packages/runtime/model-settings-store.js'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '../packages/runtime/plugin-registry.js'
 import { simulatedModelDefinition } from '../packages/runtime/simulated-model.js'
 import { hostedModelConfig, hostedModelDefinitions } from '../packages/runtime/hosted-models.js'
@@ -39,18 +41,47 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
   return { ...host, resolveAdapter, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
 }
 
-export async function startCognitionPlugins(env = process.env, service?: string) {
-  const modelId = env.RICA_MODEL_PROVIDER ?? simulatedModelDefinition.id
+export async function startModelPlugin(configuration: ModelSettingsInput, service?: string) {
+  const id = configuration.provider
+  const host = await startHost('model', modelDefinitions, [{ id, config: hostedModelConfig(configuration) }], service)
+  const model = host.find(id)!
+  return { model, metadata: metadata('model', model), stop: host.stop }
+}
+
+export async function startConfiguredModel(
+  settings: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>, service?: string,
+) {
+  const initial = await settings.read()
+  let selected = await startModelPlugin(initial.configuration, service)
+  let version = initial.version
+  return {
+    get metadata() { return selected.metadata },
+    async read() {
+      const record = await settings.read()
+      if (record.version !== version) {
+        const next = await startModelPlugin(record.configuration, service)
+        await selected.stop()
+        selected = next
+        version = record.version
+      }
+      return selected.model
+    },
+    stop: () => selected.stop(),
+  }
+}
+
+export async function startCognitionPlugins(
+  env = process.env, service?: string, configuration: ModelSettingsInput = { provider: 'simulated' },
+) {
   const platforms = await startSimulationPlatforms(env, service)
   try {
-    const models = await startHost('model', modelDefinitions, [{ id: modelId, config: hostedModelConfig(modelId, env) }], service)
-    const model = models.find(modelId)!
+    const selected = await startModelPlugin(configuration, service)
     return {
-      model,
+      model: selected.model,
       resolveAdapter: platforms.resolveAdapter,
-      plugins: [...platforms.plugins, metadata('model', model)],
+      plugins: [...platforms.plugins, selected.metadata],
       async stop() {
-        await models.stop()
+        await selected.stop()
         await platforms.stop()
       },
     }

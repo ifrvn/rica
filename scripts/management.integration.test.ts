@@ -958,7 +958,7 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
     assert.equal(occurrences.length, 1)
     assert.equal(occurrences[0].scheduledAt.toISOString(), dueAt)
     assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id } })).nextAt, null)
-    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl, simulatedModelPlugin, simulationPlatforms.resolveAdapter)
+    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl, () => simulatedModelPlugin, simulationPlatforms.resolveAdapter)
     try {
       const runId = occurrences[0].runId
       const deadline = Date.now() + 10_000
@@ -2022,7 +2022,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
         },
       },
     }
-    const first = await startOutboxWorker(runtimeUrl, config.redisUrl, failing, simulationPlatforms.resolveAdapter)
+    const first = await startOutboxWorker(runtimeUrl, config.redisUrl, () => failing, simulationPlatforms.resolveAdapter)
     try {
       await wait(({ attempts, attemptUntil }) => attempts === 3 && attemptUntil === null)
     } finally {
@@ -2030,7 +2030,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
     }
     assert.equal(failures, 3)
     await owner.outboxEvent.update({ where, data: { enqueuedAt: new Date(Date.now() - 15_000) } })
-    const restarted = await startOutboxWorker(runtimeUrl, config.redisUrl, failing, simulationPlatforms.resolveAdapter)
+    const restarted = await startOutboxWorker(runtimeUrl, config.redisUrl, () => failing, simulationPlatforms.resolveAdapter)
     try {
       const held = await wait(({ quarantinedAt }) => quarantinedAt !== null)
       assert.equal(held.attempts, 4)
@@ -2061,7 +2061,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
       SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${draftQueuedEvent}, 0) AS ticket
     `
     assert.equal(stale.ticket, null)
-    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl, simulatedModelPlugin, simulationPlatforms.resolveAdapter)
+    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl, () => simulatedModelPlugin, simulationPlatforms.resolveAdapter)
     try {
       const processed = await wait(({ processedAt }) => processedAt !== null)
       assert.equal(processed.generation, 1)
@@ -2994,7 +2994,7 @@ test('three identities on two platforms reach separate approved simulation recei
         },
       },
     }
-    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl, recordingModel, simulationPlatforms.resolveAdapter)
+    const worker = await startOutboxWorker(runtimeUrl, config.redisUrl, () => recordingModel, simulationPlatforms.resolveAdapter)
     try {
       const deadline = Date.now() + 15_000
       while (Date.now() < deadline) {
@@ -3125,8 +3125,8 @@ test('console simulation runs use an isolated conversation, one approval and one
     await prepareSimulatedRun(runtime, queued.eventId)
     const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: id, type: draftQueuedEvent } })
     const generatedReply = 'Welcome to the discussion. What would you like to know?'
-    const plugins = await startCognitionPlugins({
-      RICA_MODEL_PROVIDER: 'openai', RICA_MODEL_NAME: 'fixture-model', OPENAI_API_KEY: 'fixture-key',
+    const plugins = await startCognitionPlugins({}, undefined, {
+      provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key',
     })
     const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({
       choices: [{ finish_reason: 'stop', message: { content: generatedReply } }],

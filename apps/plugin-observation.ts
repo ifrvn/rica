@@ -52,8 +52,8 @@ export function startPluginHeartbeat(url: string, service: PluginService, plugin
   const timer = setInterval(() => { void beat() }, 5000)
   timer.unref()
   return {
-    failed(diagnostic: PluginDiagnostic) { status = { status: 'FAILED', plugins, diagnostic } },
-    ready() { status = { status: 'READY', plugins } },
+    failed(diagnostic: PluginDiagnostic) { status = { status: 'FAILED', plugins: status.plugins, diagnostic } },
+    ready(nextPlugins = plugins) { status = { status: 'READY', plugins: nextPlugins } },
     stop() { clearInterval(timer); redis.disconnect() },
   }
 }

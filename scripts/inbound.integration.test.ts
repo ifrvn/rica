@@ -128,7 +128,7 @@ after(async () => {
 })
 
 async function consumeRuns(runIds: string[], type = runQueuedEvent, model = simulatedModelPlugin) {
-  const worker = await startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl, model, simulationPlatforms.resolveAdapter)
+  const worker = await startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl, () => model, simulationPlatforms.resolveAdapter)
   try {
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {

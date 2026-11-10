@@ -91,19 +91,13 @@ $ricaCharacter.id
 
 ### 用真实模型试写
 
-在 Worker 的 `.env` 中设置 `RICA_MODEL_PROVIDER`、`RICA_MODEL_NAME` 和对应的 API 密钥，然后重启 `pnpm run dev:worker`。模型 ID 使用供应商为你的账号提供的文本模型 ID。每个 Worker 选择一个模型提供方。
-
-| `RICA_MODEL_PROVIDER` | Worker 环境变量 | 接口 |
-| --- | --- | --- |
-| `simulated`（默认） | 无 | 本地模板 |
-| `openai` | `OPENAI_API_KEY` | OpenAI Chat Completions |
-| `anthropic` | `ANTHROPIC_API_KEY` | Claude Messages |
-| `gemini` | `GEMINI_API_KEY` | Gemini Developer API 的 `generateContent`，填写不带 `models/` 的模型 ID |
-| `openai-compatible` | `RICA_MODEL_API_KEY`、`RICA_MODEL_BASE_URL` | Chat Completions 兼容接口，填写包含 API 版本路径的 HTTPS 基础地址 |
+用通过 `pnpm run admin:user add <用户名> --creator` 授权的本地账号登录，在控制台顶部打开「模型设置」。选择 OpenAI、Claude、Gemini 或 OpenAI 兼容服务，填写供应商的文本模型 ID 和 API 密钥。Gemini 模型 ID 省略 `models/`，兼容服务填写包含版本路径的 HTTPS API 基础地址。点击「保存模型设置」后，下一个公开模拟草稿使用新配置，无需重启 Worker。默认使用本地模拟模板。
 
 控制台使用 `mock-a` 或 `mock-b` 从「运行 → 发起模拟」输入测试消息。运行详情的草稿阶段显示供应商和配置的模型名。用有 REVIEWER 权限的账号进入「审批 → 模拟提案」看拟回复。兼有运行查看权限的审批员可以从运行详情点「查看模拟提案」。验收人设时，可保存不同版本的身份提示词，再用同一输入各发起一次，直接比较提案正文。
 
-启用真实模型后，公开模拟的写作请求会把模拟输入、身份写作指令和允许公开引用的记忆摘录发送给所选供应商，可能产生 API 费用。是否回复仍在本地判断，私聊模拟仍使用本地模板。生成正文后继续走原有审批。批准后的模拟回执仍写入本地账本。API 密钥只配置在 Worker 环境中。请求失败时在 Worker 日志查找 `model_request_failed`，按脱敏错误码和 HTTP 状态排查。
+启用真实模型后，公开模拟的写作请求会把模拟输入、身份写作指令和允许公开引用的记忆摘录发送给所选供应商，可能产生 API 费用。是否回复仍在本地判断，私聊模拟仍使用本地模板。生成正文后继续走原有审批，批准后的模拟回执写入本地账本。请求失败时在 Worker 日志查找 `model_request_failed`。
+
+设置保存在服务端的凭据文件中，控制台只显示密钥是否已保存。同一系统用户运行 API 和 Worker 时，默认共用用户目录下按数据库划分的 `.rica/model-settings`。分开部署时，为两者挂载同一个持久化私有目录并设置 `RICA_MODEL_SETTINGS_DIR`，仅给一个管理 API 实例写权限，Worker 只需读取权限。Windows 共享目录应通过文件 ACL 限制访问。此前通过环境变量配置过模型的部署需要在控制台保存一次。
 
 ## 4. 日常使用和管理
 

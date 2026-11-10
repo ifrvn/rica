@@ -19,10 +19,13 @@ import type { PrismaClient } from '../../packages/persistence/generated/client.j
 import { pluginStatusView } from '../../packages/contracts/plugin-status.js'
 import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
+import { modelSettingsInput, modelSettingsView } from '../../packages/contracts/model-settings.js'
+import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
+  modelSettings?: ReturnType<typeof createModelSettingsStore>
   verifyConnector?: management.VerifyConnector
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
@@ -62,7 +65,8 @@ function runVersion(header: string) {
   return value
 }
 
-export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, verifyConnector }: Options) {
+export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus,
+  modelSettings, verifyConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -110,6 +114,41 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     }
     console.error(JSON.stringify({ service: 'api', event: 'management_error', requestId }))
     return c.json(error(requestId, 'INTERNAL_ERROR', 'Request could not be completed'), 500)
+  })
+
+  function deploymentModelSettings(actor: Principal) {
+    if (actor.issuer !== localIssuer || !actor.canCreate) management.denyPermission()
+    if (!modelSettings) throw new management.ManagementError(404, 'MODEL_SETTINGS_UNAVAILABLE', 'Model settings are unavailable')
+    return modelSettings
+  }
+
+  app.openapi(createRoute({
+    method: 'get', path: '/model-settings', security,
+    responses: { ...errors, 200: success(modelSettingsView) },
+  }), async (c) => {
+    const store = deploymentModelSettings(c.get('actor'))
+    return c.json(await store.status(), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: '/model-settings', security,
+    request: { headers: schema.versionHeader, body: body(modelSettingsInput) },
+    responses: { ...errors, 200: success(modelSettingsView) },
+  }), async (c) => {
+    const actor = c.get('actor')
+    const store = deploymentModelSettings(actor)
+    try {
+      const saved = await store.save(c.req.valid('json'), version(c.req.valid('header')))
+      console.info(JSON.stringify({ service: 'api', event: 'model_settings_updated', actorId: actor.id,
+        requestId: c.get('requestId'), version: saved.version, provider: saved.provider }))
+      return c.json(saved, 200)
+    } catch (cause) {
+      if (cause instanceof ModelSettingsError) {
+        if (cause.code === 'VERSION_CONFLICT') throw new management.ManagementError(412, cause.code, 'Model settings have changed')
+        throw new management.ManagementError(422, cause.code, 'An API key is required for this provider and endpoint')
+      }
+      throw cause
+    }
   })
 
   app.openapi(createRoute({
