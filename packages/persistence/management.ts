@@ -141,7 +141,7 @@ export async function updateCore(tx: Tx, scope: Scope, expected: number, input: 
   })
   const version = (latest?.version ?? 0) + 1
   await tx.coreVersion.create({
-    data: { characterId, version, hardProfile: input.coreProfile, actorId: actor.id, reason: input.reason },
+    data: { characterId, version, hardProfile: input.coreProfile, actorId: actor.id, reason: input.reason ?? '' },
   })
   const { authEpoch } = await tx.character.update({
     where: { id: characterId }, data: { activeCoreVersion: version, authEpoch: { increment: 1 } },
@@ -176,7 +176,7 @@ export async function updateIdentity(
   if (!latest) unavailable()
   const version = latest.version + 1
   await tx.identityVersion.create({
-    data: { characterId, identityId: id, version, roleProfile: input.roleProfile, actorId: actor.id, reason: input.reason },
+    data: { characterId, identityId: id, version, roleProfile: input.roleProfile, actorId: actor.id, reason: input.reason ?? '' },
   })
   await tx.identity.update({ where: { id }, data: { activeVersion: version } })
   return { id, version, authEpoch: await advanceEpoch(tx, characterId) }

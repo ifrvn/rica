@@ -67,7 +67,7 @@ const parsed = computed(() => {
   if (!schemas.value) return
   const { accountBindingInput, characterInput, controlInput, coreInput, identityInput, identityUpdate, simulationAccountRegistration } = schemas.value.management
   const { connectorAccountRegistration } = schemas.value.connector
-  const reason = form.reason.trim()
+  const reason = form.reason.trim() || undefined
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
     timezone: form.timezone || undefined, writingStyle: form.style, writingPrompt: form.writingPrompt.trim() || undefined }
@@ -103,7 +103,7 @@ const validationMessages: Record<string, string> = {
   platform: '请选择模拟平台。',
   instance: '请检查实例名称或本机接口地址。',
   remote: '请检查账号标识或 Agent ID。',
-  reason: '请输入 1–240 个字符的操作理由。',
+  reason: '变更原因最多 240 个字符。',
 }
 const fieldByPath: Record<string, string> = {
   displayName: 'name', aiDisclosure: 'disclosure', writingStyle: 'style',
@@ -365,7 +365,7 @@ onMounted(() => { if (props.characterId) void run(load) })
             </template>
           </NFormItem>
         </template>
-        <NFormItem v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明"
+        <NFormItem v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明（可选）"
           :label-props="{ for: 'workspace-reason' }" :validation-status="fieldError('reason') ? 'error' : undefined">
           <NInput :placeholder="editor === 'core' ? '例如：统一 AI 身份披露文案' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model:value="form.reason" :input-props="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
           <template v-if="fieldError('reason')" #feedback>

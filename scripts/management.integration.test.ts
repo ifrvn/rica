@@ -297,7 +297,7 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
 
 test('management commands reject stale updates and commit idempotency and audit atomically', async () => {
   const path = characterPath(a)
-  const core = { coreProfile: { aiDisclosure: 'AI role, version two' }, reason: 'Update policy' }
+  const core = { coreProfile: { aiDisclosure: 'AI role, version two' } }
   assert.equal((await request('PUT', path + '/core', { data: core })).status, 428)
   const updates = await Promise.all(Array.from({ length: 2 }, () =>
     request('PUT', path + '/core', { ifMatch: '"1"', data: core }),

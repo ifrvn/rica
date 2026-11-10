@@ -5,6 +5,7 @@ const slug = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
 const text = z.string().trim().min(1).max(240).regex(/^[^\p{Cc}]+$/u)
 const shortText = text.max(120)
 export const reasonInput = z.strictObject({ reason: text })
+const optionalReasonInput = reasonInput.partial()
 export const coreProfile = z.strictObject({
   name: shortText.optional(),
   aiDisclosure: text,
@@ -58,9 +59,9 @@ export const characterInput = z.strictObject({
   timezone,
   coreProfile,
 })
-export const coreInput = reasonInput.extend({ coreProfile })
+export const coreInput = optionalReasonInput.extend({ coreProfile })
 export const identityInput = z.strictObject({ slug, roleProfile: identityProfile })
-export const identityUpdate = reasonInput.extend({ roleProfile: identityProfile })
+export const identityUpdate = optionalReasonInput.extend({ roleProfile: identityProfile })
 export const simulationAccountRegistration = z.strictObject({
   platform: z.enum(['mock-a', 'mock-b']),
   instanceKey: shortText,
@@ -78,7 +79,7 @@ export const automationEligibilityView = z.object({
   reasons: z.array(z.enum(['BINDING_INACTIVE', 'SIMULATION_ONLY', 'UNSUPPORTED_ADAPTER', 'EXTERNAL_AUTO_DISABLED'])),
 })
 
-export const controlInput = reasonInput.extend({
+export const controlInput = optionalReasonInput.extend({
   scope: z.enum(['CHARACTER', 'IDENTITY', 'ACCOUNT']),
   scopeId: resourceId,
   operation: z.enum(['PAUSE', 'RESUME', 'REVOKE_ACCOUNT']),
