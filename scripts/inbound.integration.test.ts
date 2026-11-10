@@ -947,6 +947,36 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   assert.ok(cleared.every(({ content }) => content === null))
 })
 
+test('private writing stays local when the worker is configured with a hosted model', async () => {
+  assert.ok(fixture)
+  const personal = fixture.accounts[1]
+  const scope = await privateThread(personal)
+  const event = await ingestSimulatedEvent(db, {
+    ...scope, accountId: personal.id, sourceKey: randomUUID(), kind: 'REPLY', occurredAt,
+    messageText: 'Private message for the local model only',
+  })
+  assert.equal(event.status, 'ACCEPTED')
+  const prepare = await db.outboxEvent.findFirstOrThrow({ where: { runId: event.runId, type: runQueuedEvent } })
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    await prepareSimulatedRun(runtime, prepare.eventId)
+    const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: event.runId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, {
+      id: 'openai', version: '1.0.0', contractVersion: 1,
+      implementation: {
+        hostedModel: 'fixture-model',
+        async decide() { assert.fail('Private decision reached the hosted plugin') },
+        async write() { assert.fail('Private writing reached the hosted plugin') },
+      },
+    })
+    const draft = await db.simulatedDraft.findFirstOrThrow({ where: { runId: event.runId } })
+    assert.equal(draft.modelId, simulatedModelPlugin.id)
+    assert.equal(draft.modelVersion, simulatedModelPlugin.version)
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 test('revocation during private writing prevents the draft from committing', async () => {
   assert.ok(fixture)
   const personal = fixture.accounts[1]

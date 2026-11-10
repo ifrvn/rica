@@ -9,6 +9,7 @@ import { processSimulatedDraft } from '../../packages/persistence/simulated-draf
 import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
 import type { ModelProvider } from '../../packages/runtime/model-provider.js'
+import { HostedModelError } from '../../packages/runtime/hosted-models.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
 import type { Plugin } from '../../packages/runtime/plugin-registry.js'
 
@@ -69,7 +70,10 @@ export async function startOutboxWorker(
             AND processed_at IS NULL AND quarantined_at IS NULL ${outboxAttemptFence(attempt)}
         `
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof HostedModelError) console.warn(JSON.stringify({
+        service: 'worker', event: 'model_request_failed', modelId: model.id, code: error.code, status: error.status,
+      }))
       try {
         if (ticket !== null) await db.$queryRaw`
           SELECT public.rica_fail_outbox_attempt(${eventId}::uuid, ${generation}::int, ${ticket}::int)::text

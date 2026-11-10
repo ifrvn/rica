@@ -87,7 +87,23 @@ $ricaCharacter.id
 
 通过管理 API 操作时，可用账号池接口登记和关联，再通过 `/controls` 启用。新角色和新身份初始为暂停。用 `/memberships` 将目标角色的 `REVIEWER` 权限授予审批人的本地用户名。`ADMIN` 与 `REVIEWER` 分别授权。带幂等键的请求在重试同一操作时应复用原键和请求体。[管理 API 接口与权限](docs/management-api.md#已开放的入口)
 
-身份可设置专用写作提示词。在「角色与身份」编辑对应身份，填写「身份提示词」并保存。提示词随身份版本传给回复生成模型，内置模拟模型仍按模板回复。
+身份可设置专用写作提示词。在「角色与身份」编辑对应身份，填写「身份提示词」并保存。提示词随身份版本传给回复生成模型。
+
+### 用真实模型试写
+
+在 Worker 的 `.env` 中设置 `RICA_MODEL_PROVIDER`、`RICA_MODEL_NAME` 和对应的 API 密钥，然后重启 `pnpm run dev:worker`。模型 ID 使用供应商为你的账号提供的文本模型 ID。每个 Worker 选择一个模型提供方。
+
+| `RICA_MODEL_PROVIDER` | Worker 环境变量 | 接口 |
+| --- | --- | --- |
+| `simulated`（默认） | 无 | 本地模板 |
+| `openai` | `OPENAI_API_KEY` | OpenAI Chat Completions |
+| `anthropic` | `ANTHROPIC_API_KEY` | Claude Messages |
+| `gemini` | `GEMINI_API_KEY` | Gemini Developer API 的 `generateContent`，填写不带 `models/` 的模型 ID |
+| `openai-compatible` | `RICA_MODEL_API_KEY`、`RICA_MODEL_BASE_URL` | Chat Completions 兼容接口，填写包含 API 版本路径的 HTTPS 基础地址 |
+
+控制台使用 `mock-a` 或 `mock-b` 从「运行 → 发起模拟」输入测试消息。运行详情的草稿阶段显示供应商和配置的模型名。用有 REVIEWER 权限的账号进入「审批 → 模拟提案」看拟回复。兼有运行查看权限的审批员可以从运行详情点「查看模拟提案」。验收人设时，可保存不同版本的身份提示词，再用同一输入各发起一次，直接比较提案正文。
+
+启用真实模型后，公开模拟的写作请求会把模拟输入、身份写作指令和允许公开引用的记忆摘录发送给所选供应商，可能产生 API 费用。是否回复仍在本地判断，私聊模拟仍使用本地模板。生成正文后继续走原有审批。批准后的模拟回执仍写入本地账本。API 密钥只配置在 Worker 环境中。请求失败时在 Worker 日志查找 `model_request_failed`，按脱敏错误码和 HTTP 状态排查。
 
 ## 4. 日常使用和管理
 

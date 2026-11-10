@@ -3,6 +3,7 @@ import { reviewTarget } from '../contracts/action-review.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
+import { simulatedModelPlugin } from '../runtime/simulated-model.js'
 import { maxSimulatedTextLength } from '../runtime/model-provider.js'
 import type { Plugin } from '../runtime/plugin-registry.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
@@ -137,7 +138,7 @@ export async function generateSimulatedDraft(
 }
 
 export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter, model: Plugin<ModelProvider>, attempt?: OutboxAttempt,
+  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter, configuredModel: Plugin<ModelProvider>, attempt?: OutboxAttempt,
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
@@ -170,8 +171,12 @@ export async function processSimulatedDraft(
       ? { purpose: 'PUBLIC_REFERENCE', audience: scope.conversation_id }
       : null
 
-  // Model calls stay outside the write transaction. A retry can rebuild from the same snapshots.
-  const signal = AbortSignal.timeout(5_000)
+  // Private simulation stays local. Hosted plugins receive only the public writing input.
+  const model = request?.purpose === 'PRIVATE_REPLY' && configuredModel.implementation.hostedModel
+    ? simulatedModelPlugin : configuredModel
+  const modelVersion = model.implementation.hostedModel ?? model.version
+  // Stay within the 30-second outbox lease. Model calls run outside the write transaction.
+  const signal = AbortSignal.timeout(model.implementation.hostedModel ? 20_000 : 5_000)
   const text = input?.text ?? null
   const candidate = request && text !== null
     ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal)
@@ -211,7 +216,7 @@ export async function processSimulatedDraft(
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
           selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
-          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion: model.version,
+          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion,
         })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({
@@ -224,7 +229,7 @@ export async function processSimulatedDraft(
             citationIds: candidate.draft.evidenceIds,
             beliefRefs: candidate.beliefVersions,
             modelId: model.id,
-            modelVersion: model.version,
+            modelVersion,
           },
         })
         await tx.actionProposal.create({

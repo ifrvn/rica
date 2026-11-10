@@ -494,8 +494,9 @@ async function decide(decision: Decision) {
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')"
           @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
-        <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')"
+        <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReviewSimulation"
           :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
+          @review="navigate({ characterId, page: 'review', detail: $event })"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event })" />
       </template>

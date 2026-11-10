@@ -16,8 +16,8 @@ type Character = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 
-const props = defineProps<{ characterId: string; canStart: boolean; detailId?: string; runQuery: string }>()
-const emit = defineEmits<{ expired: []; open: [id?: string]; audit: [id: string]; commitment: [id: string]; filter: [query: string] }>()
+const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string]; audit: [id: string]; commitment: [id: string]; filter: [query: string] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -335,6 +335,8 @@ onMounted(() => { void act(load) })
       <template v-if="selected">
         <div class="run-actions">
           <NTag size="small" :bordered="false">{{ stateName(selected.state) }}</NTag>
+          <NButton v-if="canReview && selected.proposal" size="small" secondary
+            @click="emit('review', selected.proposal.id)">查看模拟提案</NButton>
           <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
           <NButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
             size="small" quaternary @click="emit('commitment', selected.id)">登记模拟承诺</NButton>

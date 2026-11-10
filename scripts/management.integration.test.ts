@@ -1,4 +1,4 @@
-import { startSimulationPlatforms } from '../apps/runtime-plugins.js'
+import { startCognitionPlugins, startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -3054,7 +3054,7 @@ test('three identities on two platforms reach separate approved simulation recei
   }
 })
 
-test('console simulation runs use an isolated conversation, one approval and one receipt', { timeout: 30_000 }, async () => {
+test('console simulation runs use an isolated conversation, one approval and one receipt', { timeout: 30_000 }, async (t) => {
   const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-console') })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const characterId: string = created.body.id
@@ -3124,13 +3124,26 @@ test('console simulation runs use an isolated conversation, one approval and one
     const queued = await owner.outboxEvent.findFirstOrThrow({ where: { runId: id, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, queued.eventId)
     const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: id, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, draft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)
+    const generatedReply = 'Welcome to the discussion. What would you like to know?'
+    const plugins = await startCognitionPlugins({
+      RICA_MODEL_PROVIDER: 'openai', RICA_MODEL_NAME: 'fixture-model', OPENAI_API_KEY: 'fixture-key',
+    })
+    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({
+      choices: [{ finish_reason: 'stop', message: { content: generatedReply } }],
+    }))
+    try {
+      await processSimulatedDraft(runtime, draft.eventId, simulationPlatforms.resolveAdapter, plugins.model)
+      assert.equal(fetch.mock.callCount(), 1)
+    } finally {
+      fetch.mock.restore()
+      await plugins.stop()
+    }
     const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: id } })
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
     const actionPath = character + '/actions/' + action.id
     const preview = await request('GET', actionPath, { actor: 'reviewer' })
     assert.equal(preview.status, 200)
-    assert.ok(preview.body.content)
+    assert.ok(preview.body.content.startsWith(generatedReply + '\n\nAI 披露：'))
     const decision = await request('POST', actionPath + '/decisions', {
       actor: 'reviewer', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
       data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Console fixture checked' },
@@ -3139,6 +3152,8 @@ test('console simulation runs use an isolated conversation, one approval and one
     const approved = await request('GET', replayPath)
     assert.equal(approved.status, 200, JSON.stringify(approved.body))
     assert.deepEqual(Object.keys(approved.body.draft).sort(), ['createdAt', 'modelId', 'modelVersion'])
+    assert.equal(approved.body.draft.modelId, 'openai')
+    assert.equal(approved.body.draft.modelVersion, 'fixture-model')
     assert.equal(Date.parse(approved.body.proposal.createdAt), action.createdAt.getTime())
     assert.equal(approved.body.proposal.reviewDecision, 'APPROVE')
     assert.ok(approved.body.proposal.reviewedAt)

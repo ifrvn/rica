@@ -12,6 +12,7 @@ type ModelInput = Readonly<{
 export type WritingStyle = 'neutral' | 'formal' | 'casual' | 'concise'
 
 export type ModelProvider = Readonly<{
+  hostedModel?: string
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; identityPrompt?: string }>, signal: AbortSignal): Promise<unknown>
 }>
