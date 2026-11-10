@@ -70,30 +70,32 @@ onMounted(load)
 
 <template>
   <NModal :show="true" preset="card" title="模型设置" :mask-closable="!busy"
-    :close-on-esc="!busy" :closable="!busy" class="model-settings-dialog"
+    :close-on-esc="!busy" :closable="!busy" style="width: 32rem; max-width: calc(100% - 2rem)"
     @update:show="!$event && emit('close')">
     <NSpin v-if="busy && !current" aria-label="正在读取模型设置" />
     <NForm v-if="current" :show-feedback="false" @submit.prevent="save">
       <p class="model-settings-scope">应用于此部署所有角色的公开模拟草稿。启用外部模型后，模拟消息、身份写作指令及允许公开引用的资料会发送给所选服务。</p>
-      <NFormItem label="模型提供方" :label-props="{ for: 'model-settings-provider' }">
-        <NSelect :value="form.provider" :options="options" :disabled="busy"
-          :input-props="{ id: 'model-settings-provider' }" @update:value="selectProvider" />
-      </NFormItem>
-      <template v-if="hosted">
-        <NFormItem label="模型 ID" :label-props="{ for: 'model-settings-name' }">
-          <NInput v-model:value="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
-            :input-props="{ id: 'model-settings-name', required: true }" />
+      <div class="model-settings-fields">
+        <NFormItem label="模型提供方" :label-props="{ for: 'model-settings-provider' }">
+          <NSelect :value="form.provider" :options="options" :disabled="busy"
+            :input-props="{ id: 'model-settings-provider' }" @update:value="selectProvider" />
         </NFormItem>
-        <NFormItem v-if="compatible" label="API 基础地址" :label-props="{ for: 'model-settings-url' }">
-          <NInput v-model:value="form.baseUrl" :disabled="busy" placeholder="https://provider.example/v1"
-            :input-props="{ id: 'model-settings-url', required: true }" />
-        </NFormItem>
-        <NFormItem label="API 密钥" :label-props="{ for: 'model-settings-key' }">
-          <NInput v-model:value="form.apiKey" type="password" :disabled="busy"
-            :placeholder="reuseKey ? '已保存密钥，留空继续使用' : '输入供应商 API 密钥'"
-            :input-props="{ id: 'model-settings-key', autocomplete: 'new-password', required: !reuseKey }" />
-        </NFormItem>
-      </template>
+        <template v-if="hosted">
+          <NFormItem label="模型 ID" :label-props="{ for: 'model-settings-name' }">
+            <NInput v-model:value="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
+              :input-props="{ id: 'model-settings-name', required: true }" />
+          </NFormItem>
+          <NFormItem v-if="compatible" label="API 基础地址" :label-props="{ for: 'model-settings-url' }">
+            <NInput v-model:value="form.baseUrl" :disabled="busy" placeholder="https://provider.example/v1"
+              :input-props="{ id: 'model-settings-url', required: true }" />
+          </NFormItem>
+          <NFormItem label="API 密钥" :label-props="{ for: 'model-settings-key' }">
+            <NInput v-model:value="form.apiKey" type="password" :disabled="busy"
+              :placeholder="reuseKey ? '已保存密钥，留空继续使用' : '输入供应商 API 密钥'"
+              :input-props="{ id: 'model-settings-key', autocomplete: 'new-password', required: !reuseKey }" />
+          </NFormItem>
+        </template>
+      </div>
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
       <div class="model-settings-actions">
@@ -109,7 +111,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-.model-settings-dialog { width: min(32rem, calc(100vw - 2rem)); }
 .model-settings-scope { margin: 0 0 1rem; color: #526763; }
+.model-settings-fields { display: grid; gap: 1rem; }
 .model-settings-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 </style>
