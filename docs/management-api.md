@@ -38,7 +38,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `POST /v1/characters`、`PUT /c/core` | 指定主体创建初始暂停角色。ADMIN 提交新核心版本，可省略 `reason`。 |
 | `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本，修改时可省略 `reason`。可选字段 `roleProfile.writingPrompt` 最多 4000 个字符，仅 ADMIN 可读。提交新版本时省略该字段即可清除。 |
 | `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
-| `GET /c/plugins` | ADMIN 或 AUDITOR 查看发布清单、部署插件状态、配置是否存在，以及 API、Worker、模拟执行器与单次连接器的脱敏报告。缺少有效报告时返回空状态。 |
+| `GET /c/plugins` | ADMIN 或 AUDITOR 查看部署插件状态、配置是否存在、各进程的脱敏报告，以及可选发布清单的升级预览。预览标出目标组件缺失、降级和契约不兼容。 |
 | `PUT /v1/deployment-plugins` | 具有创建角色权限的本地部署操作者提交 `INSTALL`、`ENABLE`、`DISABLE` 或 `CONFIGURE_NEWBI`。使用 `If-Match` 指定 `deployment.version`。返回更新后的版本与脱敏设置。 |
 | `GET /v1/model-settings`、`PUT /v1/model-settings` | 具有创建角色权限的本地部署操作者查看和保存已启用的模型配置。密钥可写，读取仅返回 `hasKey`。 |
 | `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |

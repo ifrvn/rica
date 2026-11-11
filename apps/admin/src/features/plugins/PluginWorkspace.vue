@@ -19,6 +19,7 @@ const modelEditor = computed(() => {
   return id && id !== 'newbi' && deployment.value?.plugins[id] === 'ENABLED' ? id : undefined
 })
 const changedPlugin = ref<DeploymentPluginId>()
+const releasePreview = ref<DeploymentPluginId>()
 const form = reactive({ endpoint: '', credential: '' })
 const stages = { NOT_INSTALLED: '未安装', INSTALLED: '已安装 · 未启用', ENABLED: '已启用' } as const
 const operations = { NOT_INSTALLED: 'INSTALL', INSTALLED: 'ENABLE', ENABLED: 'DISABLE' } as const
@@ -26,6 +27,24 @@ const newbiComponents = computed(() => status.value?.services.flatMap(({ catalog
   catalog.filter(({ kind }) => kind === 'platform-reader' || kind === 'platform-reply-executor')) ?? [])
 const modelVersions = computed(() => new Map(status.value?.services.find(({ service }) => service === 'worker')
   ?.catalog.filter(({ kind }) => kind === 'model').map(({ id, version }) => [id, version])))
+const release = computed(() => status.value?.release)
+const upgrades = computed(() => new Map(release.value?.status === 'AVAILABLE'
+  ? release.value.upgrades.map((item) => [item.id, item] as const) : []))
+const upgradeProblems = {
+  MISSING_COMPONENT: '目标发布缺少此组件',
+  INCOMPATIBLE_CONTRACT: '宿主契约版本不兼容',
+  DOWNGRADE: '目标发布会降级此组件',
+}
+const serviceNames = {
+  api: '管理 API', worker: '认知 Worker', 'simulation-executor': '模拟执行器',
+  'connector-reader': 'Newbi 读取', 'connector-executor': 'Newbi 发送',
+}
+
+function toggleRelease(id: DeploymentPluginId) {
+  releasePreview.value = releasePreview.value === id ? undefined : id
+  const focusId = releasePreview.value ? 'plugin-release-heading-' : 'plugin-release-toggle-'
+  void nextTick(() => document.getElementById(focusId + id)?.focus())
+}
 
 function toggleEditor(id: DeploymentPluginId) {
   if (editing.value === id) {
@@ -78,12 +97,16 @@ function saveNewbi() {
 <template>
   <div class="console-stack plugin-workspace">
     <div class="console-actions plugin-toolbar">
+      <span v-if="release?.status === 'UNCONFIGURED'" class="plugin-release-note">尚未配置发布清单</span>
+      <span v-else-if="release?.status === 'AVAILABLE' && !release.upgrades.length"
+        class="plugin-release-note">发布清单无组件版本变更</span>
       <NButton size="small" quaternary :loading="loading" :disabled="busy" @click="refresh">刷新插件</NButton>
     </div>
     <NAlert v-if="loadError" type="error" role="alert">{{ loadError }}</NAlert>
     <NSpin v-else-if="loading && !deployment" aria-label="正在读取插件" />
     <NEmpty v-else-if="!deployment" description="暂无部署插件目录。" />
     <template v-else>
+      <NAlert v-if="release?.status === 'UNAVAILABLE'" type="warning" role="status">发布清单暂不可用。部署维护者可核对清单文件，再刷新插件。</NAlert>
       <article v-for="id in deploymentPluginIds" :key="id" class="console-record-workspace plugin-card"
         :aria-labelledby="'plugin-heading-' + id">
         <div class="console-section-heading plugin-title">
@@ -127,14 +150,45 @@ function saveNewbi() {
           </template>
         </div>
 
-        <div v-if="canConfigureModel" class="console-actions">
-          <NButton size="small" :type="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
+        <div v-if="canConfigureModel || (deployment.plugins[id] !== 'NOT_INSTALLED' && upgrades.has(id))" class="console-actions">
+          <NButton v-if="canConfigureModel" size="small" :type="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
             :secondary="deployment.plugins[id] === 'ENABLED'" :disabled="busy || loading"
             :loading="busy && changedPlugin === id && editing !== id" @click="changeStage(id)">
             {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装 ' + labels[id]
               : deployment.plugins[id] === 'INSTALLED' ? '启用 ' + labels[id] : '停用 ' + labels[id] }}
           </NButton>
+          <NButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && upgrades.has(id)"
+            :id="'plugin-release-toggle-' + id" size="small" secondary
+            :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
+            {{ releasePreview === id ? '收起升级预览' : '查看升级预览' }}
+          </NButton>
         </div>
+
+        <section v-if="releasePreview === id && deployment.plugins[id] !== 'NOT_INSTALLED'
+          && release?.status === 'AVAILABLE' && upgrades.has(id)" :id="'plugin-release-' + id"
+          class="plugin-config" :aria-labelledby="'plugin-release-heading-' + id">
+          <div class="console-section-heading">
+            <h3 :id="'plugin-release-heading-' + id" tabindex="-1">Rica {{ release.ricaVersion }} · {{ labels[id] }} 版本变更</h3>
+          </div>
+          <ul class="console-record-list">
+            <li v-for="entry in upgrades.get(id)?.components" :key="entry.service + '/' + entry.current.id">
+              <strong>{{ serviceNames[entry.service] }} · {{ entry.current.id }}</strong>
+              <span class="plugin-release-note">
+                当前 v{{ entry.current.version }} · 契约 {{ entry.current.contractVersion }}
+                <template v-if="entry.target"> → 目标 v{{ entry.target.version }} · 契约 {{ entry.target.contractVersion }}</template>
+              </span>
+              <span v-if="entry.problem">{{ upgradeProblems[entry.problem] }}</span>
+            </li>
+          </ul>
+          <NAlert v-if="upgrades.get(id)?.components.some(({ problem }) => problem)" type="warning">
+            该发布需要先解决上述组件问题。
+          </NAlert>
+          <p v-else>部署此版本的 Rica 并重启相关进程后生效。</p>
+          <p v-if="id === 'newbi'">待核对的发送结果仍绑定原执行版本及幂等键。</p>
+          <NButton tag="a" :href="release.releaseUrl" target="_blank" rel="noopener noreferrer" size="small" secondary>
+            查看发布说明
+          </NButton>
+        </section>
 
         <NAlert v-if="error && changedPlugin === id" type="error" role="alert">{{ error }}</NAlert>
         <section v-if="editing === 'newbi' && id === 'newbi' && deployment.plugins[id] === 'ENABLED'"
@@ -167,6 +221,7 @@ function saveNewbi() {
 <style scoped>
 .plugin-workspace { gap: 1rem; }
 .plugin-toolbar { justify-content: flex-end; }
+.plugin-release-note { color: var(--console-muted); font-size: .875rem; }
 .plugin-card { display: grid; gap: 1rem; }
 .plugin-title { align-items: flex-start; margin: 0; }
 .plugin-title p { margin: .25rem 0 0; color: var(--console-muted); }

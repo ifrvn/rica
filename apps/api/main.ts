@@ -11,6 +11,7 @@ import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
+import { readPluginRelease } from '../plugin-releases.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
@@ -37,6 +38,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
   pluginStatus: () => readPluginStatus(redis),
+  pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   modelSettings: createModelSettingsStore(settingsDirectory),
   deploymentPlugins,
   verifyConnector: async (endpoint, agentId) => {

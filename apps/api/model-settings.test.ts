@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -8,6 +8,8 @@ import { createModelSettingsStore } from '../../packages/runtime/model-settings-
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { createNewbiReplyExecutor } from '../../packages/runtime/newbi-client.js'
 import { startConfiguredModel } from '../runtime-plugins.js'
+import { readPluginStatus } from '../plugin-observation.js'
+import { readPluginRelease } from '../plugin-releases.js'
 import { localIssuer } from './admin-auth.js'
 import { createManagementApp } from './management.js'
 
@@ -123,4 +125,54 @@ test('Newbi credentials stay write-only and disabled connectors cannot acquire c
   assert.equal((await pluginChange({ action: 'DISABLE', id: 'newbi' }, 3)).status, 200)
   assert.equal(await plugins.readNewbi(), undefined)
   await assert.rejects(oldExecutor.verify(), /Newbi configuration changed/)
+})
+
+test('release previews detect both Newbi components and reject incompatible upgrades', async (t) => {
+  const { directory } = await fixture(t)
+  const path = join(directory, 'plugin-release.json')
+  const { services } = await readPluginStatus()
+  const reader = services.find(({ service }) => service === 'connector-reader')!.catalog[0]
+  const executor = services.find(({ service }) => service === 'connector-executor')!.catalog[0]
+  const models = services.find(({ service }) => service === 'worker')!.catalog.filter(({ kind }) => kind === 'model')
+  const manifest = { schemaVersion: 1, ricaVersion: '1.10.0', releaseUrl: 'https://example.com/releases/1.10.0' }
+  const nextReader = { ...reader, version: '1.10.0' }
+
+  await writeFile(path, JSON.stringify({ ...manifest, components: [nextReader] }))
+  const partial = await readPluginRelease(path, services)
+  assert.equal(partial.status, 'AVAILABLE')
+  if (partial.status !== 'AVAILABLE') return
+  assert.deepEqual(partial.upgrades[0].components.map(({ problem }) => problem), [null, 'MISSING_COMPONENT'])
+
+  await writeFile(path, JSON.stringify({ ...manifest, components: [nextReader, { ...executor, contractVersion: 2 }] }))
+  const incompatible = await readPluginRelease(path, services)
+  assert.equal(incompatible.status, 'AVAILABLE')
+  if (incompatible.status !== 'AVAILABLE') return
+  assert.deepEqual(incompatible.upgrades[0].components.map(({ problem }) => problem), [null, 'INCOMPATIBLE_CONTRACT'])
+
+  await writeFile(path, JSON.stringify({ ...manifest, components: [nextReader, executor, ...models] }))
+  const available = await readPluginRelease(path, services)
+  assert.equal(available.status, 'AVAILABLE')
+  if (available.status !== 'AVAILABLE') return
+  assert.deepEqual(available.upgrades.map(({ id }) => id), ['newbi'])
+  assert.ok(available.upgrades[0].components.every(({ problem }) => problem === null))
+
+  await writeFile(path, JSON.stringify({ ...manifest, components: [nextReader, { ...executor, version: '0.9.0' }, ...models] }))
+  const downgrade = await readPluginRelease(path, services)
+  assert.equal(downgrade.status, 'AVAILABLE')
+  if (downgrade.status !== 'AVAILABLE') return
+  assert.deepEqual(downgrade.upgrades[0].components.map(({ problem }) => problem), [null, 'DOWNGRADE'])
+})
+
+test('unreadable or ambiguous release manifests expose no file details or release link', async (t) => {
+  const { directory } = await fixture(t)
+  const path = join(directory, 'plugin-release.json')
+  const { services } = await readPluginStatus()
+  const reader = services.find(({ service }) => service === 'connector-reader')!.catalog[0]
+  const manifest = { schemaVersion: 1, ricaVersion: '1.10.0', releaseUrl: 'https://example.com/releases/1.10.0' }
+  assert.deepEqual(await readPluginRelease(undefined, services), { status: 'UNCONFIGURED' })
+  assert.deepEqual(await readPluginRelease(path, services), { status: 'UNAVAILABLE' })
+  await writeFile(path, JSON.stringify({ ...manifest, components: [reader, reader] }))
+  assert.deepEqual(await readPluginRelease(path, services), { status: 'UNAVAILABLE' })
+  await writeFile(path, JSON.stringify({ ...manifest, releaseUrl: 'https://user:secret@example.com/1.10.0', components: [reader] }))
+  assert.deepEqual(await readPluginRelease(path, services), { status: 'UNAVAILABLE' })
 })

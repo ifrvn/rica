@@ -16,7 +16,7 @@ import { decideReviewAction, listReviewActions } from '../../packages/persistenc
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { pluginStatusView } from '../../packages/contracts/plugin-status.js'
+import { pluginStatusView, type PluginReleaseView } from '../../packages/contracts/plugin-status.js'
 import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 import { modelSettingsInput, modelSettingsView } from '../../packages/contracts/model-settings.js'
@@ -27,6 +27,7 @@ import { DeploymentPluginError, type createDeploymentPluginStore } from '../../p
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
+  pluginRelease?: (services: Awaited<ReturnType<typeof readPluginStatus>>['services']) => Promise<PluginReleaseView>
   modelSettings?: ReturnType<typeof createModelSettingsStore>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   verifyConnector?: management.VerifyConnector
@@ -68,7 +69,7 @@ function runVersion(header: string) {
   return value
 }
 
-export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus,
+export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
   modelSettings, deploymentPlugins, verifyConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
@@ -283,8 +284,11 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
     const current = await pluginStatus()
     if (!deploymentPlugins) return c.json(current, 200)
-    const deployment = await deploymentPlugins.status(await modelProvider())
-    return c.json({ ...current, deployment,
+    const [deployment, release] = await Promise.all([
+      modelProvider().then((provider) => deploymentPlugins.status(provider)),
+      pluginRelease?.(current.services),
+    ])
+    return c.json({ ...current, deployment, release,
       newbiRegistrationAvailable: deployment.plugins.newbi === 'ENABLED' && deployment.newbi.hasCredential }, 200)
   })
 
