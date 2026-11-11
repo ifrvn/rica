@@ -269,6 +269,7 @@ model PlatformAccount {
   contacts        Contact[]
   conversations   Conversation[]
   planParticipants SimulationPlanParticipant[]
+  commitmentCollaborations CommitmentCollaborator[]
 
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
@@ -940,6 +941,7 @@ model SimulationCommitment {
   actionId    String               @map("action_id") @db.Uuid
   scheduleId  String               @map("schedule_id") @db.Uuid
   title       String
+  task        String?
   state       CommitmentState      @default(OPEN)
   dueAt       DateTime             @map("due_at") @db.Timestamptz
   version     Int                  @default(1)
@@ -947,12 +949,25 @@ model SimulationCommitment {
   receipt     SimulationReceipt    @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
   schedule    SimulationSchedule   @relation(fields: [characterId, scheduleId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   revisions   CommitmentRevision[]
+  collaborators CommitmentCollaborator[]
 
   @@unique([characterId, id])
   @@unique([characterId, actionId])
   @@unique([characterId, scheduleId])
   @@index([characterId, createdAt, id])
   @@map("simulation_commitments")
+}
+
+model CommitmentCollaborator {
+  commitmentId String               @map("commitment_id") @db.Uuid
+  characterId  String               @map("character_id") @db.Uuid
+  identityId   String               @map("identity_id") @db.Uuid
+  accountId    String               @map("account_id") @db.Uuid
+  commitment   SimulationCommitment @relation(fields: [characterId, commitmentId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction, map: "commitment_collaborators_commitment_fkey")
+  account      PlatformAccount     @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction, map: "commitment_collaborators_account_fkey")
+
+  @@id([commitmentId, identityId])
+  @@map("commitment_collaborators")
 }
 
 model CommitmentRevision {

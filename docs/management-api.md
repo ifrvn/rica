@@ -64,7 +64,8 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
 | `GET /c/memberships`、`POST /c/memberships` | ADMIN 或 AUDITOR 按用户名分页查看当前角色的成员及权限。ADMIN 授予或撤销现有本地账号权限。必须保留至少一名 ADMIN。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
-| `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记或变更有确认回执的模拟承诺。变更会更新关联提醒。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
+| `GET /c/commitment-receipts` | ADMIN 查询当前角色尚未登记承诺的已确认模拟回执，可用 `runId` 筛选。响应包含负责身份、平台、对象和回执时间。 |
+| `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记和编辑承诺事项、截止时间和协作身份，也可延期或关闭。负责人和提醒范围由已确认模拟回执确定。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
 | `GET /c/runs`、`POST /c/runs` | ADMIN 与 AUDITOR 按最近运行分页。ADMIN 用幂等键提交 `accountId` 和 `message`，在独立公开模拟会话中排队。角色、身份与账号须启用，账号须匹配已启用的模拟适配器。 |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
 | `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 或 AUDITOR 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |

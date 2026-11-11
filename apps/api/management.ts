@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
-import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
+import { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentReceiptView, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
 import { planInput, planStateInput, planView } from '../../packages/contracts/plans.js'
 import { listPlans, savePlan, setPlanEnabled } from '../../packages/persistence/plans.js'
@@ -892,6 +892,14 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     }, (tx) => management.updateSchedule(tx, scope, scheduleId, expected, input))
     return c.json({ ...result, requestId }, 200)
   })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/commitment-receipts`, security,
+    request: { params: characterParams, query: commitmentReceiptQuery },
+    responses: { ...errors, 200: success(schema.pageView(commitmentReceiptView)) },
+  }), async (c) => c.json(await management.listCommitmentReceipts(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, c.req.valid('query'),
+  ), 200))
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/commitments`, security,

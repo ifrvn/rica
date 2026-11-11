@@ -53,6 +53,8 @@ export function useConsoleTask(expired: () => void) {
       error.value = ({
         LAST_ADMIN: '角色必须保留至少一名管理员。',
         UNKNOWN_USER: '请先通过命令行创建该本地账号。',
+        COMMITMENT_COLLABORATOR_CHANGED: '协作账号绑定已变化，请重新读取并选择。',
+        COMMITMENT_CLOSED: '承诺已关闭，请重新读取。',
       } as Record<string, string>)[cause.code ?? ''] ?? ({
         403: '当前账号无权执行此操作。',
         404: '当前角色中找不到该资源，或暂无记录。',

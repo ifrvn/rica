@@ -22,10 +22,10 @@
 
 ## 承诺提醒
 
-角色的 ADMIN 可用 `POST /v1/characters/{characterId}/commitments` 登记承诺，提交 `actionId`、`title`、UTC 格式的 `dueAt` 和 `reason`，并带 `Idempotency-Key`。同一张已确认的模拟回执最多登记一条承诺。系统从回执对应的运行取得账号、会话和联系人，并在同一事务创建单次提醒。待执行、结果未知或属于其他角色的提案无法登记。
+角色的 ADMIN 可用 `GET /v1/characters/{characterId}/commitment-receipts` 查找尚未登记的已确认回执，也可按 `runId` 筛选。用 `POST /v1/characters/{characterId}/commitments` 登记时，提交 `actionId`、`title`、`task`、UTC 格式的 `dueAt`、`reason` 和 `collaborators`，并带 `Idempotency-Key`。无协作时提交空数组。协作身份须有当前角色的有效账号绑定。每张确认回执最多登记一条承诺，回执对应的负责身份、账号、会话和联系人用于唯一一条单次提醒。
 
 通过 `GET /v1/characters/{characterId}/commitments` 查询，可按 `accountId` 或 `contactId` 过滤。响应包含承诺状态、版本和关联提醒的下次触发时间。
 
-对 `/commitments/{commitmentId}` 执行 PUT 时提供 `If-Match` 和变更理由。操作为 `DEFER`、`FULFILL`、`CANCEL` 或 `EXPIRE`。延期需要更晚的未来 `dueAt`，标记过期需已到截止时间。延期或关闭会更新提醒版本，取消旧版本尚未执行的运行，并追加状态、期限、操作人和理由。关联提醒由承诺接口管理。
+对 `/commitments/{commitmentId}` 执行 PUT 时提供 `If-Match` 和变更理由。操作为 `EDIT`、`DEFER`、`FULFILL`、`CANCEL` 或 `EXPIRE`。编辑可修改标题、事项、截止时间和协作身份。变更截止时间需要更晚的未来 `dueAt`，标记过期需已到截止时间。延期或关闭会更新提醒版本，取消旧版本尚未执行的运行。每次变更追加状态、期限、操作人和理由。
 
 承诺提醒采用上述静默时段和补偿规则，推进到模拟上下文就绪。

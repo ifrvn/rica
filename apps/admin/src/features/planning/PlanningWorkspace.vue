@@ -1,60 +1,38 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCheckbox, NEmpty, NForm, NFormItem, NInput, NSelect, NTag } from 'naive-ui'
+import { NAlert, NButton, NCheckbox, NForm, NFormItem, NSelect, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView } from '../../../../../packages/contracts/management.js'
 import { scheduleUpdate, type scheduleView } from '../../../../../packages/contracts/schedules.js'
-import { commitmentInput, commitmentUpdate, type commitmentView } from '../../../../../packages/contracts/commitments.js'
-import type { runReplayView } from '../../../../../packages/contracts/simulation-observability.js'
 import { characterPath, formatTime, readAll, useConsoleTask } from '../../shared/console-data.js'
 import { request } from '../../shared/request.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import CollaborativePlans from './CollaborativePlans.vue'
+import CommitmentWorkspace from './CommitmentWorkspace.vue'
 
 type Schedule = z.infer<typeof scheduleView>
-type Commitment = z.infer<typeof commitmentView>
 type Account = z.infer<typeof accountView>
-type Replay = z.infer<typeof runReplayView>
 const props = defineProps<{ characterId: string; runId?: string }>()
 const emit = defineEmits<{ expired: []; clear: [feedback?: string]; run: [id: string] }>()
 const { busy, error, notice, active, run, command } = useConsoleTask(() => emit('expired'))
 const base = characterPath(props.characterId)
 const schedules = ref<Schedule[]>([])
-const commitments = ref<Commitment[]>([])
 const accounts = ref<Account[]>([])
-const selectedRun = ref<Replay>()
 const zone = ref('UTC')
-const editing = ref<'schedule' | 'commitment' | 'new-commitment'>()
 const schedule = ref<Schedule>()
-const commitment = ref<Commitment>()
 const editorHeading = ref<HTMLElement>()
 const plansHeading = ref<HTMLElement>()
-const commitmentsHeading = ref<HTMLElement>()
 let trigger: HTMLElement | undefined
-const form = reactive({ zone: 'UTC', kind: 'DAILY' as Schedule['rule']['kind'],
-  enabled: true, localTime: '09:00', dueAt: '', title: '', reason: '', operation: 'DEFER' as 'DEFER' | 'FULFILL' | 'CANCEL' | 'EXPIRE' })
-const stateLabels: Record<Commitment['state'], string> = {
-  OPEN: '待履行', DEFERRED: '已延期', FULFILLED: '已履行', CANCELED: '已取消', EXPIRED: '已到期',
-}
+const form = reactive({ zone: 'UTC', kind: 'DAILY' as Schedule['rule']['kind'], enabled: true, localTime: '09:00', dueAt: '' })
 const kinds = [{ value: 'DAILY', label: '每日计划' }, { value: 'REMINDER', label: '单次提醒' }]
-const operations = [{ value: 'DEFER', label: '延期' }, { value: 'FULFILL', label: '标记已履行' },
-  { value: 'CANCEL', label: '取消承诺' }, { value: 'EXPIRE', label: '标记已到期' }]
 const dueAt = computed(() => {
   const date = new Date(form.dueAt)
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined
 })
-const schedulePayload = computed(() => {
-  const rule = form.kind === 'DAILY' ? { kind: form.kind, localTime: form.localTime }
-    : { kind: form.kind, dueAt: dueAt.value }
-  return scheduleUpdate.safeParse({ zone: form.zone, enabled: form.enabled, rule })
-})
-const commitmentPayload = computed(() => editing.value === 'new-commitment'
-  ? commitmentInput.safeParse({ actionId: selectedRun.value?.proposal?.id, title: form.title,
-    dueAt: dueAt.value, reason: form.reason })
-  : commitmentUpdate.safeParse({ operation: form.operation, reason: form.reason,
-    ...(form.operation === 'DEFER' ? { dueAt: dueAt.value } : {}) }))
-const valid = computed(() => editing.value === 'schedule' ? schedulePayload.value.success
-  : !!(editing.value === 'new-commitment' ? selectedRun.value?.proposal?.receiptAt : commitment.value) && commitmentPayload.value.success)
+const payload = computed(() => scheduleUpdate.safeParse({
+  zone: form.zone, enabled: form.enabled,
+  rule: form.kind === 'DAILY' ? { kind: form.kind, localTime: form.localTime } : { kind: form.kind, dueAt: dueAt.value },
+}))
 const invalidZone = computed(() => !scheduleUpdate.shape.zone.safeParse(form.zone).success)
 const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -69,112 +47,71 @@ function toLocalInput(value: string) {
 }
 
 async function load() {
-  const [plans, promises, bindings, workspace] = await Promise.all([
-    readAll<Schedule>(base + '/schedules', active), readAll<Commitment>(base + '/commitments', active),
-    readAll<Account>(base + '/accounts', active), request<z.infer<typeof characterWorkspaceView>>(base),
+  const [plans, bindings, workspace] = await Promise.all([
+    readAll<Schedule>(base + '/schedules', active), readAll<Account>(base + '/accounts', active),
+    request<z.infer<typeof characterWorkspaceView>>(base),
   ])
   if (!active()) return
   schedules.value = plans.filter((item) => !item.commitmentId)
-  commitments.value = promises
   accounts.value = bindings
   zone.value = workspace.timezone
 }
 
-function openEditor(kind: NonNullable<typeof editing.value>) {
-  if (!editing.value) trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-  editing.value = kind
+function editSchedule(item: Schedule) {
+  trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  schedule.value = item
   error.value = ''
   notice.value = ''
-  void nextTick(() => editorHeading.value?.focus())
-}
-
-function editSchedule(item: Schedule) {
-  openEditor('schedule')
-  schedule.value = item
   Object.assign(form, { zone: item.zone, kind: item.rule.kind, enabled: item.enabled,
     localTime: item.rule.kind === 'DAILY' ? item.rule.localTime : '09:00',
     dueAt: item.rule.kind === 'REMINDER' ? toLocalInput(item.rule.dueAt) : '' })
+  void nextTick(() => editorHeading.value?.focus())
 }
 
-function editCommitment(item: Commitment) {
-  openEditor('commitment')
-  commitment.value = item
-  Object.assign(form, { reason: '', dueAt: toLocalInput(item.dueAt), operation: 'DEFER' })
-}
-
-function close(feedback?: string) {
-  const heading = editing.value === 'schedule' ? plansHeading : commitmentsHeading
-  editing.value = undefined
-  if (props.runId) emit('clear', feedback)
-  else void nextTick(() => (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : heading.value)?.focus())
+function close() {
+  schedule.value = undefined
+  void nextTick(() => (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : plansHeading.value)?.focus())
 }
 
 function refreshDraft() {
   void run(async () => {
     await load()
-    if (!active()) return
-    if (schedule.value && editing.value === 'schedule') {
-      const latest = schedules.value.find(({ id }) => id === schedule.value?.id)
-      if (!latest) { error.value = '找不到此计划。'; return }
-      schedule.value = latest
-    }
-    if (commitment.value && editing.value === 'commitment') {
-      const latest = commitments.value.find(({ id }) => id === commitment.value?.id)
-      if (!latest) { error.value = '找不到此承诺。'; return }
-      commitment.value = latest
-    }
+    if (!active() || !schedule.value) return
+    const latest = schedules.value.find(({ id }) => id === schedule.value?.id)
+    if (!latest) { error.value = '找不到此定时任务。'; return }
+    schedule.value = latest
     notice.value = '已更新版本，请与下方记录核对后提交。'
   })
 }
 
 function save() {
-  if (!valid.value) return
+  const result = payload.value
+  const item = schedule.value
+  if (!result.success || !item) return
   void run(async () => {
-    if (editing.value === 'schedule') {
-      const result = schedulePayload.value
-      if (!result.success || !schedule.value) return
-      await command(base + '/schedules/' + schedule.value.id, result.data, 'PUT', schedule.value.version)
-    } else {
-      const result = commitmentPayload.value
-      if (!result.success) return
-      if (editing.value === 'new-commitment') await command(base + '/commitments', result.data)
-      else if (commitment.value) await command(base + '/commitments/' + commitment.value.id, result.data, 'PUT', commitment.value.version)
-      else return
-    }
+    await command(base + '/schedules/' + item.id, result.data, 'PUT', item.version)
     if (!active()) return
-    notice.value = editing.value === 'schedule' ? '计划已保存。' : '承诺已保存。'
-    close(notice.value)
-    if (!props.runId) await load()
+    notice.value = '定时任务已保存。'
+    close()
+    await load()
   })
 }
 
-onMounted(() => {
-  void run(async () => {
-    await load()
-    if (!props.runId || !active()) return
-    const replay = await request<Replay>(base + '/runs/' + props.runId + '/replay')
-    if (!active()) return
-    if (replay.state === 'SIMULATED' && replay.proposal?.receiptAt) {
-      selectedRun.value = replay
-      openEditor('new-commitment')
-    } else error.value = '只有已确认模拟回执的运行可以登记承诺。'
-  })
-})
+onMounted(() => { void run(load) })
 </script>
 
 <template>
   <section class="console-workspace console-stack" aria-label="计划与承诺">
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <CollaborativePlans :character-id="characterId" :zone="zone"
-      @expired="emit('expired')" @run="emit('run', $event)" />
-    <section v-if="editing" class="console-panel" aria-labelledby="plan-editor-heading">
+    <CollaborativePlans :character-id="characterId" :zone="zone" @expired="emit('expired')" @run="emit('run', $event)" />
+    <CommitmentWorkspace :character-id="characterId" :run-id="runId" @expired="emit('expired')" @clear="emit('clear', $event)" />
+    <section v-if="schedule" class="console-panel" aria-labelledby="plan-editor-heading">
       <div class="console-section-heading">
-        <h3 id="plan-editor-heading" ref="editorHeading" tabindex="-1">{{ editing === 'schedule'
-          ? '编辑定时任务' : editing === 'new-commitment' ? '登记模拟承诺' : '处理模拟承诺' }}</h3>
+        <h3 id="plan-editor-heading" ref="editorHeading" tabindex="-1">编辑定时任务</h3>
       </div>
       <NForm @submit.prevent="save">
-        <div v-if="editing === 'schedule'" class="console-form-grid">
+        <div class="console-form-grid">
           <NFormItem label="计划类型" :label-props="{ for: 'plan-kind' }">
             <NSelect placeholder="选择每日计划或单次提醒" filterable v-model:value="form.kind" :options="kinds" :disabled="busy" :input-props="{ id: 'plan-kind' }" />
           </NFormItem>
@@ -185,36 +122,15 @@ onMounted(() => {
           <NFormItem v-if="form.kind === 'DAILY'" label="每天触发时间（计划时区）" :label-props="{ for: 'plan-time' }">
             <input id="plan-time" v-model="form.localTime" type="time" :disabled="busy" />
           </NFormItem>
-          <NFormItem v-else :label="`提醒时间（${browserZone}）`" :label-props="{ for: 'plan-due' }">
+          <NFormItem v-else :label="'提醒时间（' + browserZone + '）'" :label-props="{ for: 'plan-due' }">
             <input id="plan-due" v-model="form.dueAt" type="datetime-local" :disabled="busy" />
           </NFormItem>
           <NCheckbox v-model:checked="form.enabled" :disabled="busy">启用计划</NCheckbox>
         </div>
-        <template v-else>
-          <p v-if="selectedRun && editing === 'new-commitment'">账号 {{ accountName(selectedRun.accountId) }} ·
-            回执 {{ formatTime(selectedRun.proposal!.receiptAt!) }}</p>
-          <p v-if="editing === 'commitment' && commitment">{{ commitment.title }} · v{{ commitment.version }}</p>
-          <div class="console-form-grid">
-            <NFormItem v-if="editing === 'new-commitment'" label="承诺标题" :label-props="{ for: 'commit-title' }">
-              <NInput placeholder="例如：跟进模拟回复" v-model:value="form.title" maxlength="120" :disabled="busy" :input-props="{ id: 'commit-title' }" />
-            </NFormItem>
-            <NFormItem v-else label="处理方式" :label-props="{ for: 'commit-operation' }">
-              <NSelect placeholder="选择承诺的处理方式" filterable v-model:value="form.operation" :options="operations" :disabled="busy" :input-props="{ id: 'commit-operation' }" />
-            </NFormItem>
-            <NFormItem v-if="editing === 'new-commitment' || form.operation === 'DEFER'"
-              :label="`截止时间（${browserZone}）`" :label-props="{ for: 'commit-due' }">
-              <input id="commit-due" v-model="form.dueAt" type="datetime-local" :disabled="busy" />
-            </NFormItem>
-            <NFormItem label="理由" :label-props="{ for: 'commit-reason' }">
-              <NInput placeholder="例如：需要等待更多资料" v-model:value="form.reason" maxlength="240" :disabled="busy" :input-props="{ id: 'commit-reason' }" />
-            </NFormItem>
-          </div>
-        </template>
         <div class="console-actions">
-          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !valid">{{ editing === 'schedule' ? '保存计划' : '保存承诺' }}</NButton>
-          <NButton v-if="editing === 'commitment' || (editing === 'schedule' && schedule)" size="small" :disabled="busy"
-            @click="refreshDraft">重新读取版本</NButton>
-          <NButton :disabled="busy" @click="close()">取消</NButton>
+          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !payload.success">保存定时任务</NButton>
+          <NButton size="small" :disabled="busy" @click="refreshDraft">重新读取版本</NButton>
+          <NButton :disabled="busy" @click="close">取消</NButton>
         </div>
       </NForm>
     </section>
@@ -224,24 +140,14 @@ onMounted(() => {
       </div>
       <ul class="console-record-list">
         <li v-for="item in schedules" :key="item.id">
-          <div class="console-actions"><strong>{{ item.scheduleKey }}</strong><NTag size="small">{{ item.enabled ? '已启用' : '已暂停' }}</NTag>
-            <NButton size="small" :disabled="busy || !!editing" @click="editSchedule(item)">编辑定时任务</NButton></div>
+          <div class="console-actions"><strong>{{ item.scheduleKey }}</strong>
+            <NTag size="small">{{ item.enabled ? '已启用' : '已暂停' }}</NTag>
+            <NButton size="small" :disabled="busy || !!schedule" @click="editSchedule(item)">编辑定时任务</NButton>
+          </div>
           <span>{{ accountName(item.accountId) }} · {{ item.zone }} · v{{ item.version }}</span>
           <span>{{ item.rule.kind === 'DAILY' ? '每天 ' + item.rule.localTime : '单次 ' + formatTime(item.rule.dueAt) }}
-            <template v-if="item.nextAt"> · 下次 {{ formatTime(item.nextAt) }}</template></span>
-        </li>
-      </ul>
-    </section>
-    <section class="console-panel" aria-labelledby="commitments-heading">
-      <div class="console-section-heading"><h3 id="commitments-heading" ref="commitmentsHeading" tabindex="-1">模拟承诺</h3></div>
-      <NEmpty v-if="!commitments.length && !busy && !error" description="暂无模拟承诺。" />
-      <ul v-if="commitments.length" class="console-record-list">
-        <li v-for="item in commitments" :key="item.id">
-          <div class="console-actions"><strong>{{ item.title }}</strong><NTag size="small">{{ stateLabels[item.state] }}</NTag>
-            <NButton v-if="item.state === 'OPEN' || item.state === 'DEFERRED'" size="small" :disabled="busy || !!editing"
-              @click="editCommitment(item)">处理承诺</NButton></div>
-          <span>{{ accountName(item.accountId) }} · 截止 {{ formatTime(item.dueAt) }} · v{{ item.version }}</span>
-          <span v-if="item.contactId">联系人 {{ item.contactId }}</span>
+            <template v-if="item.nextAt"> · 下次 {{ formatTime(item.nextAt) }}</template>
+          </span>
         </li>
       </ul>
     </section>

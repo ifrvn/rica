@@ -121,6 +121,7 @@ after(async () => {
       } })
       await tx.outboxEvent.deleteMany({ where: { run: where } })
       await tx.commitmentRevision.deleteMany({ where })
+      await tx.commitmentCollaborator.deleteMany({ where })
       await tx.simulationCommitment.deleteMany({ where })
       await tx.simulationReceipt.deleteMany({ where })
       await tx.simulationAttempt.deleteMany({ where })
@@ -1002,7 +1003,8 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
 
 
 async function commitmentFixture(privateRecipient = false) {
-  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+  await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12), status: 'ACTIVE' } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
   const accountId = await newSimulationAccount()
   const contact = privateRecipient ? await owner.contact.create({
     data: { characterId: a, identityId: identityA, accountId, remoteKey: randomUUID() },
@@ -1027,36 +1029,81 @@ async function confirmCommitmentReceipt(actionId: string) {
 test('commitments require a confirmed receipt and preserve its recipient across filters', async () => {
   const { accountId, contactId, action, due } = await commitmentFixture(true)
   const path = characterPath(a) + '/commitments'
-  const data = { actionId: action.id, title: 'Follow up with the recipient', dueAt: due.toISOString(), reason: 'Confirmed agreement' }
+  const { runId } = await owner.actionProposal.findUniqueOrThrow({ where: { id: action.id }, select: { runId: true } })
+  const candidates = characterPath(a) + '/commitment-receipts?runId=' + runId
+  const identity = await request('POST', characterPath(a) + '/identities', {
+    key: 'commitment-collaborator-identity', data: { slug: 'commitment-helper', roleProfile: {} },
+  })
+  assert.equal(identity.status, 201, JSON.stringify(identity.body))
+  const helper = await owner.platformAccount.create({
+    data: { characterId: a, identityId: identity.body.id, platform: 'newbi', instanceKey: 'integration', remoteAccountId: randomUUID() },
+  })
+  const collaborator = { identityId: helper.identityId, accountId: helper.id }
+  const details = { title: 'Follow up with the recipient', task: 'Deliver the promised report',
+    dueAt: due.toISOString(), reason: 'Confirmed agreement', collaborators: [collaborator] }
+  const data = { ...details, actionId: action.id }
 
   assert.equal((await request('POST', path, { key: 'unconfirmed-commitment', data })).status, 404)
+  assert.deepEqual((await request('GET', candidates)).body.items, [])
   await confirmCommitmentReceipt(action.id)
+  assert.equal((await request('GET', candidates, { actor: 'reviewer' })).status, 403)
+  const choices = await request('GET', candidates)
+  assert.equal(choices.status, 200, JSON.stringify(choices.body))
+  assert.deepEqual(choices.body.items.map(({ id, identityId, contactId: recipient }: { id: string; identityId: string; contactId: string }) =>
+    ({ id, identityId, recipient })), [{ id: action.id, identityId: identityA, recipient: contactId }])
+  assert.deepEqual((await request('GET', characterPath(b) + '/commitment-receipts?runId=' + runId, { actor: 'admin-b' })).body.items, [])
   assert.equal((await request('POST', path, { actor: 'reviewer', key: 'reviewer-commitment', data })).status, 403)
   assert.equal((await request('POST', characterPath(b) + '/commitments', {
     actor: 'admin-b', key: 'foreign-commitment', data,
   })).status, 404)
   assert.equal((await request('POST', path, { key: 'forged-scope', data: { ...data, accountId: accountA } })).status, 422)
+  assert.equal((await request('POST', path, { key: 'forged-collaborator', data: {
+    ...data, collaborators: [{ ...collaborator, accountId: accountA }],
+  } })).status, 409)
+  assert.equal((await request('POST', path, { key: 'owner-as-collaborator', data: {
+    ...data, collaborators: [{ identityId: identityA, accountId }],
+  } })).status, 409)
 
   const result = await request('POST', path, { key: 'confirmed-commitment', data })
   assert.equal(result.status, 201, JSON.stringify(result.body))
   assert.equal((await request('POST', path, { key: 'confirmed-commitment', data })).body.id, result.body.id)
   assert.equal((await request('POST', path, { key: 'duplicate-receipt', data })).status, 409)
+  assert.deepEqual((await request('GET', candidates)).body.items, [])
   const list = await request('GET', path + '?accountId=' + accountId + '&contactId=' + contactId)
   assert.equal(list.status, 200)
   assert.equal(list.body.items.length, 1)
   const [commitment] = list.body.items
   assert.equal(commitment.actionId, action.id)
   assert.equal(commitment.contactId, contactId)
+  assert.equal(commitment.identityId, identityA)
+  assert.equal(commitment.task, details.task)
+  assert.equal(commitment.collaborators[0].platform, 'newbi')
   assert.deepEqual((await request('GET', path + '?accountId=' + accountA)).body.items, [])
 
   const schedulePath = characterPath(a) + '/schedules/' + commitment.scheduleId
   assert.equal((await request('PUT', schedulePath, {
     ifMatch: '"1"', data: { zone: 'UTC', enabled: false, rule: { kind: 'REMINDER', dueAt: data.dueAt } },
   })).status, 409)
-  const fulfilled = await request('PUT', path + '/' + result.body.id, {
-    ifMatch: '"1"', data: { operation: 'FULFILL', reason: 'Agreement completed' },
+  const commitmentPath = path + '/' + result.body.id
+  const edited = await request('PUT', commitmentPath, {
+    ifMatch: '"1"', data: { ...details, operation: 'EDIT', task: 'Deliver a revised report', collaborators: [] },
+  })
+  assert.equal(edited.status, 200, JSON.stringify(edited.body))
+  const [updated] = (await request('GET', path + '?accountId=' + accountId)).body.items
+  assert.equal(updated.task, 'Deliver a revised report')
+  assert.deepEqual(updated.collaborators, [])
+  assert.equal(updated.contactId, contactId)
+  assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id: commitment.scheduleId } })).version, 1)
+  assert.equal((await request('PUT', commitmentPath, {
+    ifMatch: '"1"', data: { ...details, operation: 'EDIT' },
+  })).status, 412)
+  const fulfilled = await request('PUT', commitmentPath, {
+    ifMatch: '"2"', data: { operation: 'FULFILL', reason: 'Agreement completed' },
   })
   assert.equal(fulfilled.body.status, 'FULFILLED')
+  assert.equal((await request('PUT', commitmentPath, {
+    ifMatch: '"3"', data: { ...details, operation: 'EDIT' },
+  })).status, 409)
   assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id: commitment.scheduleId } })).nextAt, null)
   assert.equal(await owner.simulationSchedule.count({
     where: { scheduleKey: 'commitment:' + result.body.id },
@@ -1070,7 +1117,8 @@ test('a commitment reminder catches up once, and defer or cancel invalidates its
   const path = characterPath(a) + '/commitments'
   const result = await request('POST', path, {
     key: 'commitment-catchup',
-    data: { actionId: action.id, title: 'Deadline reminder', dueAt: due.toISOString(), reason: 'Follow-up agreement' },
+    data: { actionId: action.id, title: 'Deadline reminder', task: 'Follow up on the agreement', collaborators: [],
+      dueAt: due.toISOString(), reason: 'Follow-up agreement' },
   })
   assert.equal(result.status, 201, JSON.stringify(result.body))
   const id = result.body.id
