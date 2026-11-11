@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { reviewTarget } from '../contracts/action-review.js'
-import { simulationFollowUp } from '../contracts/simulation-follow-up.js'
+import { modelFollowUp, simulationFollowUp } from '../contracts/simulation-follow-up.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
@@ -113,16 +113,35 @@ async function buildSimulatedDraft(
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
   const suggestion = suggestFollowUp && output && typeof output === 'object' && 'followUp' in output
-    ? simulationFollowUp.safeParse(output.followUp).data : undefined
-  const due = suggestion ? Date.parse(suggestion.dueAt) : NaN
+    ? modelFollowUp.safeParse(output.followUp).data : undefined
+  const due = suggestion?.dueAt ? Date.parse(suggestion.dueAt) : NaN
   const now = Date.parse(time.now)
-  const followUp = suggestion && due > now && due <= now + 7 * 86_400_000
+  const followUp = suggestion && (suggestion.dailyAt || (due > now && due <= now + 7 * 86_400_000))
     && (suggestion.kind === 'PLAN' || draft.text.includes(suggestion.task)) ? suggestion : undefined
 
-  return { draft, followUp, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
+  return { draft, followUp, time, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
+
+async function resolveFollowUp(tx: Prisma.TransactionClient, runId: string, candidate: DraftCandidate) {
+  if (!candidate.followUp) return
+  const { additionalTasks, collaboratorPlatforms, ...details } = candidate.followUp
+  const assignments = details.kind === 'PLAN' ? additionalTasks?.map(({ platform, task }) => [platform, task] as const)
+    : collaboratorPlatforms?.map((platform) => [platform, undefined] as const)
+  const zone = details.dailyAt ? candidate.time.timezone : undefined
+  if (!assignments?.length) return simulationFollowUp.parse({ ...details, ...(zone ? { zone } : {}) })
+  const byPlatform = new Map(assignments)
+  if (byPlatform.size !== assignments.length) return
+  const available = await tx.$queryRaw<{ identityId: string; accountId: string; identity: string; account: string;
+    platform: 'mock-a' | 'mock-b' | 'newbi' }[]>`
+    SELECT * FROM public.rica_follow_up_accounts(${runId}::uuid)
+  `
+  const participants = available.filter(({ platform }) => byPlatform.has(platform))
+    .map((item) => ({ ...item, ...(byPlatform.get(item.platform) ? { task: byPlatform.get(item.platform) } : {}) }))
+  if (participants.length !== assignments.length) return
+  return simulationFollowUp.parse({ ...details, ...(zone ? { zone } : {}), participants })
+}
 
 async function recheckDraft(
   tx: Prisma.TransactionClient, runId: string, request: WritingRequest, candidate: DraftCandidate,
@@ -215,6 +234,7 @@ export async function processSimulatedDraft(
         && adapter && matchesSimulationAdapter(input.adapter, adapter) && content
         && content.length <= maxSimulatedTextLength
       if (proposed) {
+        const followUp = await resolveFollowUp(tx, run.id, candidate)
         const expiresAt = new Date(Date.now() + 86_400_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
         const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
@@ -225,7 +245,7 @@ export async function processSimulatedDraft(
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
           selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
-          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion, followUp: candidate.followUp,
+          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion, followUp,
         })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({
@@ -245,7 +265,7 @@ export async function processSimulatedDraft(
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
             policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
-            followUp: candidate.followUp,
+            followUp,
           },
         })
       }

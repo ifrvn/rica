@@ -655,7 +655,15 @@ async function decide(decision: Decision) {
               <NAlert v-if="selected.followUp" type="info">
                 <strong>{{ selected.followUp.kind === 'PLAN' ? 'AI 拟定计划' : 'AI 拟登记承诺' }} · {{ selected.followUp.title }}</strong>
                 <p>{{ selected.followUp.task }}</p>
-                <p>截止 {{ new Date(selected.followUp.dueAt).toLocaleString() }}。批准后，模拟回执确认且未过期时自动登记。</p>
+                <p v-if="selected.followUp.dailyAt">每日 {{ selected.followUp.dailyAt }} · {{ selected.followUp.zone }}</p>
+                <p v-else-if="selected.followUp.dueAt">截止 {{ new Date(selected.followUp.dueAt).toLocaleString() }}</p>
+                <ul v-if="selected.followUp.participants?.length" class="follow-up-participants">
+                  <li v-for="participant in selected.followUp.participants" :key="participant.accountId">
+                    <strong>{{ participant.identity }} · {{ participant.platform }} / {{ participant.account }}</strong>
+                    <span v-if="participant.task">{{ participant.task }}</span>
+                  </li>
+                </ul>
+                <p>批准后，模拟回执确认且参与账号仍有效时自动登记。</p>
               </NAlert>
             </template>
             <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
@@ -722,6 +730,8 @@ async function decide(decision: Decision) {
 .metadata dt { color: var(--console-muted); font-size: .8125rem; }
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
 .proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
+.follow-up-participants { margin-block: .5rem; padding-inline-start: 1rem; overflow-wrap: anywhere; }
+.follow-up-participants span { display: block; }
 .decision-buttons, .passkey-submit { margin-block-start: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) {
