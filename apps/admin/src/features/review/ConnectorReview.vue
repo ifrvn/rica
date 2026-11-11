@@ -2,11 +2,12 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { NewbiReplyView, newbiReplySummary } from '../../../../../packages/contracts/newbi-pilot.js'
+import type { newbiReviewView, newbiReplySummary } from '../../../../../packages/contracts/newbi-pilot.js'
 import { focusRecord, formatTime } from '../../shared/console-data.js'
 import { request, RequestError } from '../../shared/request.js'
 
 type Summary = z.infer<typeof newbiReplySummary>
+type Reply = z.infer<typeof newbiReviewView>
 type Page = { items: Summary[]; nextCursor: string | null }
 const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; canReview: boolean; canClose: boolean }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; all: [] }>()
@@ -19,7 +20,7 @@ const options = [{ label: '全部状态', value: '' }, ...Object.entries(statusT
 const filter = ref('WAITING')
 const rows = ref<Summary[]>([])
 const cursor = ref<string | null>(null)
-const reply = ref<NewbiReplyView>()
+const reply = ref<Reply>()
 const reason = ref('')
 const detailHeading = ref<HTMLElement>()
 const listHeading = ref<HTMLElement>()
@@ -82,7 +83,7 @@ async function detail(id?: string) {
   loadingDetail.value = !!id
   if (!id) return
   try {
-    const view = await request<NewbiReplyView>(base + '/' + encodeURIComponent(id))
+    const view = await request<Reply>(base + '/' + encodeURIComponent(id))
     if (!active || current !== selection) return
     if (props.accountId && props.accountId !== view.accountId) {
       detailError.value = '找不到当前账号的提案。'
@@ -106,6 +107,7 @@ async function submit(action: 'APPROVE' | 'REJECT' | 'CLOSE') {
   const item = reply.value
   const note = reason.value.trim()
   if (!item || !note || submitting.value || loadingDetail.value
+    || (action === 'APPROVE' && !item.connectorAvailable)
     || (action === 'CLOSE' ? !props.canClose || item.status !== 'UNKNOWN'
       : !props.canReview || item.status !== 'WAITING' || !item.content)) return
   const payload = action === 'CLOSE' ? { reason: note } : { reason: note, decision: action, reviewDigest: item.reviewDigest }
@@ -208,13 +210,15 @@ onMounted(() => { void list() })
         <NForm v-if="(canReview && reply.status === 'WAITING' && reply.content) || (canClose && reply.status === 'UNKNOWN')"
           @submit.prevent="submit(reply.status === 'UNKNOWN' ? 'CLOSE' : 'APPROVE')">
           <NAlert v-if="reply.status === 'UNKNOWN'" type="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</NAlert>
-          <NAlert v-else type="warning">批准后，执行器取得发送许可时会向上述 Newbi 帖子公开发布这条回复。</NAlert>
+          <NAlert v-else-if="reply.connectorAvailable" type="warning">批准后，执行器取得发送许可时会向上述 Newbi 帖子公开发布这条回复。</NAlert>
+          <NAlert v-else type="warning">当前 Newbi 配置无法使用此账号。请在插件中心核对启用状态和 Agent API 地址。</NAlert>
           <NFormItem :label="reply.status === 'UNKNOWN' ? '结案理由' : '审批理由'" :label-props="{ for: 'connector-reason' }">
             <NInput :placeholder="reply.status === 'UNKNOWN' ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
               :input-props="{ id: 'connector-reason' }" />
           </NFormItem>
           <div class="connector-actions">
-            <NButton :type="reply.status === 'UNKNOWN' ? 'warning' : 'primary'" attr-type="submit" :disabled="submitting || !reason.trim()">
+            <NButton v-if="reply.status === 'UNKNOWN' || reply.connectorAvailable" :type="reply.status === 'UNKNOWN' ? 'warning' : 'primary'"
+              attr-type="submit" :disabled="submitting || !reason.trim()">
               {{ reply.status === 'UNKNOWN' ? '确认结案' : '批准公开回复' }}
             </NButton>
             <NButton v-if="reply.status === 'WAITING'" type="error" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</NButton>

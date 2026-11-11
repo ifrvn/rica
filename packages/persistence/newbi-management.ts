@@ -23,12 +23,15 @@ async function boundAccount(tx: Prisma.TransactionClient, characterId: string, i
   })
 }
 
-export async function createNewbiReply(tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof newbiReplyInput>) {
+export async function createNewbiReply(
+  tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof newbiReplyInput>, requireConnector: (endpoint: string) => Promise<void>,
+) {
   const account = await boundAccount(tx, scope.characterId, input.accountId)
   if (!account) missing()
   const { identity } = account
   const character = identity.character
   if (account.status !== 'ACTIVE' || identity.status !== 'ACTIVE' || character.status !== 'ACTIVE') conflict()
+  await requireConnector(account.instanceKey)
   const disclosure = coreProfile.strip().safeParse(character.activeCore?.hardProfile).data?.aiDisclosure
   if (!disclosure) throw new ManagementError(422, 'INVALID_INPUT', 'AI disclosure is required')
   const content = input.content + '\n\nAI 披露：' + disclosure
@@ -78,7 +81,10 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function decideNewbiReply(tx: Prisma.TransactionClient, scope: Scope, id: string, input: z.infer<typeof newbiDecisionInput>) {
+export async function decideNewbiReply(
+  tx: Prisma.TransactionClient, scope: Scope, id: string, input: z.infer<typeof newbiDecisionInput>,
+  requireConnector: (endpoint: string) => Promise<void>,
+) {
   const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId } })
   if (!reply) missing()
   if (reply.proposerId === scope.actor.id) denyPermission()
@@ -89,6 +95,7 @@ export async function decideNewbiReply(tx: Prisma.TransactionClient, scope: Scop
     || account.identity.character.authEpoch !== reply.authEpoch) conflict()
   const [clock] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`
   if (reply.expiresAt <= clock.now) conflict()
+  if (input.decision === 'APPROVE') await requireConnector(account.instanceKey)
   const status = input.decision === 'APPROVE' ? 'READY' : 'REJECTED'
   const { count } = await tx.newbiReply.updateMany({
     where: { id, status: 'WAITING', executorKey },
@@ -129,4 +136,25 @@ export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) 
       items: canReadEvents ? account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })) : null,
     })
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function readNewbiConnections(db: PrismaClient, characterId: string, endpoint: string) {
+  const account = { characterId, platform: 'newbi', instanceKey: endpoint }
+  const [active, confirmed, unknown] = await Promise.all([
+    db.platformAccount.findMany({
+      where: { ...account, status: 'ACTIVE', identity: { status: 'ACTIVE', character: { status: 'ACTIVE' } } },
+      select: { newbiCheckpoint: { select: { lastSucceededAt: true, readError: true } } },
+    }),
+    db.newbiReply.findFirst({ where: { characterId, status: 'SENT', account }, select: { id: true } }),
+    db.newbiReply.findFirst({ where: { characterId, status: 'UNKNOWN', account }, select: { id: true } }),
+  ])
+  let lastReadAt: Date | null = null
+  let readFailures = 0
+  for (const { newbiCheckpoint } of active) {
+    if (newbiCheckpoint?.readError) readFailures++
+    const succeeded = newbiCheckpoint?.lastSucceededAt
+    if (succeeded && (!lastReadAt || succeeded > lastReadAt)) lastReadAt = succeeded
+  }
+  return { activeAccounts: active.length, readFailures, lastReadAt: lastReadAt?.toISOString() ?? null,
+    hasReceipt: !!confirmed, hasUnknown: !!unknown }
 }

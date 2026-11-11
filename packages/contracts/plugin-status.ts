@@ -61,6 +61,13 @@ export const pluginStatusView = z.object({
   deployment: deploymentPluginsView.optional(),
   release: pluginReleaseView.optional(),
   modelCheck: modelCheckStatus.optional(),
+  newbiConnections: z.object({
+    activeAccounts: z.number().int().nonnegative(),
+    readFailures: z.number().int().nonnegative(),
+    lastReadAt: z.iso.datetime().nullable(),
+    hasReceipt: z.boolean(),
+    hasUnknown: z.boolean(),
+  }).optional(),
   services: z.array(z.object({
     service: z.enum(pluginServices),
     catalog: z.array(pluginIdentity),

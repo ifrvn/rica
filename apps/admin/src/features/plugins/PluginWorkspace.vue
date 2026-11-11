@@ -8,7 +8,7 @@ import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
 import ModelSettings from './ModelSettings.vue'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean }>()
-const emit = defineEmits<{ expired: []; accounts: [] }>()
+const emit = defineEmits<{ expired: []; accounts: []; newbi: [installed: boolean] }>()
 const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
@@ -76,6 +76,7 @@ function update(id: DeploymentPluginId, data: unknown) {
     if (!active() || !status.value) return
     status.value = { ...status.value, deployment: updated,
       newbiRegistrationAvailable: updated.plugins.newbi === 'ENABLED' && updated.newbi.hasCredential }
+    emit('newbi', updated.plugins.newbi !== 'NOT_INSTALLED')
     if (parsed.data.action === 'CONFIGURE_NEWBI' || (parsed.data.action === 'DISABLE' && editing.value === id)) {
       form.credential = ''
       editing.value = undefined

@@ -75,9 +75,11 @@ let revision = 0
 const characterCursor = ref<string | null>(null)
 const roles = ref<string[]>([])
 const simulationPlatforms = ref<z.infer<typeof characterWorkspaceView>['simulationPlatforms']>([])
+const newbiInstalled = ref(false)
 const canReadRuns = computed(() => roles.value.some((role) => role === 'ADMIN' || role === 'AUDITOR'))
 const canReviewSimulation = computed(() => roles.value.includes('REVIEWER'))
-const canReview = computed(() => canReviewSimulation.value || roles.value.includes('ADMIN'))
+const canReadConnector = computed(() => canReviewSimulation.value || roles.value.includes('ADMIN'))
+const canReview = computed(() => canReviewSimulation.value || (canReadConnector.value && newbiInstalled.value))
 const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const currentCharacter = computed(() => characters.value.find(({ id }) => id === characterId.value))
@@ -210,6 +212,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       if (current !== revision) return
       roles.value = workspace.roles
       simulationPlatforms.value = workspace.simulationPlatforms
+      newbiInstalled.value = workspace.newbiInstalled
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
       else characterUpdated(workspace)
     }
@@ -219,7 +222,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       : location.page
     const denied = (['home', 'runs', 'outbox', 'audit', 'plugins', 'health', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
       || (page === 'planning' && !roles.value.includes('ADMIN'))
-      || (page === 'connector' && !canReview.value)
+      || (page === 'connector' && !canReadConnector.value)
       || (page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
     tab.value = denied ? 'character' : page === 'review' && !canReviewSimulation.value ? 'connector' : page
     detailId.value = denied ? undefined : location.detail
@@ -538,10 +541,11 @@ async function decide(decision: Decision) {
         </NButton>
       </nav>
 
-      <nav v-if="canReviewSimulation && (tab === 'review' || tab === 'connector')" class="account-actions" aria-label="审批类型">
+      <nav v-if="canReviewSimulation && (tab === 'connector' || (tab === 'review' && newbiInstalled))" class="account-actions" aria-label="审批类型">
         <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('review')">模拟提案</NButton>
-        <NButton size="small" :type="tab === 'connector' ? 'primary' : 'default'" :aria-current="tab === 'connector' ? 'page' : undefined" :disabled="busy || routing"
+        <NButton v-if="newbiInstalled || tab === 'connector'" size="small" :type="tab === 'connector' ? 'primary' : 'default'"
+          :aria-current="tab === 'connector' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('connector')">Newbi 平台提案</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
@@ -575,6 +579,7 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :can-configure-model="canCreate" @expired="resetSession"
+        @newbi="newbiInstalled = $event"
         @accounts="changeTab('accounts')" />
       <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
@@ -593,7 +598,7 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="closePlanning" @run="openRun" />
       <MetricsWorkspace v-else-if="tab === 'metrics' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" />
-      <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
+      <ConnectorReview v-else-if="tab === 'connector' && characterId && canReadConnector" :key="characterId"
         :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
         @all="changeTab('connector')" />

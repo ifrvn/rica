@@ -11,8 +11,8 @@ import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, read
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import { connectorAccountRegistration, newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReplyView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies } from '../../packages/persistence/newbi-management.js'
+import { connectorAccountRegistration, newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
+import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -132,8 +132,11 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   const modelProvider = async () => (await modelSettings?.status())?.provider ?? 'simulated'
   let checkingModel = false
   let latestModelCheck: { version: number; result: ModelCheckStatus } | undefined
+  async function newbiAvailable(endpoint: string) {
+    return !deploymentPlugins || (await deploymentPlugins.readNewbi())?.endpoint === endpoint
+  }
   async function requireNewbi(endpoint: string) {
-    if (deploymentPlugins && (await deploymentPlugins.readNewbi())?.endpoint !== endpoint) {
+    if (!await newbiAvailable(endpoint)) {
       throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Newbi is disabled or its endpoint does not match')
     }
   }
@@ -250,7 +253,8 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     c.header('ETag', `"${result.version ?? 0}"`)
     const platforms = schema.accountInput.shape.platform.options
     const simulationPlatforms = result.roles.includes('ADMIN') ? platforms.filter((id) => resolveAdapter(id)) : []
-    return c.json({ ...result, simulationPlatforms }, 200)
+    const deployment = await deploymentPlugins?.status('simulated')
+    return c.json({ ...result, simulationPlatforms, newbiInstalled: deployment?.plugins.newbi !== 'NOT_INSTALLED' }, 200)
   })
 
   app.openapi(createRoute({
@@ -324,8 +328,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const modelCheck = latestModelCheck && latestModelCheck.version === settings?.version
       && latestModelCheck.result.provider === deployment.configuredModel
       && deployment.plugins[latestModelCheck.result.provider] === 'ENABLED' ? latestModelCheck.result : undefined
-    return c.json({ ...current, deployment, release, modelCheck,
-      newbiRegistrationAvailable: deployment.plugins.newbi === 'ENABLED' && deployment.newbi.hasCredential }, 200)
+    const newbiRegistrationAvailable = deployment.plugins.newbi === 'ENABLED' && deployment.newbi.hasCredential
+    const newbiConnections = newbiRegistrationAvailable && deployment.newbi.endpoint
+      ? await readNewbiConnections(db, scope.characterId, deployment.newbi.endpoint) : undefined
+    return c.json({ ...current, deployment, release, modelCheck, newbiConnections, newbiRegistrationAvailable }, 200)
   })
 
   app.openapi(createRoute({
@@ -1096,16 +1102,17 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'newbi.reply.create', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => createNewbiReply(tx, scope, input))
+    }, (tx) => createNewbiReply(tx, scope, input, requireNewbi))
     return c.json({ ...result, requestId }, 201)
   })
 
   app.openapi(createRoute({
     method: 'get', path: `${newbi}/replies/{replyId}`, security,
-    request: { params: newbiReplyParams }, responses: { ...errors, 200: success(newbiReplyView) },
+    request: { params: newbiReplyParams }, responses: { ...errors, 200: success(newbiReviewView) },
   }), async (c) => {
     const { characterId, replyId } = c.req.valid('param')
-    return c.json(await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId), 200)
+    const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
+    return c.json({ ...reply, connectorAvailable: await newbiAvailable(reply.endpoint) }, 200)
   })
 
   app.openapi(createRoute({
@@ -1120,7 +1127,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'newbi.reply.review', targetScope: characterId + '/' + replyId, input, requestId,
       key: c.req.valid('header')['idempotency-key'], roles: ['REVIEWER'],
-    }, (tx) => decideNewbiReply(tx, scope, replyId, input))
+    }, (tx) => decideNewbiReply(tx, scope, replyId, input, requireNewbi))
     return c.json({ ...result, requestId }, 200)
   })
 

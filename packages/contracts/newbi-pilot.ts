@@ -38,7 +38,7 @@ export const newbiReplyView = z.object({
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
   retryNotBefore: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })
-export type NewbiReplyView = z.infer<typeof newbiReplyView>
+export const newbiReviewView = newbiReplyView.extend({ connectorAvailable: z.boolean() })
 
 export const newbiReadError = z.enum(['AGENT_MISMATCH', 'CREDENTIAL_INVALID', 'ACCESS_DENIED', 'RATE_LIMITED',
   'SERVICE_UNAVAILABLE', 'COMMUNITY_CLOSED', 'READ_FAILED'])

@@ -212,6 +212,7 @@ export const characterView = z.object({
 export const characterWorkspaceView = characterView.extend({
   roles: z.array(membershipInput.shape.role),
   simulationPlatforms: z.array(accountInput.shape.platform),
+  newbiInstalled: z.boolean(),
 })
 export const identityView = z.object({
   id: z.uuid(), slug: z.string(), status: z.string(),

@@ -1,6 +1,9 @@
 import { startCognitionPlugins, startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
@@ -31,6 +34,7 @@ import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packag
 import { processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '../packages/persistence/simulation-execution.js'
 import { loadConfig } from '../packages/runtime/config.js'
+import { createDeploymentPluginStore } from '../packages/runtime/deployment-plugins.js'
 
 const config = loadConfig()
 const simulationPlatforms = await startSimulationPlatforms({})
@@ -42,17 +46,20 @@ const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
 let connectorEnv: NodeJS.ProcessEnv = {}
-const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
-  db: management,
-  origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
-  verifyConnector: (endpoint, agentId) => verifyNewbiBinding(endpoint, agentId, connectorEnv),
-  authenticate: async (request) => {
-    const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
-    return subject && subjects.has(subject) ? {
-      issuer, subject, id: actorId(issuer, subject), canCreate: subject.startsWith('admin-'),
-    } : null
-  },
-}))
+const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>) =>
+  createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
+    db: management,
+    origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
+    verifyConnector: (endpoint, agentId) => verifyNewbiBinding(endpoint, agentId, connectorEnv),
+    deploymentPlugins,
+    authenticate: async (request) => {
+      const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
+      return subject && subjects.has(subject) ? {
+        issuer, subject, id: actorId(issuer, subject), canCreate: subject.startsWith('admin-'),
+      } : null
+    },
+  }))
+const app = testApp()
 
 const prefix = 'management-' + randomUUID()
 const characterIds: string[] = []
@@ -62,16 +69,16 @@ let identityA: string
 let identityB: string
 let accountA: string
 
-type RequestOptions = { actor?: string | null; key?: string; ifMatch?: string; data?: unknown }
+type RequestOptions = { actor?: string | null; key?: string; ifMatch?: string; data?: unknown; target?: typeof app }
 async function request(method: string, path: string, options: RequestOptions = {}) {
-  const { actor = 'admin-a', data, key, ifMatch } = options
+  const { actor = 'admin-a', data, key, ifMatch, target = app } = options
   const headers = new Headers()
   headers.set('Origin', fixtureOrigin)
   if (actor) headers.set('Cookie', 'fixture-session=' + actor)
   if (data !== undefined) headers.set('Content-Type', 'application/json')
   if (key) headers.set('Idempotency-Key', key)
   if (ifMatch) headers.set('If-Match', ifMatch)
-  const response = await app.request('/v1' + path, { method, headers, body: data === undefined ? undefined : JSON.stringify(data) })
+  const response = await target.request('/v1' + path, { method, headers, body: data === undefined ? undefined : JSON.stringify(data) })
   return { status: response.status, headers: response.headers, body: await response.json() }
 }
 
@@ -2561,6 +2568,72 @@ test('concurrent model calls share one enforced character budget and report the 
   } finally {
     await runtime.$disconnect()
   }
+})
+
+test('Newbi installation gates new proposals and approvals while preserving review history', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-connector-lifecycle-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const plugins = createDeploymentPluginStore(directory, {})
+  const target = testApp(plugins)
+  const change = (input: Parameters<typeof plugins.save>[0], expected: number) => plugins.save(input, expected, async () => 'simulated')
+  const endpoint = 'http://127.0.0.1:5000/agent-api/v1'
+  const credential = 'nbi_agent_' + 'x'.repeat(43)
+  const created = await request('POST', '/characters', { key: 'newbi-lifecycle-character', data: characterData('-newbi-lifecycle') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const base = characterPath(characterId)
+  assert.equal((await request('POST', base + '/memberships', {
+    key: 'newbi-lifecycle-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Review fixture' },
+  })).status, 200)
+  const { id: accountId } = await owner.platformAccount.create({ data: {
+    characterId, identityId: await reflectionIdentity({}, characterId), status: 'ACTIVE',
+    platform: 'newbi', instanceKey: endpoint, remoteAccountId: randomUUID(),
+  } })
+  const list = base + '/newbi/replies'
+  const data = { accountId, postId: randomUUID(), content: 'Test reply' }
+  const propose = () => request('POST', list, { target, key: 'newbi-lifecycle-propose', data })
+  assert.equal((await request('GET', base, { target, actor: 'reviewer' })).body.newbiInstalled, false)
+  assert.equal((await propose()).body.error.code, 'PLUGIN_STATE_CONFLICT')
+
+  await change({ action: 'INSTALL', id: 'newbi' }, 0)
+  assert.equal((await request('GET', base, { target, actor: 'reviewer' })).body.newbiInstalled, true)
+  await change({ action: 'ENABLE', id: 'newbi' }, 1)
+  await change({ action: 'CONFIGURE_NEWBI', endpoint, credential }, 2)
+  const checkedAt = new Date(await databaseNow())
+  await owner.newbiEventCheckpoint.upsert({
+    where: { accountId }, create: { accountId, lastSucceededAt: checkedAt, readError: 'RATE_LIMITED' },
+    update: { lastSucceededAt: checkedAt, readError: 'RATE_LIMITED' },
+  })
+  const connectionStatus = (id: string, actor: string) => request('GET', characterPath(id) + '/plugins', { target, actor })
+  const observed = await connectionStatus(characterId, 'admin-a')
+  assert.equal(observed.status, 200, JSON.stringify(observed.body))
+  assert.deepEqual(observed.body.newbiConnections, { activeAccounts: 1, readFailures: 1, lastReadAt: checkedAt.toISOString(),
+    hasReceipt: false, hasUnknown: false })
+  assert.equal((await connectionStatus(characterId, 'reviewer')).status, 403)
+  assert.deepEqual((await connectionStatus(b, 'admin-b')).body.newbiConnections,
+    { activeAccounts: 0, readFailures: 0, lastReadAt: null, hasReceipt: false, hasUnknown: false })
+  const proposal = await propose()
+  assert.equal(proposal.status, 201, JSON.stringify(proposal.body))
+  const path = list + '/' + proposal.body.id
+  const preview = () => request('GET', path, { target, actor: 'reviewer' })
+  const initial = await preview()
+  assert.equal(initial.body.connectorAvailable, true)
+  const decide = (decision: 'APPROVE' | 'REJECT') => request('POST', path + '/decision', {
+    target, actor: 'reviewer', key: 'newbi-lifecycle-' + decision,
+    data: { decision, reviewDigest: initial.body.reviewDigest, reason: 'Verified lifecycle fixture' },
+  })
+  await change({ action: 'CONFIGURE_NEWBI', endpoint: 'http://127.0.0.1:5001/agent-api/v1', credential }, 3)
+  assert.equal((await preview()).body.connectorAvailable, false)
+  assert.equal((await decide('APPROVE')).body.error.code, 'PLUGIN_STATE_CONFLICT')
+  await change({ action: 'DISABLE', id: 'newbi' }, 4)
+  assert.equal((await connectionStatus(characterId, 'admin-a')).body.newbiConnections, undefined)
+  const disabled = await preview()
+  assert.equal(disabled.status, 200)
+  assert.equal(disabled.body.status, 'WAITING')
+  assert.equal(disabled.body.connectorAvailable, false)
+  assert.equal((await decide('APPROVE')).body.error.code, 'PLUGIN_STATE_CONFLICT')
+  assert.equal((await decide('REJECT')).body.status, 'REJECTED')
 })
 
 test('Newbi pilot binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async () => {

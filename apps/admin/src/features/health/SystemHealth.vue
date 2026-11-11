@@ -77,10 +77,19 @@ const layers = computed(() => {
   const external = (id: string, label: string, description: string, configured: boolean): Node =>
     ({ id, label, description, state: configured ? '暂无独立探测' : '待配置', tone: 'default' })
   if (hasNewbi) {
-    dependencies.push(
-      external('newbi-read', 'Newbi 读取 API', '账号级连接核验与读取结果可在平台账号池查看。', !!deployment?.newbi.hasCredential),
-      external('newbi-write', 'Newbi 发送 API', '发送结果可在 Newbi 提案中查看。读取连接与发送许可分别校验。', !!deployment?.newbi.hasCredential),
-    )
+    const configured = !!deployment?.newbi.hasCredential
+    const read = external('newbi-read', 'Newbi 读取 API', '按当前角色已启用的账号汇总。可在平台账号池查看每个账号的读取结果。', configured)
+    const write = external('newbi-write', 'Newbi 发送 API', '依据当前角色的发送结果。可在审批页查看对应的 Newbi 回执。', configured)
+    const observed = status.value?.newbiConnections
+    if (observed) {
+      read.state = observed.readFailures ? observed.readFailures + ' 个账号读取失败'
+        : observed.lastReadAt ? '有成功读取记录' : observed.activeAccounts ? '待首次读取' : '等待启用账号'
+      read.tone = observed.readFailures ? 'warning' : observed.lastReadAt ? 'success' : 'default'
+      read.at = observed.lastReadAt ?? undefined
+      write.state = observed.hasUnknown ? '有发送结果待核对' : observed.hasReceipt ? '有确认回执' : '待首次确认回执'
+      write.tone = observed.hasUnknown ? 'warning' : observed.hasReceipt ? 'success' : 'default'
+    }
+    dependencies.push(read, write)
   }
   for (const id of enabledModels) {
     const configured = deployment?.configuredModel === id
