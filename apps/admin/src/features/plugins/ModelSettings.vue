@@ -1,22 +1,27 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NSpin } from 'naive-ui'
-import { modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from '../../../../../packages/contracts/model-settings.js'
+import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '../../../../../packages/contracts/model-settings.js'
 import { useConsoleTask } from '../../shared/console-data.js'
 import { request } from '../../shared/request.js'
+import { modelCheckLabels } from './plugin-status.js'
 
 const props = defineProps<{ provider: Exclude<ModelSettingsInput['provider'], 'simulated'>; name: string }>()
 const emit = defineEmits<{ close: []; expired: []; saved: [] }>()
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
 const path = '/v1/model-settings'
 const current = ref<ModelSettingsView>()
+const checkResult = ref<ModelCheckResult>()
+const checking = ref(false)
 const form = reactive({ model: '', baseUrl: '', apiKey: '' })
 const compatible = computed(() => props.provider === 'openai-compatible')
 const reuseKey = computed(() => current.value?.hasKey && current.value.provider === props.provider
   && (!compatible.value || current.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
+const canCheck = computed(() => reuseKey.value && !form.apiKey && current.value?.model === form.model.trim())
 
 function setCurrent(value: ModelSettingsView) {
   current.value = value
+  checkResult.value = undefined
   const same = value.provider === props.provider
   Object.assign(form, { model: same ? value.model ?? '' : '', baseUrl: same ? value.baseUrl ?? '' : '', apiKey: '' })
 }
@@ -53,6 +58,22 @@ function save() {
   })
 }
 
+function testModel() {
+  if (!current.value || !canCheck.value || busy.value) return
+  const version = current.value.version
+  checkResult.value = undefined
+  checking.value = true
+  void run(async () => {
+    const result = await request<ModelCheckResult>(path + '/check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version }),
+    })
+    if (active()) {
+      checkResult.value = result
+      emit('saved')
+    }
+  }).finally(() => { checking.value = false })
+}
+
 onMounted(load)
 </script>
 
@@ -83,9 +104,17 @@ onMounted(load)
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
       <div class="model-settings-actions">
-        <NButton type="primary" attr-type="submit" :loading="busy">保存模型设置</NButton>
+        <NButton type="primary" attr-type="submit" :disabled="busy" :loading="busy && !checking">保存模型设置</NButton>
+        <NButton attr-type="button" :disabled="busy || !canCheck" :loading="checking" @click="testModel">测试模型</NButton>
         <NButton v-if="error" :disabled="busy" quaternary @click="load">重新读取设置</NButton>
       </div>
+      <p class="model-settings-scope model-settings-test-hint">
+        {{ canCheck ? '测试会向服务商发送一条固定消息，并可能消耗模型额度。' : '保存当前设置后可测试模型。' }}
+      </p>
+      <NAlert v-if="checkResult && canCheck" :type="checkResult.status === 'OK' ? 'success' : 'error'" role="status">
+        {{ modelCheckLabels[checkResult.status] }}
+        <p v-if="checkResult.reply" class="console-payload model-settings-reply">{{ checkResult.reply }}</p>
+      </NAlert>
     </NForm>
     <template v-else-if="error">
       <NAlert type="error" role="alert">{{ error }}</NAlert>
@@ -99,4 +128,6 @@ onMounted(load)
 .model-settings { border-top: 1px solid var(--console-line); padding-block-start: 1rem; }
 .model-settings-fields { display: grid; gap: 1rem; max-width: 35rem; }
 .model-settings-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.model-settings-test-hint { margin-block: .5rem; }
+.model-settings-reply { margin-block: .5rem 0; }
 </style>

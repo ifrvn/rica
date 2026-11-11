@@ -27,5 +27,15 @@ export const modelSettingsView = z.object({
   hasKey: z.boolean(),
 })
 
+export const modelCheckInput = z.strictObject({ version: z.number().int().positive() })
+export const modelCheckStatus = z.object({
+  provider: provider.exclude(['simulated']),
+  checkedAt: z.iso.datetime(),
+  status: z.enum(['OK', 'AUTH_FAILED', 'RATE_LIMITED', 'MODEL_UNAVAILABLE', 'CONNECTION_FAILED', 'INVALID_OUTPUT', 'PROVIDER_ERROR']),
+})
+export const modelCheckResult = modelCheckStatus.extend({ reply: z.string().max(500).nullable() })
+
 export type ModelSettingsInput = z.infer<typeof modelSettingsInput>
 export type ModelSettingsView = z.infer<typeof modelSettingsView>
+export type ModelCheckStatus = z.infer<typeof modelCheckStatus>
+export type ModelCheckResult = z.infer<typeof modelCheckResult>

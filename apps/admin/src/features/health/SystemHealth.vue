@@ -5,7 +5,7 @@ import type { PluginService } from '../../../../../packages/contracts/plugin-sta
 import type { Readiness } from '../../../../../packages/contracts/health.js'
 import { deploymentPluginIds } from '../../../../../packages/contracts/deployment-plugins.js'
 import { formatTime } from '../../shared/console-data.js'
-import { pluginNames, usePluginStatus } from '../plugins/plugin-status.js'
+import { modelCheckLabels, pluginNames, usePluginStatus } from '../plugins/plugin-status.js'
 
 type Tone = 'default' | 'success' | 'warning' | 'error'
 type Node = { id: string; label: string; description: string; state: string; tone: Tone; at?: string; diagnostic?: string }
@@ -84,8 +84,16 @@ const layers = computed(() => {
   }
   for (const id of enabledModels) {
     const configured = deployment?.configuredModel === id
-    dependencies.push(external('model-api-' + id, pluginNames[id] + ' API',
-      configured ? '实际调用结果可通过发起模拟查看。' : '在插件中心保存模型 ID 和 API 密钥后即可试写。', configured))
+    const check = status.value?.modelCheck
+    const node = external('model-api-' + id, pluginNames[id] + ' API',
+      configured ? '在插件中心可用固定消息测试模型连接。' : '在插件中心保存模型 ID 和 API 密钥后即可测试。', configured)
+    if (configured && check?.provider === id) {
+      node.state = check.status === 'OK' ? '测试通过' : '测试失败'
+      node.tone = check.status === 'OK' ? 'success' : 'error'
+      node.at = check.checkedAt
+      node.description = modelCheckLabels[check.status]
+    }
+    dependencies.push(node)
   }
   return [
     { label: '控制面', nodes: [api] },

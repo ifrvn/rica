@@ -21,7 +21,8 @@ import type { PrismaClient } from '../../packages/persistence/generated/client.j
 import { pluginStatusView, type PluginReleaseView } from '../../packages/contracts/plugin-status.js'
 import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
-import { modelSettingsInput, modelSettingsView } from '../../packages/contracts/model-settings.js'
+import { modelCheckInput, modelCheckResult, modelSettingsInput, modelSettingsView, type ModelCheckStatus } from '../../packages/contracts/model-settings.js'
+import { checkModel } from './model-check.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
 import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
@@ -129,6 +130,8 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }
 
   const modelProvider = async () => (await modelSettings?.status())?.provider ?? 'simulated'
+  let checkingModel = false
+  let latestModelCheck: { version: number; result: ModelCheckStatus } | undefined
   async function requireNewbi(endpoint: string) {
     if (deploymentPlugins && (await deploymentPlugins.readNewbi())?.endpoint !== endpoint) {
       throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Newbi is disabled or its endpoint does not match')
@@ -187,6 +190,33 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
         throw new management.ManagementError(422, cause.code, 'An API key is required for this provider and endpoint')
       }
       throw cause
+    }
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: '/model-settings/check', security,
+    request: { body: body(modelCheckInput) },
+    responses: { ...errors, 200: success(modelCheckResult) },
+  }), async (c) => {
+    const store = deploymentModelSettings(c.get('actor'))
+    const expected = c.req.valid('json').version
+    if (checkingModel) throw new management.ManagementError(409, 'MODEL_CHECK_BUSY', 'A model check is in progress')
+    checkingModel = true
+    try {
+      const saved = await store.read()
+      if (saved.version !== expected) throw new management.ManagementError(412, 'VERSION_CONFLICT', 'Model settings have changed')
+      const { configuration } = saved
+      const { provider } = configuration
+      if (provider === 'simulated'
+        || (deploymentPlugins && (await deploymentPlugins.status(provider)).plugins[provider] !== 'ENABLED')) {
+        throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable and configure the model plugin first')
+      }
+      const result = await checkModel({ ...configuration, provider })
+      const { reply: _reply, ...status } = result
+      latestModelCheck = { version: expected, result: status }
+      return c.json(result, 200)
+    } finally {
+      checkingModel = false
     }
   })
 
@@ -286,11 +316,15 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
     const current = await pluginStatus()
     if (!deploymentPlugins) return c.json(current, 200)
-    const [deployment, release] = await Promise.all([
-      modelProvider().then((provider) => deploymentPlugins.status(provider)),
+    const [settings, release] = await Promise.all([
+      modelSettings?.status(),
       pluginRelease?.(current.services),
     ])
-    return c.json({ ...current, deployment, release,
+    const deployment = await deploymentPlugins.status(settings?.provider ?? 'simulated')
+    const modelCheck = latestModelCheck && latestModelCheck.version === settings?.version
+      && latestModelCheck.result.provider === deployment.configuredModel
+      && deployment.plugins[latestModelCheck.result.provider] === 'ENABLED' ? latestModelCheck.result : undefined
+    return c.json({ ...current, deployment, release, modelCheck,
       newbiRegistrationAvailable: deployment.plugins.newbi === 'ENABLED' && deployment.newbi.hasCredential }, 200)
   })
 
