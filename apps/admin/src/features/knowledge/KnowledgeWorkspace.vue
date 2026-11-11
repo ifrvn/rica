@@ -2,10 +2,10 @@
 import { nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, identityView, memoryProvenanceView, memoryView } from '../../packages/contracts/management.js'
+import type { accountView, identityView, memoryProvenanceView, memoryView } from '../../../../../packages/contracts/management.js'
 import MemoryGrantWorkspace from './MemoryGrantWorkspace.vue'
-import { characterPath, focusRecord, formatTime, queryPath, readAll, useConsoleTask, type Page } from './console-data.js'
-import { request, RequestError } from './request.js'
+import { characterPath, focusRecord, formatTime, queryPath, readAll, useConsoleTask, type Page } from '../../shared/console-data.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Memory = z.infer<typeof memoryView>
 type Provenance = z.infer<typeof memoryProvenanceView>

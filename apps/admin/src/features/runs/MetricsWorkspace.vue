@@ -2,9 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
-import { characterPath, queryPath, useConsoleTask } from './console-data.js'
-import { request } from './request.js'
+import type { simulationDailyMetricsView } from '../../../../../packages/contracts/simulation-observability.js'
+import { characterPath, queryPath, useConsoleTask } from '../../shared/console-data.js'
+import { request } from '../../shared/request.js'
 
 type Metrics = z.infer<typeof simulationDailyMetricsView>
 const props = defineProps<{ characterId: string }>()

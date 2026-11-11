@@ -3,8 +3,8 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { newbiInboxView } from '../../packages/contracts/newbi-pilot.js'
-import { request, RequestError } from './request.js'
+import type { newbiInboxView } from '../../../../../packages/contracts/newbi-pilot.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Inbox = z.infer<typeof newbiInboxView>
 const props = defineProps<{ characterId: string; accountId: string; accountStatus: string; canReview: boolean }>()

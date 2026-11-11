@@ -2,9 +2,9 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { NewbiReplyView, newbiReplySummary } from '../../packages/contracts/newbi-pilot.js'
-import { focusRecord, formatTime } from './console-data.js'
-import { request, RequestError } from './request.js'
+import type { NewbiReplyView, newbiReplySummary } from '../../../../../packages/contracts/newbi-pilot.js'
+import { focusRecord, formatTime } from '../../shared/console-data.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Summary = z.infer<typeof newbiReplySummary>
 type Page = { items: Summary[]; nextCursor: string | null }

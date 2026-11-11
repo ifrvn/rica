@@ -3,9 +3,9 @@ import { computed, onMounted, ref, watchEffect } from 'vue'
 import { darkTheme, NButton, NConfigProvider, NGlobalStyle, NTag, zhCN, type GlobalThemeOverrides } from 'naive-ui'
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
 import ReviewDesk from './ReviewDesk.vue'
-import type { Readiness } from '../../packages/contracts/health.js'
+import type { Readiness } from '../../../../packages/contracts/health.js'
 import { palettes, readAppearance, saveAppearance } from './appearance.js'
-import './console-theme.css'
+import '../styles/console-theme.css'
 
 const appearance = ref(readAppearance())
 const theme = computed<GlobalThemeOverrides>(() => {
@@ -108,7 +108,7 @@ onMounted(refresh)
   </NConfigProvider>
 </template>
 
-<style src="./console-layout.css"></style>
+<style src="../styles/console-layout.css"></style>
 
 <style>
 body { margin: 0; }

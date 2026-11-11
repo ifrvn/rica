@@ -2,8 +2,8 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { auditView } from '../../packages/contracts/management.js'
-import { request, RequestError } from './request.js'
+import type { auditView } from '../../../../../packages/contracts/management.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Entry = z.infer<typeof auditView>
 type Page = { items: Entry[]; nextCursor: string | null }

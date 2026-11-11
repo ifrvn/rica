@@ -2,10 +2,10 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountRegistrationView, accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
-import TimeZoneSelect from './TimeZoneSelect.vue'
+import type { accountRegistrationView, accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
+import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
-import { request, RequestError } from './request.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Workspace = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
@@ -50,14 +50,14 @@ const styles = [
 const editorHeading = ref<HTMLElement>()
 const workspaceHeading = ref<HTMLElement>()
 const schemas = shallowRef<{
-  management: typeof import('../../packages/contracts/management.js')
-  connector: typeof import('../../packages/contracts/newbi-pilot.js')
+  management: typeof import('../../../../../packages/contracts/management.js')
+  connector: typeof import('../../../../../packages/contracts/newbi-pilot.js')
 }>()
 
 async function loadSchemas() {
   if (schemas.value) return
   const [management, connector] = await Promise.all([
-    import('../../packages/contracts/management.js'), import('../../packages/contracts/newbi-pilot.js'),
+    import('../../../../../packages/contracts/management.js'), import('../../../../../packages/contracts/newbi-pilot.js'),
   ])
   if (active) schemas.value = { management, connector }
 }

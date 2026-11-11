@@ -2,10 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { NAlert, NButton, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { simulationBacklogView, simulationRunSummary } from '../../packages/contracts/simulation-observability.js'
-import { characterPath, formatTime, useConsoleTask, type Page } from './console-data.js'
-import type { ConsolePage } from './console-location.js'
-import { request } from './request.js'
+import type { simulationBacklogView, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
+import { characterPath, formatTime, useConsoleTask, type Page } from '../../shared/console-data.js'
+import type { ConsolePage } from '../../app/console-location.js'
+import { request } from '../../shared/request.js'
 
 type Backlog = z.infer<typeof simulationBacklogView>
 type Run = z.infer<typeof simulationRunSummary>

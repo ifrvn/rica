@@ -2,9 +2,9 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView } from '../../packages/contracts/management.js'
-import type { pluginStatusView, PluginService } from '../../packages/contracts/plugin-status.js'
-import { request, RequestError } from './request.js'
+import type { accountView } from '../../../../../packages/contracts/management.js'
+import type { pluginStatusView, PluginService } from '../../../../../packages/contracts/plugin-status.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Account = z.infer<typeof accountView>
 type Service = z.infer<typeof pluginStatusView>['services'][number]

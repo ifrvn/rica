@@ -2,9 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '../../packages/contracts/management.js'
-import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from './console-data.js'
-import { request } from './request.js'
+import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '../../../../../packages/contracts/management.js'
+import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from '../../shared/console-data.js'
+import { request } from '../../shared/request.js'
 
 type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>

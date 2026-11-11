@@ -2,25 +2,25 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
-import ConnectorReview from './ConnectorReview.vue'
-import SimulationWorkspace from './SimulationWorkspace.vue'
-import RunOperations from './RunOperations.vue'
-import AuditWorkspace from './AuditWorkspace.vue'
-import PluginWorkspace from './PluginWorkspace.vue'
-import { focusRecord } from './console-data.js'
-import { request, RequestError } from './request.js'
+import ConnectorReview from '../features/review/ConnectorReview.vue'
+import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
+import RunOperations from '../features/runs/RunOperations.vue'
+import AuditWorkspace from '../features/access/AuditWorkspace.vue'
+import PluginWorkspace from '../features/plugins/PluginWorkspace.vue'
+import { focusRecord } from '../shared/console-data.js'
+import { request, RequestError } from '../shared/request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
-import type { characterWorkspaceView } from '../../packages/contracts/management.js'
+import type { characterWorkspaceView } from '../../../../packages/contracts/management.js'
 import type { z } from '@hono/zod-openapi'
-import type { ActionView } from '../../packages/contracts/action-review.js'
+import type { ActionView } from '../../../../packages/contracts/action-review.js'
 
-const CharacterWorkspace = defineAsyncComponent(() => import('./CharacterWorkspace.vue'))
-const ConsoleHome = defineAsyncComponent(() => import('./ConsoleHome.vue'))
-const GrowthWorkspace = defineAsyncComponent(() => import('./GrowthWorkspace.vue'))
-const KnowledgeWorkspace = defineAsyncComponent(() => import('./KnowledgeWorkspace.vue'))
-const MembershipWorkspace = defineAsyncComponent(() => import('./MembershipWorkspace.vue'))
-const MetricsWorkspace = defineAsyncComponent(() => import('./MetricsWorkspace.vue'))
-const PlanningWorkspace = defineAsyncComponent(() => import('./PlanningWorkspace.vue'))
+const CharacterWorkspace = defineAsyncComponent(() => import('../features/characters/CharacterWorkspace.vue'))
+const ConsoleHome = defineAsyncComponent(() => import('../features/home/ConsoleHome.vue'))
+const GrowthWorkspace = defineAsyncComponent(() => import('../features/knowledge/GrowthWorkspace.vue'))
+const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowledge/KnowledgeWorkspace.vue'))
+const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
+const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
+const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 
 type Character = { id: string; slug: string; profile: { name?: string } | null }
 type Page<T> = { items: T[]; nextCursor: string | null }
@@ -33,7 +33,7 @@ const passkeyPassword = ref('')
 const showPasskeyForm = ref(false)
 const accountMenuOpen = ref(false)
 const modelSettingsOpen = ref(false)
-const ModelSettings = defineAsyncComponent(() => import('./ModelSettings.vue'))
+const ModelSettings = defineAsyncComponent(() => import('../features/plugins/ModelSettings.vue'))
 const pageHeading = ref<HTMLElement>()
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])

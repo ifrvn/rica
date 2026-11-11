@@ -2,12 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, characterWorkspaceView, identityView } from '../../packages/contracts/management.js'
-import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../packages/contracts/simulation-observability.js'
+import type { accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
+import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
 import SimulationReconciliation from './SimulationReconciliation.vue'
-import type { ReconciliationView } from '../../packages/contracts/action-review.js'
-import { runFilterKeys } from './console-location.js'
-import { request, RequestError } from './request.js'
+import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
+import { runFilterKeys } from '../../app/console-location.js'
+import { request, RequestError } from '../../shared/request.js'
 
 type Run = z.infer<typeof simulationRunSummary>
 type Replay = z.infer<typeof runReplayView>

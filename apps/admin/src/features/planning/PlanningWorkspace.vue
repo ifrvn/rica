@@ -2,13 +2,13 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NCheckbox, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, characterWorkspaceView, conversationOption } from '../../packages/contracts/management.js'
-import { scheduleInput, scheduleUpdate, type scheduleView } from '../../packages/contracts/schedules.js'
-import { commitmentInput, commitmentUpdate, type commitmentView } from '../../packages/contracts/commitments.js'
-import type { runReplayView } from '../../packages/contracts/simulation-observability.js'
-import { characterPath, formatTime, queryPath, readAll, useConsoleTask, type Page } from './console-data.js'
-import { request } from './request.js'
-import TimeZoneSelect from './TimeZoneSelect.vue'
+import type { accountView, characterWorkspaceView, conversationOption } from '../../../../../packages/contracts/management.js'
+import { scheduleInput, scheduleUpdate, type scheduleView } from '../../../../../packages/contracts/schedules.js'
+import { commitmentInput, commitmentUpdate, type commitmentView } from '../../../../../packages/contracts/commitments.js'
+import type { runReplayView } from '../../../../../packages/contracts/simulation-observability.js'
+import { characterPath, formatTime, queryPath, readAll, useConsoleTask, type Page } from '../../shared/console-data.js'
+import { request } from '../../shared/request.js'
+import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 
 type Schedule = z.infer<typeof scheduleView>
 type Commitment = z.infer<typeof commitmentView>

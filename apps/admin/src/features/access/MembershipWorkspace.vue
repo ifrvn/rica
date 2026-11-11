@@ -2,9 +2,9 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import { membershipInput, type memberPage } from '../../packages/contracts/management.js'
-import { characterPath, queryPath, useConsoleTask } from './console-data.js'
-import { request } from './request.js'
+import { membershipInput, type memberPage } from '../../../../../packages/contracts/management.js'
+import { characterPath, queryPath, useConsoleTask } from '../../shared/console-data.js'
+import { request } from '../../shared/request.js'
 
 type Members = z.infer<typeof memberPage>
 type Role = Members['items'][number]['roles'][number]

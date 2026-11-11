@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpin } from 'naive-ui'
-import { modelProviders, modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from '../../packages/contracts/model-settings.js'
-import { useConsoleTask } from './console-data.js'
-import { request } from './request.js'
+import { modelProviders, modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from '../../../../../packages/contracts/model-settings.js'
+import { useConsoleTask } from '../../shared/console-data.js'
+import { request } from '../../shared/request.js'
 
 const emit = defineEmits<{ close: []; expired: [] }>()
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
