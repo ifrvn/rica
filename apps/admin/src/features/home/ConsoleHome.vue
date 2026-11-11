@@ -38,7 +38,8 @@ const priority = computed(() => {
 const tools = [
   { page: 'character', icon: 'i-lucide-users', title: '角色与身份', hint: '查看角色和身份' },
   { page: 'accounts', icon: 'i-lucide-contact', title: '平台账号池', hint: '查看账号及其关联身份' },
-  { page: 'plugins', icon: 'i-lucide-puzzle', title: '插件', hint: '查看插件与进程报告' },
+  { page: 'plugins', icon: 'i-lucide-puzzle', title: '插件中心', hint: '查看可用插件和配置入口' },
+  { page: 'health', icon: 'i-lucide-server', title: '系统运行状况', hint: '查看进程与外部连接' },
 ] as const
 
 function refresh() {

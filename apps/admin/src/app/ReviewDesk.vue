@@ -6,13 +6,16 @@ import ConnectorReview from '../features/review/ConnectorReview.vue'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
-import PluginWorkspace from '../features/plugins/PluginWorkspace.vue'
 import { focusRecord } from '../shared/console-data.js'
 import { request, RequestError } from '../shared/request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView, characterWorkspaceView } from '../../../../packages/contracts/management.js'
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../../../packages/contracts/action-review.js'
+import type { Readiness } from '../../../../packages/contracts/health.js'
+
+defineProps<{ readiness?: Readiness; checkedAt?: string; checkingReadiness: boolean }>()
+const emit = defineEmits<{ checkReadiness: [] }>()
 
 const CharacterWorkspace = defineAsyncComponent(() => import('../features/characters/CharacterWorkspace.vue'))
 const ConsoleHome = defineAsyncComponent(() => import('../features/home/ConsoleHome.vue'))
@@ -21,6 +24,8 @@ const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowle
 const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
+const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
+const SystemHealth = defineAsyncComponent(() => import('../features/health/SystemHealth.vue'))
 
 type Character = z.infer<typeof characterView>
 type Page<T> = { items: T[]; nextCursor: string | null }
@@ -46,7 +51,8 @@ const mainPage = computed(() => inRuns.value ? 'runs'
 watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
   home: '工作台', members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
-  character: '角色与身份', review: '审批', runs: '运行记录', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号池', connector: '审批',
+  character: '角色与身份', review: '审批', runs: '运行记录', outbox: '失败任务', audit: '审计', plugins: '插件中心',
+  health: '系统运行状况', accounts: '平台账号池', connector: '审批',
 }
 const detailId = ref<string>()
 const reviewListHeading = ref<HTMLElement>()
@@ -203,7 +209,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     const page = landing && !roles.value.includes('ADMIN')
       ? canReviewSimulation.value ? 'review' : canReadRuns.value ? 'audit' : 'character'
       : location.page
-    const denied = (['home', 'runs', 'outbox', 'audit', 'plugins', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
+    const denied = (['home', 'runs', 'outbox', 'audit', 'plugins', 'health', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
       || (page === 'planning' && !roles.value.includes('ADMIN'))
       || (page === 'connector' && !canReview.value)
       || (page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
@@ -442,7 +448,7 @@ async function decide(decision: Decision) {
       </Teleport>
       <Teleport to="#masthead-account">
         <div class="workspace-account">
-          <NButton v-if="canCreate" size="small" secondary :disabled="busy" @click="modelSettingsOpen = true">模型设置</NButton>
+          <NButton v-if="canCreate && !canReadRuns" size="small" secondary :disabled="busy" @click="modelSettingsOpen = true">模型设置</NButton>
           <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
             @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
             <template #trigger>
@@ -493,7 +499,9 @@ async function decide(decision: Decision) {
             @click="changeTab('audit')"><span class="i-lucide-history" aria-hidden="true" />审计</button>
           <span class="console-nav-label">部署管理</span>
           <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件</button>
+            @click="changeTab('plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件中心</button>
+          <button type="button" :aria-current="mainPage === 'health' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('health')"><span class="i-lucide-server" aria-hidden="true" />系统运行状况</button>
         </template>
       </nav>
       <div class="workspace-content">
@@ -543,7 +551,12 @@ async function decide(decision: Decision) {
       <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '')"
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
-        :character-id="characterId" @expired="resetSession" @accounts="navigate({ characterId, page: 'accounts', detail: $event })" />
+        :character-id="characterId" :can-configure-model="canCreate" @expired="resetSession"
+        @accounts="changeTab('accounts')" @configure-model="modelSettingsOpen = true" />
+      <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId"
+        :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
+        :readiness="readiness" :checked-at="checkedAt" :checking="checkingReadiness" @check="emit('checkReadiness')"
+        @accounts="changeTab('accounts')" @runs="changeTab('runs')" />
       <MembershipWorkspace v-else-if="tab === 'members' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :username="username" :can-edit="roles.includes('ADMIN')"
         @expired="resetSession" @permissions="refreshMembership" />

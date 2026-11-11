@@ -72,9 +72,9 @@ export async function reportPluginResult(
   finally { redis.disconnect() }
 }
 
-export async function readPluginStatus(redis?: Pick<Redis, 'mget'>) {
+export async function readPluginStatus(redis?: Pick<Redis, 'mget'>, newbiRegistrationAvailable = false) {
   const snapshots = await redis?.mget(...pluginServices.map(key)).catch(() => undefined)
-  return { services: pluginServices.map((service, index) => {
+  return { newbiRegistrationAvailable, services: pluginServices.map((service, index) => {
     const expected = catalog[service]
     let report: PluginReport | null = null
     try {

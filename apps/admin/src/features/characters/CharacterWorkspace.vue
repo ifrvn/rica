@@ -4,6 +4,7 @@ import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountRegistrationView, accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
+import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
 import { request, RequestError } from '../../shared/request.js'
@@ -29,6 +30,7 @@ const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
+const newbiRegistrationAvailable = ref(false)
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
@@ -47,7 +49,7 @@ const isCharacter = computed(() => editor.value === 'character' || editor.value 
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
   character: '新建角色', core: '角色设置', identity: '添加身份', 'identity-edit': '编辑身份',
-  account: '添加模拟账号', 'connector-account': '添加连接器账号', associate: '关联平台账号',
+  account: '添加模拟账号', 'connector-account': '接入 Newbi 账号', associate: '关联平台账号',
   'linked-account': '已关联的平台账号',
   control: target.value?.revoke ? '撤销账号'
     : (target.value?.status === 'ACTIVE' ? '暂停' : '恢复')
@@ -173,7 +175,7 @@ let active = true
 onBeforeUnmount(() => { active = false })
 
 function accountLabel(account: Registration) {
-  return [account.platform === 'newbi' ? '本机连接器' : account.platform, account.instanceKey, account.remoteAccountId].join(' · ')
+  return [account.platform === 'newbi' ? 'Newbi' : account.platform, account.instanceKey, account.remoteAccountId].join(' · ')
 }
 
 function status(value: string) {
@@ -197,15 +199,22 @@ async function all<T>(path: string) {
 async function load() {
   if (!props.characterId) return
   const current = await request<Workspace>(base.value)
-  const [nextIdentities, nextAccounts, pool] = await Promise.all([
+  const [nextIdentities, nextAccounts, pool, pluginStatus] = await Promise.all([
     all<Identity>(base.value + '/identities'), all<Account>(base.value + '/accounts'),
     current.roles.some((role) => role === 'ADMIN' || role === 'AUDITOR') ? all<Registration>(base.value + '/account-pool') : [],
+    props.accountsOnly && current.roles.includes('ADMIN')
+      ? request<PluginStatus>(base.value + '/plugins').catch((cause) => {
+        if (cause instanceof RequestError && cause.status === 401) throw cause
+        return undefined
+      })
+      : undefined,
   ])
   if (!active) return
   workspace.value = current
   identities.value = nextIdentities
   accounts.value = nextAccounts
   accountPool.value = pool
+  newbiRegistrationAvailable.value = pluginStatus?.newbiRegistrationAvailable === true
   emit('roles', current.roles)
   emit('updated', current)
 }
@@ -528,7 +537,8 @@ onMounted(() => { if (props.characterId) void run(load) })
           <div v-if="admin || accountsOnly" class="workspace-actions">
             <NButton v-if="admin" size="small" :disabled="busy || !workspace.simulationPlatforms.length"
               @click="open('account')">添加模拟账号</NButton>
-            <NButton v-if="admin" size="small" :disabled="busy" @click="open('connector-account')">添加连接器账号</NButton>
+            <NButton v-if="admin && newbiRegistrationAvailable" size="small" :disabled="busy"
+              @click="open('connector-account')">接入 Newbi 账号</NButton>
             <NButton v-if="accountsOnly" text :disabled="busy" @click="run(load)">刷新账号</NButton>
           </div>
         </div>

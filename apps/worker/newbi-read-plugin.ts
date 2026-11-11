@@ -1,8 +1,12 @@
 import { newbiEndpoint, newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
-import { createNewbiReadClient } from '../../packages/runtime/newbi-client.js'
+import { createNewbiReadClient, isNewbiCredential } from '../../packages/runtime/newbi-client.js'
 import { startPluginHost, type PluginDefinition } from '../../packages/runtime/plugin-registry.js'
 
 const credentialService = 'local-agent-credential'
+
+export function canVerifyNewbiBinding(env = process.env) {
+  return isNewbiCredential(env.NEWBI_AGENT_KEY ?? '') && newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).success
+}
 
 export async function verifyNewbiBinding(endpoint: string, agentId: string, env = process.env) {
   // Only the deployment-configured endpoint may receive the deployment credential.

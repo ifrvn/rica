@@ -32,9 +32,13 @@ class NewbiEventCursorExpired extends Error {
   constructor(readonly resetCursor: string) { super('Newbi event history was lost') }
 }
 
+export function isNewbiCredential(value: string) {
+  return /^nbi_agent_[A-Za-z0-9_-]{43}$/u.test(value)
+}
+
 function createTransport(endpoint: string, credential: string, stop?: AbortSignal) {
   const base = newbiEndpoint.parse(endpoint)
-  if (!/^nbi_agent_[A-Za-z0-9_-]{43}$/u.test(credential)) throw new Error('Invalid Newbi credential format')
+  if (!isNewbiCredential(credential)) throw new Error('Invalid Newbi credential format')
 
   async function request(path: string, expected: number, options?: { id: string; content: string }) {
     stop?.throwIfAborted()

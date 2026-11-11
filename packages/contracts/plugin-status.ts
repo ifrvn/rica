@@ -26,6 +26,7 @@ export const pluginReport = z.strictObject({
 export type PluginReport = z.infer<typeof pluginReport>
 
 export const pluginStatusView = z.object({
+  newbiRegistrationAvailable: z.boolean(),
   services: z.array(z.object({
     service: z.enum(pluginServices),
     catalog: z.array(pluginIdentity),

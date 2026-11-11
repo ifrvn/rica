@@ -6,7 +6,7 @@ import { loadManagementConfig } from './admin-auth.js'
 import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
-import { verifyNewbiBinding } from '../worker/newbi-read-plugin.js'
+import { canVerifyNewbiBinding, verifyNewbiBinding } from '../worker/newbi-read-plugin.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
@@ -33,7 +33,7 @@ const auth = managementConfig && managementDb ? createAdminAuth(managementDb, re
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
-  pluginStatus: () => readPluginStatus(redis),
+  pluginStatus: () => readPluginStatus(redis, canVerifyNewbiBinding()),
   modelSettings: createModelSettingsStore(modelSettingsDirectory(config.databaseUrl)),
   verifyConnector: verifyNewbiBinding,
 }) : undefined

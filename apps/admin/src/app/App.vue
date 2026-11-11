@@ -49,9 +49,10 @@ watchEffect(() => {
 })
 
 const readiness = ref<Readiness>()
+const checkedAt = ref<string>()
 const checking = ref(false)
 const serviceStatus = computed(() => {
-  if (checking.value) return { label: '正在检查', tone: 'default' } as const
+  if (checking.value && !readiness.value) return { label: '正在检查', tone: 'default' } as const
   if (!readiness.value) return { label: '无法连接 API', tone: 'error' } as const
   return readiness.value.status === 'ready'
     ? { label: '服务正常', tone: 'success' } as const
@@ -59,13 +60,21 @@ const serviceStatus = computed(() => {
 })
 
 async function refresh() {
+  if (checking.value) return
   checking.value = true
   try {
-    const response = await fetch('/health/ready', { signal: AbortSignal.timeout(5000) })
-    if (response.status !== 200 && response.status !== 503) throw new Error('Unexpected HTTP status')
-    readiness.value = await response.json()
+    const response = await fetch('/health/ready', { signal: AbortSignal.timeout(5000), cache: 'no-store' })
+    if (response.status !== 200 && response.status !== 503) throw new Error('Unexpected readiness response')
+    const result: Readiness = await response.json()
+    if ((result?.status !== 'ready' && result?.status !== 'unavailable')
+      || typeof result.checks?.postgres !== 'boolean' || typeof result.checks?.redis !== 'boolean') {
+      throw new Error('Invalid readiness response')
+    }
+    readiness.value = result
+    checkedAt.value = new Date().toISOString()
   } catch {
     readiness.value = undefined
+    checkedAt.value = undefined
   } finally {
     checking.value = false
   }
@@ -138,7 +147,7 @@ onBeforeUnmount(() => systemPreference.removeEventListener('change', updateSyste
         </div>
       </header>
       <main class="admin-content">
-        <ReviewDesk />
+        <ReviewDesk :readiness="readiness" :checked-at="checkedAt" :checking-readiness="checking" @check-readiness="refresh" />
       </main>
     </div>
   </NConfigProvider>
