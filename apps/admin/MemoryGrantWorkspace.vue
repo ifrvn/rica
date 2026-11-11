@@ -178,5 +178,5 @@ onMounted(() => { void run(load) })
 </template>
 
 <style scoped>
-.memory-grants { border-top: 1px solid #dfe7e6; margin-top: 1rem; padding-top: .875rem; }
+.memory-grants { border-top: 1px solid var(--console-line); margin-top: 1rem; padding-top: .875rem; }
 </style>

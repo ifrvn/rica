@@ -110,10 +110,10 @@ onMounted(() => { void load() })
 
 <style scoped>
 .audit-list { list-style: none; margin: 0 0 .5rem; padding: 0; }
-.audit-list li + li { border-top: 1px solid #e0e8e7; }
+.audit-list li + li { border-top: 1px solid var(--console-line); }
 details { padding-block: .6rem; }
 summary { cursor: pointer; overflow-wrap: anywhere; }
-summary time { margin-inline-start: .65rem; color: #485c5b; }
+summary time { margin-inline-start: .65rem; color: var(--console-muted); }
 dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }

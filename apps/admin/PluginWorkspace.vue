@@ -181,18 +181,18 @@ onBeforeUnmount(() => {
 .plugin-workspace { display: grid; gap: 1.5rem; min-width: 0; }
 .plugin-status-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .plugin-status-table th, .plugin-status-table td { text-align: start; padding: .55rem .375rem;
-  border-bottom: 1px solid #dfe7e6; overflow-wrap: anywhere; }
-.plugin-status-table thead th { color: #485c5b; font-size: .875rem; font-weight: 500; }
+  border-bottom: 1px solid var(--console-line); overflow-wrap: anywhere; }
+.plugin-status-table thead th { color: var(--console-muted); font-size: .875rem; font-weight: 500; }
 .plugin-status-table tbody th { font-weight: 600; }
 .plugin-status-table th:first-child { width: 40%; }
-.plugin-status-table time { font-size: .875rem; color: #485c5b; }
+.plugin-status-table time { font-size: .875rem; color: var(--console-muted); }
 .plugin-toggle { margin-inline-start: .4rem; }
-.plugin-details { background: #edf3f2; }
+.plugin-details { background: var(--console-hover); }
 .plugin-details p { margin: .25rem 0 .5rem; }
 .plugin-status-table :deep(.n-tag) { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
 .plugin-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; justify-content: space-between;
   padding-block: .5rem; overflow-wrap: anywhere; }
 .plugin-list { list-style: none; margin: 0; padding: 0; }
-.plugin-list > li + li { border-top: 1px solid #dfe7e6; }
+.plugin-list > li + li { border-top: 1px solid var(--console-line); }
 @media (max-width: 30rem) { .plugin-toggle { margin-inline-start: 0; display: flex; } }
 </style>

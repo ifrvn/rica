@@ -373,7 +373,8 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <div class="workspace-actions">
-          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy">{{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : title }}</NButton>
+          <NButton :type="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
+            attr-type="submit" :loading="busy" :disabled="busy">{{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : title }}</NButton>
           <NButton :disabled="busy" @click="closeEditor">取消</NButton>
         </div>
       </NForm>
@@ -394,7 +395,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           <div>{{ workspace.timezone }} <NTag size="small" :bordered="false">{{ status(workspace.status) }}</NTag></div>
           <div v-if="admin" class="workspace-actions">
             <NButton size="small" :disabled="busy || !workspace.version" @click="open('core')">编辑核心</NButton>
-            <NButton size="small" :disabled="busy" @click="open('control', undefined,
+            <NButton size="small" :type="workspace.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="open('control', undefined,
               { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
               {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
             </NButton>
@@ -413,7 +414,7 @@ onMounted(() => { if (props.characterId) void run(load) })
             <div v-if="admin" class="workspace-actions">
               <NButton size="small" :disabled="busy || !accountPool.length" @click="open('associate', identity)">关联账号</NButton>
               <NButton size="small" :disabled="busy || !identity.version" @click="open('identity-edit', identity)">编辑</NButton>
-              <NButton size="small" :disabled="busy" @click="open('control', undefined,
+              <NButton size="small" :type="identity.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="open('control', undefined,
                 { scope: 'IDENTITY', id: identity.id, name: identity.profile?.displayName || identity.slug, status: identity.status })">
                 {{ identity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
               </NButton>
@@ -450,13 +451,13 @@ onMounted(() => { if (props.characterId) void run(load) })
               <NButton v-if="inspectConnector && account.platform === 'newbi'" size="small"
                 @click="emit('account', account.id)">查看读取状态</NButton>
               <NButton v-if="admin && ['mock-a', 'mock-b', 'newbi'].includes(account.platform) && ['ACTIVE', 'PAUSED'].includes(account.status)"
-                size="small" :disabled="busy" @click="open('control', undefined,
+                size="small" :type="account.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="open('control', undefined,
                   { scope: 'ACCOUNT', id: account.id, name: account.platform + ' · ' + account.instanceKey,
                     status: account.status, connector: account.platform === 'newbi' })">
                 {{ account.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
               </NButton>
               <NButton v-if="admin && account.platform === 'newbi' && account.status !== 'REVOKED'"
-                size="small" quaternary :disabled="busy" @click="open('control', undefined,
+                size="small" type="error" :disabled="busy" @click="open('control', undefined,
                   { scope: 'ACCOUNT', id: account.id, name: account.instanceKey, status: account.status, connector: true, revoke: true })">
                 撤销账号
               </NButton>
@@ -474,12 +475,12 @@ onMounted(() => { if (props.characterId) void run(load) })
 
 <style scoped>
 .character-workspace { display: grid; gap: 1.25rem; min-width: 0; }
-.workspace-section + .workspace-section { border-top: 1px solid #dfe7e6; padding-top: 1rem; }
+.workspace-section + .workspace-section { border-top: 1px solid var(--console-line); padding-top: 1rem; }
 .workspace-editor { max-width: 37rem; }
 .workspace-editor h3 { margin: 0 0 1rem; }
 .workspace-list > li { padding-block: .625rem; }
 .workspace-actions, .workspace-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .workspace-row { justify-content: space-between; overflow-wrap: anywhere; }
 .workspace-list { list-style: none; margin: 0; padding: 0; }
-.workspace-list > li + li { border-top: 1px solid #e0e8e7; margin-top: .5rem; padding-top: .5rem; }
+.workspace-list > li + li { border-top: 1px solid var(--console-line); margin-top: .5rem; padding-top: .5rem; }
 </style>

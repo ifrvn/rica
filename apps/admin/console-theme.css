@@ -1,0 +1,62 @@
+:root {
+  color-scheme: light;
+  --console-page: #f8faf3;
+  --console-surface: #fffefb;
+  --console-nav: #fdfef9;
+  --console-text: #253226;
+  --console-muted: #51614e;
+  --console-line: #edf0e7;
+  --console-field: #899982;
+  --console-hover: #f6f8ef;
+  --console-selected: #eef3e7;
+  --console-accent-text: #355539;
+  --console-good: #2c6a52;
+}
+:root[data-console-palette="terracotta"] {
+  --console-page: #fffaf4;
+  --console-surface: #fffefa;
+  --console-nav: #fffdf9;
+  --console-text: #332720;
+  --console-muted: #6a5549;
+  --console-line: #eee5dc;
+  --console-field: #aa9181;
+  --console-hover: #fff7f0;
+  --console-selected: #fceee5;
+  --console-accent-text: #833923;
+}
+:root[data-console-palette="iris"] {
+  --console-page: #faf7fd;
+  --console-surface: #fffdfd;
+  --console-nav: #fefcff;
+  --console-text: #302642;
+  --console-muted: #5e5470;
+  --console-line: #eee6f4;
+  --console-field: #a393b8;
+  --console-hover: #f9f5fd;
+  --console-selected: #f3ecfb;
+  --console-accent-text: #553780;
+}
+:root[data-console-mode="dark"] {
+  color-scheme: dark;
+  --console-page: #1c1a1c;
+  --console-surface: #242125;
+  --console-nav: #1d1a1e;
+  --console-text: #f5eeeb;
+  --console-muted: #c7bbb8;
+  --console-line: #393338;
+  --console-field: #7c7077;
+  --console-hover: #242e26;
+  --console-selected: #2c3b2d;
+  --console-accent-text: #c4e6bf;
+  --console-good: #a0dab5;
+}
+:root[data-console-mode="dark"][data-console-palette="terracotta"] {
+  --console-hover: #2b2426;
+  --console-selected: #3d2a27;
+  --console-accent-text: #ffc3ae;
+}
+:root[data-console-mode="dark"][data-console-palette="iris"] {
+  --console-hover: #2a2333;
+  --console-selected: #382e47;
+  --console-accent-text: #e4d4ff;
+}

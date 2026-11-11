@@ -15,6 +15,7 @@ import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../packages/contracts/action-review.js'
 
 const CharacterWorkspace = defineAsyncComponent(() => import('./CharacterWorkspace.vue'))
+const ConsoleHome = defineAsyncComponent(() => import('./ConsoleHome.vue'))
 const GrowthWorkspace = defineAsyncComponent(() => import('./GrowthWorkspace.vue'))
 const KnowledgeWorkspace = defineAsyncComponent(() => import('./KnowledgeWorkspace.vue'))
 const MembershipWorkspace = defineAsyncComponent(() => import('./MembershipWorkspace.vue'))
@@ -38,14 +39,14 @@ const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && wi
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
-const runPages: ConsolePage[] = ['runs', 'outbox', 'planning', 'metrics']
+const runPages: ConsolePage[] = ['runs', 'outbox', 'metrics']
 const inRuns = computed(() => runPages.includes(tab.value))
 const mainPage = computed(() => inRuns.value ? 'runs'
-  : tab.value === 'accounts' ? 'character' : tab.value === 'connector' ? 'review' : tab.value)
+  : tab.value === 'connector' ? 'review' : tab.value)
 watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
-  members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '运行配置', metrics: '模拟运行指标',
-  character: '角色与身份', review: '人工审批', runs: '运行', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号', connector: '本机连接器审批',
+  home: '工作台', members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
+  character: '角色与身份', review: '人工审批', runs: '运行记录', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号池', connector: '本机连接器审批',
 }
 const detailId = ref<string>()
 const reviewListHeading = ref<HTMLElement>()
@@ -159,7 +160,7 @@ function restoreLocation() {
   if (!username.value) return
   const location = readConsoleLocation(window.location.hash)
   const first = characters.value[0]
-  return applyLocation(location ?? (first && { characterId: first.id, page: 'character' }), !location, !location)
+  return applyLocation(location ?? (first && { characterId: first.id, page: 'home' }), !location, !location)
 }
 
 async function applyLocation(location?: ConsoleLocation, replace = false, landing = false) {
@@ -197,7 +198,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     const page = landing && !roles.value.includes('ADMIN')
       ? canReviewSimulation.value ? 'review' : canReadRuns.value ? 'audit' : 'character'
       : location.page
-    const denied = (['runs', 'outbox', 'audit', 'plugins', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
+    const denied = (['home', 'runs', 'outbox', 'audit', 'plugins', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
       || (page === 'planning' && !roles.value.includes('ADMIN'))
       || (page === 'connector' && !canReview.value)
       || (page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
@@ -457,29 +458,46 @@ async function decide(decision: Decision) {
       </div>
       <ModelSettings v-if="canCreate && modelSettingsOpen" @close="modelSettingsOpen = false" @expired="resetSession" />
 
+      <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
       <nav v-if="characters.length" class="console-navigation" aria-label="控制台导航">
-        <button type="button" :aria-current="mainPage === 'character' ? 'page' : undefined" :disabled="busy" @click="changeTab('character')">角色与身份</button>
+        <button v-if="canReadRuns" type="button" :aria-current="mainPage === 'home' ? 'page' : undefined" :disabled="busy || routing"
+          @click="changeTab('home')"><span class="i-lucide-layout-dashboard" aria-hidden="true" />工作台</button>
         <button v-if="canReview" type="button" :aria-current="mainPage === 'review' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab(canReviewSimulation ? 'review' : 'connector')">审批</button>
+          @click="changeTab(canReviewSimulation ? 'review' : 'connector')"><span class="i-lucide-clipboard-check" aria-hidden="true" />审批</button>
+        <button v-if="canReadRuns" type="button" :aria-current="mainPage === 'runs' ? 'page' : undefined" :disabled="busy || routing"
+          @click="changeTab('runs')"><span class="i-lucide-activity" aria-hidden="true" />运行记录</button>
+        <span class="console-nav-label">角色管理</span>
+        <button type="button" :aria-current="mainPage === 'character' ? 'page' : undefined" :disabled="busy || routing"
+          @click="changeTab('character')"><span class="i-lucide-users" aria-hidden="true" />角色与身份</button>
         <template v-if="canReadRuns">
-          <button type="button" :aria-current="mainPage === 'runs' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('runs')">运行</button>
-          <button type="button" :aria-current="mainPage === 'audit' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('audit')">审计</button>
-          <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('plugins')">插件</button>
-          <button type="button" :aria-current="mainPage === 'knowledge' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('knowledge')">记忆与授权</button>
-          <button type="button" :aria-current="mainPage === 'growth' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('growth')">身份成长</button>
-          <button type="button" :aria-current="mainPage === 'members' ? 'page' : undefined" :disabled="busy || routing" @click="changeTab('members')">角色成员</button>
+          <button type="button" :aria-current="mainPage === 'accounts' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('accounts')"><span class="i-lucide-contact" aria-hidden="true" />平台账号池</button>
+          <button type="button" :aria-current="mainPage === 'knowledge' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('knowledge')"><span class="i-lucide-book-open" aria-hidden="true" />记忆与授权</button>
+          <button type="button" :aria-current="mainPage === 'growth' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('growth')"><span class="i-lucide-sprout" aria-hidden="true" />身份成长</button>
+          <button v-if="roles.includes('ADMIN')" type="button" :aria-current="mainPage === 'planning' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('planning')"><span class="i-lucide-calendar-days" aria-hidden="true" />计划与承诺</button>
+          <button type="button" :aria-current="mainPage === 'members' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('members')"><span class="i-lucide-user-round-cog" aria-hidden="true" />角色成员</button>
+          <button type="button" :aria-current="mainPage === 'audit' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('audit')"><span class="i-lucide-history" aria-hidden="true" />审计</button>
+          <span class="console-nav-label">部署管理</span>
+          <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="busy || routing"
+            @click="changeTab('plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件</button>
         </template>
       </nav>
+      <div class="workspace-content">
       <div class="workspace-header">
         <h2 id="review-heading" ref="pageHeading" tabindex="-1">{{ pageTitle[tab] }}</h2>
       </div>
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
       <nav v-if="inRuns && characterId" class="run-navigation" aria-label="运行页面">
-        <NButton v-for="page in runPages.filter(page => page !== 'planning' || roles.includes('ADMIN'))" :key="page"
+        <NButton v-for="page in runPages" :key="page"
           text :type="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
           :disabled="busy || routing" @click="changeTab(page)">
-          {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : page === 'planning' ? '计划与承诺' : '失败任务' }}
+          {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : '失败任务' }}
         </NButton>
       </nav>
 
@@ -490,6 +508,9 @@ async function decide(decision: Decision) {
           @click="changeTab('connector')">本机连接器</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
+      <ConsoleHome v-else-if="tab === 'home' && characterId && canReadRuns" :key="characterId" :character-id="characterId"
+        :can-review="canReviewSimulation" :can-start="roles.includes('ADMIN')" @expired="resetSession" @navigate="changeTab"
+        @run="openRun" @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
       <CharacterWorkspace v-else-if="tab === 'character' || tab === 'accounts'" :key="characterId + '/' + tab" :character-id="characterId"
         :can-create="canCreate && tab === 'character'" :accounts-only="tab === 'accounts'" :account-detail="detailId"
         @created="characterCreated" @expired="resetSession" @roles="roles = $event"
@@ -587,21 +608,23 @@ async function decide(decision: Decision) {
               </NFormItem>
               <div class="decision-buttons">
                 <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">批准模拟回复</NButton>
-                <NButton :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
+                <NButton type="error" :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
               </div>
             </NForm>
           </template>
         </section>
       </div>
 
+      </div>
+      </div>
     </template>
     <span v-if="busy" class="sr-only" role="status">处理中…</span>
   </section>
 </template>
 
 <style scoped>
-.review-desk { display: grid; gap: 1rem; }
-.login-card { width: min(100%, 25rem); margin: clamp(1rem, 8vh, 5rem) auto 0; }
+.review-desk { display: grid; }
+.login-card { width: min(calc(100% - 2rem), 25rem); margin: clamp(1rem, 8vh, 5rem) auto 2rem; }
 .login-card h2, .workspace-header h2, h3 { margin: 0; }
 .login-card h2 { font-size: 1.25rem; margin-block-end: 1rem; }
 .login-card :deep(.n-form-item + .n-form-item) { margin-block-start: .625rem; }
@@ -609,13 +632,22 @@ async function decide(decision: Decision) {
 .login-alert { margin-block: .5rem; }
 .workspace-header, .account-actions, .decision-buttons { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
 .workspace-header { justify-content: space-between; }
-.workspace-toolbar { display: flex; justify-content: space-between; align-items: center; gap: .75rem; min-width: 0; }
+.workspace-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem; min-width: 0;
+  padding: .625rem clamp(1rem, 4vw, 2.5rem); background: var(--console-surface); border-bottom: 1px solid var(--console-line); }
 .workspace-toolbar > :last-child { margin-inline-start: auto; }
 .account-menu { display: grid; gap: .5rem; min-width: 10rem; justify-items: start; }
-.console-navigation { display: flex; gap: 1.25rem; min-width: 0; overflow-x: auto; border-bottom: 1px solid #dfe7e6; }
-.console-navigation button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: .55rem .125rem;
-  font: inherit; color: #485c5b; white-space: nowrap; cursor: pointer; }
-.console-navigation button[aria-current] { color: #17675d; border-bottom-color: currentColor; font-weight: 650; }
+.workspace-shell { display: grid; min-height: calc(100vh - 7rem); }
+.workspace-shell--with-nav { grid-template-columns: 10.25rem minmax(0, 1fr); }
+.workspace-content { display: grid; align-content: start; gap: 1rem; min-width: 0; padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 2rem; }
+.console-navigation { display: flex; flex-direction: column; gap: .1875rem; padding: 1rem .625rem; min-width: 0;
+  border-inline-end: 1px solid var(--console-line); background: var(--console-nav); }
+.console-navigation button { display: flex; align-items: center; gap: .5rem; border: 0; border-radius: 3px; background: transparent;
+  min-height: 2.25rem; padding: .4375rem .625rem; font: inherit; font-size: .8125rem;
+  text-align: start; color: var(--console-muted); white-space: nowrap; cursor: pointer; }
+.console-navigation button > span { flex: none; }
+.console-navigation button:enabled:hover { background: var(--console-hover); }
+.console-navigation button[aria-current] { color: var(--console-accent-text); background: var(--console-selected); font-weight: 650; }
+.console-nav-label { color: var(--console-muted); padding: .625rem .625rem .125rem; font-size: .75rem; }
 .console-navigation button:disabled { opacity: .65; cursor: default; }
 .console-navigation button:focus-visible { outline-offset: -2px; }
 .run-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.125rem; }
@@ -624,18 +656,25 @@ async function decide(decision: Decision) {
 .account-name { max-width: 12rem; }
 .account-name :deep(.n-button__content) { overflow: hidden; text-overflow: ellipsis; }
 .role-picker { display: flex; align-items: center; gap: .75rem; width: min(100%, 22rem); min-width: 0; }
-.role-picker > label { flex: none; color: #485c5b; }
+.role-picker > label { flex: none; color: var(--console-muted); }
 .proposal-actions { margin-bottom: .75rem; }
 .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
-.metadata dt { color: #536866; font-size: .8125rem; }
+.metadata dt { color: var(--console-muted); font-size: .8125rem; }
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
 .proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
-.payload { margin: 0 0 1rem; padding: .875rem 1rem; border-radius: .5rem; background: #f3f7f6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.payload { margin: 0 0 1rem; padding: .875rem 1rem; border-radius: 5px; background: var(--console-hover); white-space: pre-wrap; overflow-wrap: anywhere; }
 .decision-buttons, .passkey-submit { margin-block-start: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 46rem) {
+  .workspace-shell--with-nav { grid-template-columns: minmax(0, 1fr); }
+  .console-navigation { flex-direction: row; flex-wrap: wrap; border-inline-end: 0; border-bottom: 1px solid var(--console-line); padding: .5rem .625rem; }
+  .console-nav-label { display: none; }
+}
 @media (max-width: 30rem) {
-  .console-navigation { gap: .875rem; }
   .workspace-toolbar .account-name { max-width: 7rem; }
   .metadata { grid-template-columns: minmax(0, 1fr); }
+}
+@media (pointer: coarse) {
+  .console-navigation button { min-height: 2.75rem; }
 }
 </style>

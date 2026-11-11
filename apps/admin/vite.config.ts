@@ -1,11 +1,13 @@
 import { fileURLToPath } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
+import UnoCSS from 'unocss/vite'
 
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [
     vue(),
+    UnoCSS({ configFile: fileURLToPath(new URL('./uno.config.ts', import.meta.url)) }),
     {
       name: 'rica-local-admin-origin',
       configureServer(server) {

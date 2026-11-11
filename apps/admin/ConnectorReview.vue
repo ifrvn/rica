@@ -227,6 +227,6 @@ dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; }
 dd, .reply-content { overflow-wrap: anywhere; }
-.reply-content { white-space: pre-wrap; background: #eaf1ef; padding: .75rem; }
+.reply-content { white-space: pre-wrap; background: var(--console-hover); padding: .75rem; }
 h4 { margin-bottom: .5rem; }
 </style>

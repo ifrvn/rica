@@ -195,14 +195,14 @@ onMounted(() => { void act(load) })
 .operations { margin-top: 1rem; }
 .outbox { display: grid; gap: 1rem; }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .75rem; }
-.run-summary { padding-bottom: 1rem; border-bottom: 1px solid #dfe7e6; }
+.run-summary { padding-bottom: 1rem; border-bottom: 1px solid var(--console-line); }
 .run-summary .metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.75rem), 1fr)); }
 .run-summary .metrics div { min-width: 0; }
-.run-summary small { color: #485c5b; }
+.run-summary small { color: var(--console-muted); }
 .metrics dd { margin: .25rem 0; font-size: 1.3rem; font-weight: 650; }
 .operations-actions, .events li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .events { list-style: none; padding: 0; margin: 0; }
 .events li { justify-content: space-between; padding-block: .6rem; }
-.events li + li { border-top: 1px solid #e0e8e7; }
+.events li + li { border-top: 1px solid var(--console-line); }
 .event-info { display: grid; gap: .2rem; overflow-wrap: anywhere; }
 </style>

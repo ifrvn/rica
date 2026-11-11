@@ -91,5 +91,5 @@ onMounted(load)
 <style scoped>
 .metrics-table-scroll { max-width: 100%; overflow-x: auto; }
 .metrics-table { border-collapse: collapse; width: 100%; }
-.metrics-table th, .metrics-table td { text-align: start; padding: .4rem .5rem; border-bottom: 1px solid #e0e8e7; }
+.metrics-table th, .metrics-table td { text-align: start; padding: .4rem .5rem; border-bottom: 1px solid var(--console-line); }
 </style>

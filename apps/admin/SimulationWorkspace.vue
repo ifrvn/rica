@@ -368,22 +368,22 @@ onMounted(() => { void act(load) })
 .simulation-workspace { display: grid; gap: 1.5rem; min-width: 0; }
 .simulation-workspace.has-run-detail { grid-template-columns: minmax(18rem, 2fr) minmax(0, 3fr); }
 .run-results, .run-detail { min-width: 0; }
-.run-detail { padding-inline-start: 1.25rem; border-inline-start: 1px solid #dfe7e6; }
+.run-detail { padding-inline-start: 1.25rem; border-inline-start: 1px solid var(--console-line); }
 .run-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; overflow-wrap: anywhere; }
-.run-muted, time { color: #485c5b; font-size: .875rem; }
-.run-editor { padding: 1rem 0; border-block: 1px solid #dfe7e6; }
+.run-muted, time { color: var(--console-muted); font-size: .875rem; }
+.run-editor { padding: 1rem 0; border-block: 1px solid var(--console-line); }
 .run-editor h4 { margin: 0 0 .625rem; }
 .run-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.25rem), 1fr)); gap: 0 .75rem; align-items: start; }
-.run-filters input[type="date"] { box-sizing: border-box; width: 100%; font: inherit; height: 34px; border: 1px solid #cbd5d3;
-  border-radius: 6px; background: #fff; padding-inline: .5rem; color: inherit; }
+.run-filters input[type="date"] { box-sizing: border-box; width: 100%; font: inherit; height: 34px; border: 1px solid var(--console-field);
+  border-radius: 6px; background: var(--console-surface); padding-inline: .5rem; color: inherit; }
 .run-filters .run-actions { align-self: center; margin-bottom: .75rem; }
 .run-list, .run-timeline { list-style: none; margin: 0 0 .5rem; padding: 0; }
-.run-list li, .run-timeline li { border-top: 1px solid #dfe7e6; }
+.run-list li, .run-timeline li { border-top: 1px solid var(--console-line); }
 .run-row { width: 100%; display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; padding: .625rem .5rem;
   background: transparent; border: 0; text-align: start; font: inherit; color: inherit; cursor: pointer; }
 .run-row > span { display: grid; gap: .15rem; min-width: 0; overflow-wrap: anywhere; }
 .run-row > span:last-child { justify-items: start; }
-.run-row:hover, .run-row[aria-current] { background: #e9f1ef; }
+.run-row:hover, .run-row[aria-current] { background: var(--console-selected); }
 .run-row:focus-visible { outline-offset: -2px; }
 .run-timeline li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); align-items: baseline; gap: .5rem; padding: .5rem 0; }
 dl { display: grid; gap: .5rem; }

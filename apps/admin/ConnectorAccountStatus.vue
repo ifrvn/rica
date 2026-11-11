@@ -82,5 +82,5 @@ dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }
 .connector-events { list-style: none; margin: .5rem 0 0; padding: 0; }
-.connector-events li { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem 0; border-top: 1px solid #e0e8e7; overflow-wrap: anywhere; }
+.connector-events li { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem 0; border-top: 1px solid var(--console-line); overflow-wrap: anywhere; }
 </style>

@@ -111,7 +111,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-.model-settings-scope { margin: 0 0 1rem; color: #526763; }
+.model-settings-scope { margin: 0 0 1rem; color: var(--console-muted); }
 .model-settings-fields { display: grid; gap: 1rem; }
 .model-settings-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 </style>

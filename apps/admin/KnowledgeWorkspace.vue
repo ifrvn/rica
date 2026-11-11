@@ -252,6 +252,6 @@ onMounted(() => {
 
 <style scoped>
 .console-split-detail { overflow-wrap: anywhere; }
-.memory-identifiers { margin-top: 1rem; color: #485c5b; }
+.memory-identifiers { margin-top: 1rem; color: var(--console-muted); }
 .memory-identifiers summary { cursor: pointer; }
 </style>
