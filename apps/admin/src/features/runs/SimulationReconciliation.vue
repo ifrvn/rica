@@ -78,7 +78,7 @@ function resolve() {
 
 <template>
   <section class="console-panel" aria-labelledby="reconciliation-heading">
-      <div class="console-section-heading"><h3 id="reconciliation-heading">模拟对账</h3></div>
+    <div class="console-section-heading"><h3 id="reconciliation-heading">模拟对账</h3></div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NButton v-if="!canResolve" :loading="busy" :disabled="busy" @click="readEvidence">
       {{ stale || evidence ? '重新核对账本' : '核对账本' }}
@@ -95,7 +95,8 @@ function resolve() {
         <NInput placeholder="例如：已核对封存账本，确认没有回执" v-model:value="reason" :input-props="{ id: 'reconciliation-reason' }" :maxlength="240" :disabled="busy" />
       </NFormItem>
       <div class="ledger-actions">
-        <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !reason.trim()">提交对账结论</NButton>
+        <NButton :type="evidence.outcome === 'DEFINITELY_NOT_SENT' ? 'warning' : 'primary'"
+          attr-type="submit" :loading="busy" :disabled="busy || !reason.trim()">提交对账结论</NButton>
         <NButton :disabled="busy" @click="readEvidence">重新核对账本</NButton>
       </div>
     </NForm>

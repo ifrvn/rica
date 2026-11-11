@@ -140,10 +140,10 @@ onMounted(() => { void list() })
 </script>
 
 <template>
-  <div class="console-split" :class="{ 'console-split--detail': detailId }">
+  <div class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
     <section class="console-split-list" aria-labelledby="connector-list-heading">
       <div class="console-section-heading">
-        <h3 id="connector-list-heading" ref="listHeading" tabindex="-1">{{ accountId ? '当前账号的提案' : '回复提案' }}</h3>
+        <h3 id="connector-list-heading" ref="listHeading" tabindex="-1">{{ accountId ? '当前账号的 Newbi 提案' : 'Newbi 平台提案' }}</h3>
         <div class="console-actions">
           <NButton v-if="accountId" size="small" quaternary :disabled="submitting" @click="emit('all')">查看全部账号</NButton>
           <NButton size="small" quaternary :disabled="loadingList || submitting" @click="list()">刷新列表</NButton>
@@ -163,7 +163,8 @@ onMounted(() => { void list() })
             :aria-current="detailId === item.id ? 'true' : undefined" @click="emit('open', item.id)">
             <span class="console-record-main">
               <strong>{{ item.identity }}</strong>
-              <span>公开回复 · 帖子 {{ item.postId.slice(0, 8) }}</span>
+              <span>Newbi · 公开回复</span>
+              <span class="console-record-meta">帖子 {{ item.postId.slice(0, 8) }} · 账号 {{ item.agentId.slice(0, 8) }}</span>
             </span>
             <span class="console-record-meta">
               <NTag size="small" :bordered="false">{{ statusText[item.status] }}</NTag>
@@ -176,7 +177,7 @@ onMounted(() => { void list() })
     </section>
     <section v-if="detailId" class="console-split-detail" aria-labelledby="connector-detail-heading">
       <div class="console-section-heading">
-        <h3 id="connector-detail-heading" ref="detailHeading" tabindex="-1">回复详情</h3>
+        <h3 id="connector-detail-heading" ref="detailHeading" tabindex="-1">Newbi 公开回复</h3>
         <NSpace size="small">
           <NButton size="small" quaternary :disabled="loadingDetail || submitting" @click="detail(detailId)">刷新详情</NButton>
           <NButton size="small" quaternary :disabled="submitting" @click="emit('open')">返回提案列表</NButton>
@@ -186,9 +187,12 @@ onMounted(() => { void list() })
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NSpin v-if="loadingDetail" aria-label="正在加载提案" />
       <template v-if="reply">
-        <NTag size="small" :bordered="false">{{ statusText[reply.status] }}</NTag>
+        <div class="console-actions">
+          <NTag size="small" type="warning" :bordered="false">真实平台</NTag>
+          <NTag size="small" :bordered="false">{{ statusText[reply.status] }}</NTag>
+        </div>
         <dl>
-          <div><dt>平台</dt><dd>本机连接器 · {{ reply.endpoint }}</dd></div>
+          <div><dt>平台</dt><dd>Newbi · {{ reply.endpoint }}</dd></div>
           <div><dt>身份</dt><dd>{{ reply.identity || reply.identityId }}</dd></div>
           <div><dt>账号</dt><dd>{{ reply.agentId }}</dd></div>
           <div><dt>目标</dt><dd>{{ reply.postId }} · 公开回复</dd></div>
@@ -198,21 +202,22 @@ onMounted(() => { void list() })
         </dl>
         <template v-if="reply.content">
           <h4>拟发送内容</h4>
-          <p class="reply-content">{{ reply.content }}</p>
+          <p class="console-payload">{{ reply.content }}</p>
         </template>
         <p v-else-if="reply.status === 'WAITING'">当前无法预览正文，暂不能审批。</p>
         <NForm v-if="(canReview && reply.status === 'WAITING' && reply.content) || (canClose && reply.status === 'UNKNOWN')"
           @submit.prevent="submit(reply.status === 'UNKNOWN' ? 'CLOSE' : 'APPROVE')">
-          <p v-if="reply.status === 'UNKNOWN'">结案会停止对此提案的发送尝试。</p>
+          <NAlert v-if="reply.status === 'UNKNOWN'" type="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</NAlert>
+          <NAlert v-else type="warning">批准后，执行器取得发送许可时会向上述 Newbi 帖子公开发布这条回复。</NAlert>
           <NFormItem :label="reply.status === 'UNKNOWN' ? '结案理由' : '审批理由'" :label-props="{ for: 'connector-reason' }">
             <NInput :placeholder="reply.status === 'UNKNOWN' ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
               :input-props="{ id: 'connector-reason' }" />
           </NFormItem>
           <div class="connector-actions">
-            <NButton type="primary" attr-type="submit" :disabled="submitting || !reason.trim()">
+            <NButton :type="reply.status === 'UNKNOWN' ? 'warning' : 'primary'" attr-type="submit" :disabled="submitting || !reason.trim()">
               {{ reply.status === 'UNKNOWN' ? '确认结案' : '批准公开回复' }}
             </NButton>
-            <NButton v-if="reply.status === 'WAITING'" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</NButton>
+            <NButton v-if="reply.status === 'WAITING'" type="error" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</NButton>
           </div>
         </NForm>
       </template>
@@ -226,7 +231,7 @@ onMounted(() => { void list() })
 dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; }
-dd, .reply-content { overflow-wrap: anywhere; }
-.reply-content { white-space: pre-wrap; background: var(--console-hover); padding: .75rem; }
+dd { overflow-wrap: anywhere; }
+.n-alert + .n-form-item { margin-block-start: .875rem; }
 h4 { margin-bottom: .5rem; }
 </style>

@@ -52,6 +52,7 @@ const detailError = ref('')
 const loadingDetail = ref(false)
 const detailHeading = ref<HTMLElement>()
 const listHeading = ref<HTMLElement>()
+const editorHeading = ref<HTMLElement>()
 const resolutionNotice = ref('')
 let detailRevision = 0
 const accountId = ref('')
@@ -227,6 +228,14 @@ function refresh() {
   })
 }
 
+function toggleForm(open: boolean) {
+  showForm.value = open
+  void nextTick(() => {
+    if (open) editorHeading.value?.focus()
+    else document.getElementById('run-start-trigger')?.focus()
+  })
+}
+
 function reconciled(outcome: NonNullable<ReconciliationView['outcome']>) {
   resolutionNotice.value = outcome === 'CONFIRMED' ? '已确认模拟回执。' : '已按未写入回执结案。'
   void detail(props.detailId)
@@ -255,143 +264,136 @@ onMounted(() => { void act(load) })
 </script>
 
 <template>
-  <div class="simulation-workspace" :class="{ 'has-run-detail': detailId }">
-    <section class="run-results" aria-labelledby="run-list-heading">
-      <div class="console-section-heading">
-        <h3 id="run-list-heading" ref="listHeading" tabindex="-1">最近运行</h3>
-        <div class="run-actions">
-          <NButton v-if="canStart && !showForm" type="primary" :disabled="busy || !options.length"
-            @click="showForm = true">发起模拟</NButton>
-          <NButton size="small" quaternary :disabled="busy || loadingList" @click="refresh">刷新运行</NButton>
-        </div>
-      </div>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-      <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
-      <p v-if="canStart && !busy && !options.length && !loadingError" class="run-muted">发起模拟前，请在「角色与身份」启用模拟账号及其角色和身份。</p>
-      <section v-if="showForm" class="run-editor" aria-labelledby="run-editor-heading">
-        <h4 id="run-editor-heading">发起模拟</h4>
-        <NForm @submit.prevent="start">
-          <NFormItem label="模拟账号" :label-props="{ for: 'run-account' }">
-            <NSelect placeholder="选择接收模拟消息的账号" filterable v-model:value="accountId" :options="options" :input-props="{ id: 'run-account' }" :disabled="busy" />
-          </NFormItem>
-          <NFormItem label="模拟消息" :label-props="{ for: 'run-message' }">
-            <NInput placeholder="例如：你好，能介绍一下你的工作吗？" v-model:value="message" type="textarea" :rows="3" :input-props="{ id: 'run-message' }"
-              :maxlength="4000" :disabled="busy" />
-          </NFormItem>
-          <div class="run-actions">
-            <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !accountId || !message.trim()">开始模拟</NButton>
-            <NButton :disabled="busy" @click="showForm = false">取消</NButton>
-          </div>
-        </NForm>
-      </section>
-      <NForm class="run-filters" @submit.prevent="applyFilters">
-        <NFormItem label="状态" :label-props="{ for: 'filter-run-state' }">
-          <NSelect placeholder="全部状态" filterable v-model:value="filters.state" :options="stateOptions" :input-props="{ id: 'filter-run-state' }" />
+  <div class="simulation-workspace">
+    <div v-if="!detailId" class="run-actions">
+      <NButton v-if="canStart && !showForm" id="run-start-trigger" type="primary" :disabled="busy || !options.length"
+        @click="toggleForm(true)">发起模拟</NButton>
+      <NButton quaternary :disabled="busy || loadingList" @click="refresh">刷新运行</NButton>
+    </div>
+    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
+    <p v-if="!detailId && canStart && !busy && !options.length && !loadingError" class="run-muted">发起模拟前，请在「角色与身份」启用模拟账号及其角色和身份。</p>
+    <section v-if="showForm && !detailId" class="run-editor console-record-workspace" aria-labelledby="run-editor-heading">
+      <h3 id="run-editor-heading" ref="editorHeading" tabindex="-1">发起模拟</h3>
+      <NForm @submit.prevent="start">
+        <NFormItem label="模拟账号" :label-props="{ for: 'run-account' }">
+          <NSelect placeholder="选择接收模拟消息的账号" filterable v-model:value="accountId" :options="options" :input-props="{ id: 'run-account' }" :disabled="busy" />
         </NFormItem>
-        <NFormItem label="身份" :label-props="{ for: 'filter-run-identity' }">
-          <NSelect placeholder="全部身份" filterable v-model:value="filters.identityId" :options="identityOptions"
-            :input-props="{ id: 'filter-run-identity' }" @update:value="filters.accountId = ''" />
-        </NFormItem>
-        <NFormItem label="账号" :label-props="{ for: 'filter-run-account' }">
-          <NSelect placeholder="全部账号" filterable v-model:value="filters.accountId" :options="accountOptions" :input-props="{ id: 'filter-run-account' }" />
-        </NFormItem>
-        <NFormItem label="开始日期（UTC）" :label-props="{ for: 'filter-run-from' }">
-          <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />
-        </NFormItem>
-        <NFormItem label="截止日期（UTC）" :label-props="{ for: 'filter-run-through' }">
-          <input id="filter-run-through" v-model="filters.through" type="date" min="0001-01-01" max="9999-12-31" />
+        <NFormItem label="模拟消息" :label-props="{ for: 'run-message' }">
+          <NInput placeholder="例如：你好，能介绍一下你的工作吗？" v-model:value="message" type="textarea" :rows="3" :input-props="{ id: 'run-message' }"
+            :maxlength="4000" :disabled="busy" />
         </NFormItem>
         <div class="run-actions">
-          <NButton attr-type="submit" :disabled="invalidDates">筛选</NButton>
-          <NButton v-if="runQuery" quaternary @click="emit('filter', '')">清除筛选</NButton>
+          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !accountId || !message.trim()">开始模拟</NButton>
+          <NButton :disabled="busy" @click="toggleForm(false)">取消</NButton>
         </div>
       </NForm>
-      <NAlert v-if="invalidDates" type="warning" role="status">截止日期应等于或晚于开始日期。</NAlert>
-      <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
-      <p v-if="loadingList && !rows.length" role="status">正在加载运行…</p>
-      <NEmpty v-if="!rows.length && !loadingList && !listError"
-        :description="runQuery ? '没有符合筛选条件的运行。' : '暂无模拟运行。'" />
-      <ul v-if="rows.length" class="run-list">
-        <li v-for="item in rows" :key="item.id">
-          <button :id="'run-row-' + item.id" type="button" class="run-row" :aria-current="detailId === item.id ? 'true' : undefined"
-            @click="emit('open', item.id)">
-            <span><strong>{{ identityName(item.identityId) }}</strong><span class="run-muted">{{ accountName(item.accountId, item.platform) }}</span></span>
-            <span><NTag size="small" :bordered="false">{{ stateName(item.state) }}</NTag>
-              <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time></span>
-          </button>
-        </li>
-      </ul>
-      <NButton v-if="cursor" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</NButton>
     </section>
-    <section v-if="detailId" class="run-detail" aria-labelledby="run-detail-heading">
-      <div class="console-section-heading">
-        <h3 id="run-detail-heading" ref="detailHeading" tabindex="-1">运行详情</h3>
-        <NButton size="small" quaternary @click="emit('open')">返回运行列表</NButton>
+    <NForm v-if="!detailId" class="run-filters" aria-label="筛选运行" @submit.prevent="applyFilters">
+      <NFormItem label="状态" :label-props="{ for: 'filter-run-state' }">
+        <NSelect placeholder="全部状态" filterable v-model:value="filters.state" :options="stateOptions" :input-props="{ id: 'filter-run-state' }" />
+      </NFormItem>
+      <NFormItem label="身份" :label-props="{ for: 'filter-run-identity' }">
+        <NSelect placeholder="全部身份" filterable v-model:value="filters.identityId" :options="identityOptions"
+          :input-props="{ id: 'filter-run-identity' }" @update:value="filters.accountId = ''" />
+      </NFormItem>
+      <NFormItem label="账号" :label-props="{ for: 'filter-run-account' }">
+        <NSelect placeholder="全部账号" filterable v-model:value="filters.accountId" :options="accountOptions" :input-props="{ id: 'filter-run-account' }" />
+      </NFormItem>
+      <NFormItem label="开始日期（UTC）" :label-props="{ for: 'filter-run-from' }">
+        <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />
+      </NFormItem>
+      <NFormItem label="截止日期（UTC）" :label-props="{ for: 'filter-run-through' }">
+        <input id="filter-run-through" v-model="filters.through" type="date" min="0001-01-01" max="9999-12-31" />
+      </NFormItem>
+      <div class="run-actions">
+        <NButton attr-type="submit" :disabled="invalidDates">筛选</NButton>
+        <NButton v-if="runQuery" quaternary @click="emit('filter', '')">清除筛选</NButton>
       </div>
-      <NAlert v-if="resolutionNotice" type="success" role="status">{{ resolutionNotice }}</NAlert>
-      <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
-      <NButton v-if="detailError" size="small" @click="detail(detailId)">重新加载详情</NButton>
-      <NSpin v-if="loadingDetail" aria-label="正在加载运行详情" />
-      <template v-if="selected">
-        <div class="run-actions">
-          <NTag size="small" :bordered="false">{{ stateName(selected.state) }}</NTag>
-          <NButton v-if="canReview && selected.proposal" size="small" secondary
-            @click="emit('review', selected.proposal.id)">查看模拟提案</NButton>
-          <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
-          <NButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
-            size="small" quaternary @click="emit('commitment', selected.id)">登记模拟承诺</NButton>
+    </NForm>
+    <NAlert v-if="!detailId && invalidDates" type="warning" role="status">截止日期应等于或晚于开始日期。</NAlert>
+    <div class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
+      <section class="console-split-list" aria-labelledby="run-list-heading">
+        <div class="console-section-heading">
+          <h3 id="run-list-heading" ref="listHeading" tabindex="-1">最近运行</h3>
         </div>
-        <dl>
-          <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
-          <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>
-          <div><dt>运行 ID</dt><dd>{{ selected.id }}</dd></div>
-        </dl>
-        <ol class="run-timeline" aria-label="运行轨迹">
-          <li v-for="stage in timeline" :key="stage.label">
-            <strong>{{ stage.label }}</strong>
-            <div class="run-actions">
-              <NTag size="small" :bordered="false">{{ stage.status }}</NTag>
-              <span v-if="stage.detail">{{ stage.detail }}</span>
-              <time v-if="stage.at" :datetime="stage.at">{{ new Date(stage.at).toLocaleString() }}</time>
-            </div>
+        <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
+        <p v-if="loadingList && !rows.length" role="status">正在加载运行…</p>
+        <NEmpty v-if="!rows.length && !loadingList && !listError"
+          :description="runQuery ? '没有符合筛选条件的运行。' : '暂无模拟运行。'" />
+        <ul v-if="rows.length" class="console-select-list">
+          <li v-for="item in rows" :key="item.id">
+            <button :id="'run-row-' + item.id" type="button" class="console-record" :aria-current="detailId === item.id ? 'true' : undefined"
+              @click="emit('open', item.id)">
+              <span class="console-record-main"><strong>{{ identityName(item.identityId) }}</strong><span class="run-muted">{{ accountName(item.accountId, item.platform) }}</span></span>
+              <span class="console-record-meta"><NTag size="small" :bordered="false">{{ stateName(item.state) }}</NTag>
+                <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time></span>
+            </button>
           </li>
-        </ol>
-        <SimulationReconciliation v-if="canStart && selected.state === 'RECONCILING' && selected.proposal"
-          :key="selected.proposal.id" :character-id="characterId" :action-id="selected.proposal.id"
-          @expired="emit('expired')" @resolved="reconciled" />
-      </template>
-    </section>
+        </ul>
+        <NButton v-if="cursor" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</NButton>
+      </section>
+      <section v-if="detailId" class="console-split-detail run-detail" aria-labelledby="run-detail-heading">
+        <div class="console-section-heading">
+          <h3 id="run-detail-heading" ref="detailHeading" tabindex="-1">模拟运行详情</h3>
+          <div class="run-actions">
+            <NButton size="small" quaternary :disabled="busy || loadingDetail" @click="refresh">刷新运行</NButton>
+            <NButton size="small" quaternary @click="emit('open')">返回运行列表</NButton>
+          </div>
+        </div>
+        <NAlert v-if="resolutionNotice" type="success" role="status">{{ resolutionNotice }}</NAlert>
+        <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
+        <NButton v-if="detailError" size="small" @click="detail(detailId)">重新加载详情</NButton>
+        <NSpin v-if="loadingDetail" aria-label="正在加载运行详情" />
+        <template v-if="selected">
+          <div class="run-actions">
+            <NTag size="small" :bordered="false">{{ stateName(selected.state) }}</NTag>
+            <NButton v-if="canReview && selected.proposal" size="small" secondary
+              @click="emit('review', selected.proposal.id)">查看模拟提案</NButton>
+            <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
+            <NButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
+              size="small" quaternary @click="emit('commitment', selected.id)">登记模拟承诺</NButton>
+          </div>
+          <dl>
+            <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
+            <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>
+            <div><dt>运行 ID</dt><dd>{{ selected.id }}</dd></div>
+          </dl>
+          <ol class="run-timeline" aria-label="运行轨迹">
+            <li v-for="stage in timeline" :key="stage.label">
+              <strong>{{ stage.label }}</strong>
+              <div class="run-actions">
+                <NTag size="small" :bordered="false">{{ stage.status }}</NTag>
+                <span v-if="stage.detail">{{ stage.detail }}</span>
+                <time v-if="stage.at" :datetime="stage.at">{{ new Date(stage.at).toLocaleString() }}</time>
+              </div>
+            </li>
+          </ol>
+          <SimulationReconciliation v-if="canStart && selected.state === 'RECONCILING' && selected.proposal"
+            :key="selected.proposal.id" :character-id="characterId" :action-id="selected.proposal.id"
+            @expired="emit('expired')" @resolved="reconciled" />
+        </template>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.simulation-workspace { display: grid; gap: 1.5rem; min-width: 0; }
-.simulation-workspace.has-run-detail { grid-template-columns: minmax(18rem, 2fr) minmax(0, 3fr); }
-.run-results, .run-detail { min-width: 0; }
-.run-detail { padding-inline-start: 1.25rem; border-inline-start: 1px solid var(--console-line); }
+.simulation-workspace { display: grid; gap: 1rem; min-width: 0; }
+.run-detail { display: grid; gap: .875rem; }
+.run-detail .console-section-heading { margin-bottom: 0; }
 .run-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; overflow-wrap: anywhere; }
 .run-muted, time { color: var(--console-muted); font-size: .875rem; }
-.run-editor { padding: 1rem 0; border-block: 1px solid var(--console-line); }
-.run-editor h4 { margin: 0 0 .625rem; }
+.simulation-workspace > .run-muted { margin: 0; }
+.run-editor h3 { margin: 0 0 .75rem; }
 .run-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.25rem), 1fr)); gap: 0 .75rem; align-items: start; }
 .run-filters input[type="date"] { box-sizing: border-box; width: 100%; font: inherit; height: 34px; border: 1px solid var(--console-field);
   border-radius: 6px; background: var(--console-surface); padding-inline: .5rem; color: inherit; }
 .run-filters .run-actions { align-self: center; margin-bottom: .75rem; }
-.run-list, .run-timeline { list-style: none; margin: 0 0 .5rem; padding: 0; }
-.run-list li, .run-timeline li { border-top: 1px solid var(--console-line); }
-.run-row { width: 100%; display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; padding: .625rem .5rem;
-  background: transparent; border: 0; text-align: start; font: inherit; color: inherit; cursor: pointer; }
-.run-row > span { display: grid; gap: .15rem; min-width: 0; overflow-wrap: anywhere; }
-.run-row > span:last-child { justify-items: start; }
-.run-row:hover, .run-row[aria-current] { background: var(--console-selected); }
-.run-row:focus-visible { outline-offset: -2px; }
-.run-timeline li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); align-items: baseline; gap: .5rem; padding: .5rem 0; }
-dl { display: grid; gap: .5rem; }
+.console-record-meta { justify-items: start; }
+.run-timeline { list-style: none; margin: 0; padding: 0; }
+.run-timeline li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); align-items: baseline; gap: .5rem; padding: .75rem 0; border-top: 1px solid var(--console-line); }
+dl { display: grid; gap: .5rem; margin: 0; }
 dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }
-@media (max-width: 46rem) {
-  .simulation-workspace.has-run-detail { grid-template-columns: minmax(0, 1fr); }
-  .has-run-detail .run-results { display: none; }
-  .run-detail { padding: 0; border: 0; }
-}
 </style>

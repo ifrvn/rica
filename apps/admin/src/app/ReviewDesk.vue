@@ -46,7 +46,7 @@ const mainPage = computed(() => inRuns.value ? 'runs'
 watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
   home: '工作台', members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
-  character: '角色与身份', review: '人工审批', runs: '运行记录', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号池', connector: '本机连接器审批',
+  character: '角色与身份', review: '审批', runs: '运行记录', outbox: '失败任务', audit: '审计', plugins: '插件', accounts: '平台账号池', connector: '审批',
 }
 const detailId = ref<string>()
 const reviewListHeading = ref<HTMLElement>()
@@ -511,10 +511,10 @@ async function decide(decision: Decision) {
       </nav>
 
       <nav v-if="canReviewSimulation && (tab === 'review' || tab === 'connector')" class="account-actions" aria-label="审批类型">
-        <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :disabled="busy || routing"
+        <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('review')">模拟提案</NButton>
-        <NButton size="small" :type="tab === 'connector' ? 'primary' : 'default'" :disabled="busy || routing"
-          @click="changeTab('connector')">本机连接器</NButton>
+        <NButton size="small" :type="tab === 'connector' ? 'primary' : 'default'" :aria-current="tab === 'connector' ? 'page' : undefined" :disabled="busy || routing"
+          @click="changeTab('connector')">Newbi 平台提案</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && characterId && canReadRuns" :key="characterId" :character-id="characterId"
@@ -528,14 +528,14 @@ async function decide(decision: Decision) {
         @account="navigate({ characterId, page: 'accounts', detail: $event })"
         @proposals="navigate({ characterId, page: 'connector', connectorAccountId: $event })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
-        <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
-          @expired="resetSession" @open-outbox="changeTab('outbox')"
-          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReviewSimulation"
           :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @review="navigate({ characterId, page: 'review', detail: $event })"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event })" />
+        <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
+          @expired="resetSession" @open-outbox="changeTab('outbox')"
+          @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
       </template>
       <RunOperations v-else-if="tab === 'outbox' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" mode="outbox" :can-retry="roles.includes('ADMIN')"
@@ -561,10 +561,10 @@ async function decide(decision: Decision) {
         :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
         @all="changeTab('connector')" />
-      <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="console-split" :class="{ 'console-split--detail': detailId }">
+      <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
         <section class="console-split-list" aria-labelledby="review-list-heading">
           <div class="console-section-heading">
-            <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">待办</h3>
+            <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">待审批的模拟提案</h3>
             <NButton size="small" quaternary :disabled="busy || routing" @click="loadQueue()">刷新待办</NButton>
           </div>
           <NSpin v-if="routing && !actions.length" aria-label="正在加载待办" />
@@ -592,8 +592,10 @@ async function decide(decision: Decision) {
           </div>
           <NSpin v-if="routing && !selected" aria-label="正在加载提案" />
           <div v-if="selected" class="console-actions proposal-actions">
+            <NTag size="small" :bordered="false">模拟执行</NTag>
             <NTag size="small" :bordered="false" :type="statusTone(selected.state)">{{ statusText[selected.state] }}</NTag>
             <NButton size="small" quaternary :disabled="busy" @click="openAction(selected.id)">重新核对</NButton>
+            <NButton v-if="canReadRuns" size="small" quaternary :disabled="busy" @click="openRun(selected.runId)">查看运行记录</NButton>
           </div>
           <NButton v-else-if="error" size="small" :disabled="busy" @click="openAction(detailId)">重新加载提案</NButton>
           <template v-if="selected">
@@ -607,8 +609,8 @@ async function decide(decision: Decision) {
               此回复与其他平台的内容相似，请核对后再审批。
             </NAlert>
             <template v-if="selected.content">
-              <h4>拟发送内容</h4>
-              <p class="payload">{{ selected.content }}</p>
+              <h4>拟回复内容</h4>
+              <p class="console-payload">{{ selected.content }}</p>
             </template>
             <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
             <NForm v-if="selected.state === 'WAITING_APPROVAL' && selected.content" :show-feedback="false"
@@ -672,7 +674,6 @@ async function decide(decision: Decision) {
 .metadata dt { color: var(--console-muted); font-size: .8125rem; }
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
 .proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
-.payload { margin: 0 0 1rem; padding: .875rem 1rem; border-radius: 5px; background: var(--console-hover); white-space: pre-wrap; overflow-wrap: anywhere; }
 .decision-buttons, .passkey-submit { margin-block-start: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) {
