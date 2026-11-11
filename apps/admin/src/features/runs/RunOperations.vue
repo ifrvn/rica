@@ -31,7 +31,7 @@ const metrics = computed(() => {
     { label: '后台任务', ...data.outbox },
     { label: '待审批', ...data.approvals },
     { label: '待对账', ...data.reconciliation },
-    { label: '到期计划', ...data.schedules },
+    { label: '到期定时任务', ...data.schedules },
   ]
 })
 const eventType: Record<Event['type'], string> = {

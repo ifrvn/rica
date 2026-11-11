@@ -88,6 +88,7 @@ model Character {
   managementMemberships ManagementMembership[]
   managementAudit       ManagementAudit[]
   platformAccountPool   PlatformAccountRegistration[]
+  simulationPlans       SimulationPlan[]
 
   dailyEnergyProjections DailyEnergyProjection[]
   modelDailyUsage ModelDailyUsage[]
@@ -267,6 +268,7 @@ model PlatformAccount {
   memoryGrants    MemoryGrant[]
   contacts        Contact[]
   conversations   Conversation[]
+  planParticipants SimulationPlanParticipant[]
 
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
@@ -864,11 +866,50 @@ model SimulationSchedule {
   contact        Contact?              @relation(fields: [characterId, identityId, accountId, contactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "simulation_schedules_contact_fkey")
   occurrences    ScheduleOccurrence[]
   commitment     SimulationCommitment?
+  planParticipant SimulationPlanParticipant?
 
   @@unique([characterId, id])
+  @@unique([characterId, identityId, accountId, id], map: "simulation_schedules_scope_key")
   @@unique([characterId, scheduleKey])
   @@index([enabled, nextAt, id])
   @@map("simulation_schedules")
+}
+
+model SimulationPlan {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId  String      @map("character_id") @db.Uuid
+  title        String
+  zone         String
+  kind         ScheduleKind
+  localTime    String?     @map("local_time")
+  dueAt        DateTime?   @map("due_at") @db.Timestamptz
+  enabled      Boolean     @default(true)
+  source       String      @default("MANUAL")
+  version      Int         @default(1)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  character    Character   @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  participants SimulationPlanParticipant[]
+
+  @@unique([characterId, id])
+  @@index([characterId, createdAt, id])
+  @@map("simulation_plans")
+}
+
+model SimulationPlanParticipant {
+  planId      String              @map("plan_id") @db.Uuid
+  characterId String              @map("character_id") @db.Uuid
+  identityId  String              @map("identity_id") @db.Uuid
+  accountId   String              @map("account_id") @db.Uuid
+  scheduleId  String?             @map("schedule_id") @db.Uuid
+  task        String
+  included    Boolean             @default(true)
+  plan        SimulationPlan      @relation(fields: [characterId, planId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
+  account     PlatformAccount     @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
+  schedule    SimulationSchedule? @relation(fields: [characterId, identityId, accountId, scheduleId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "simulation_plan_participants_schedule_fkey")
+
+  @@id([planId, accountId])
+  @@unique([characterId, identityId, accountId, scheduleId], map: "simulation_plan_participants_schedule_key")
+  @@map("simulation_plan_participants")
 }
 
 model ScheduleOccurrence {

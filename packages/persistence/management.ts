@@ -675,7 +675,7 @@ export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { r
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-async function scheduleTiming(tx: Tx, input: Input<typeof scheduleUpdate>) {
+export async function scheduleTiming(tx: Tx, input: Input<typeof scheduleUpdate>) {
   const { zone, rule, enabled } = input
   const [zoneCheck] = await tx.$queryRaw<{ valid: boolean }[]>`
     SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_timezone_names WHERE name = ${zone}) AS valid
@@ -715,10 +715,11 @@ export async function updateSchedule(
 ) {
   const schedule = await tx.simulationSchedule.findFirst({
     where: { id, characterId: scope.characterId },
-    select: { version: true, commitment: { select: { id: true } } },
+    select: { version: true, commitment: { select: { id: true } }, planParticipant: { select: { planId: true } } },
   })
   if (!schedule) unavailable()
   if (schedule.commitment) throw new ManagementError(409, 'COMMITMENT_SCHEDULE', 'Update this reminder through its commitment')
+  if (schedule.planParticipant) throw new ManagementError(409, 'PLAN_SCHEDULE', 'Update this schedule through its plan')
   checkVersion(schedule.version, expected)
   const timing = await scheduleTiming(tx, input)
   return tx.simulationSchedule.update({
@@ -729,7 +730,7 @@ export async function updateSchedule(
 export async function listSchedules(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN'])
-    const where = { characterId: scope.characterId }
+    const where = { characterId: scope.characterId, planParticipant: null }
     const args = await pageArgs(page, (id) => tx.simulationSchedule.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.simulationSchedule.findMany({
       ...args, where,

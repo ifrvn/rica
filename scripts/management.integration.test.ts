@@ -12,7 +12,7 @@ import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { simulatedModelPlugin } from '../packages/runtime/simulated-model.js'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
-import { dailyScheduleSlot, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
+import { dailyScheduleSlot, dispatchSimulationSchedule, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
 import { actorId, loadManagementConfig, localIssuer } from '../apps/api/admin-auth.js'
 import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
@@ -130,6 +130,8 @@ after(async () => {
       await tx.contextSnapshotEvidence.deleteMany({ where })
       await tx.contextSnapshot.deleteMany({ where })
       await tx.scheduleOccurrence.deleteMany({ where })
+      await tx.simulationPlanParticipant.deleteMany({ where })
+      await tx.simulationPlan.deleteMany({ where })
       await tx.simulationSchedule.deleteMany({ where })
       await tx.identityStateRevision.deleteMany({ where })
       await tx.agentRun.deleteMany({ where })
@@ -3285,4 +3287,79 @@ test('a role can register an account before its identities and associate it only
   assert.equal((await request('POST', pool + '/associations', {
     key: 'associate-replacement', data: { registrationId: remaining, identityId: secondIdentity.body.id },
   })).status, 201)
+})
+
+test('collaborative plans preserve identity bindings, schedule each simulator once, and pause pending work', async () => {
+  const created = await request('POST', '/characters', { key: 'collaborative-character', data: characterData('-planning') })
+  assert.equal(created.status, 201)
+  const characterId = created.body.id as string
+  characterIds.push(characterId)
+  const base = characterPath(characterId)
+  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE' } })
+  const participants: { identityId: string; accountId: string; task: string }[] = []
+  for (const platform of ['mock-a', 'mock-b', 'newbi']) {
+    const identity = await request('POST', base + '/identities', { key: 'plan-' + platform, data: { slug: platform, roleProfile: {} } })
+    assert.equal(identity.status, 201, JSON.stringify(identity.body))
+    const identityId = identity.body.id as string
+    await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
+    const { id: accountId } = await owner.platformAccount.create({
+      data: { characterId, identityId, platform, instanceKey: 'integration', remoteAccountId: randomUUID(), status: 'ACTIVE' },
+    })
+    participants.push({ identityId, accountId, task: 'Prepare the ' + platform + ' update' })
+  }
+  const path = base + '/plans'
+  const due = new Date('2026-11-12T10:00:00Z')
+  const data = { title: 'Community updates', enabled: true, zone: 'UTC', rule: { kind: 'REMINDER', dueAt: due.toISOString() }, participants }
+  assert.equal((await request('POST', path, { actor: 'admin-b', key: 'foreign-plan', data })).status, 404)
+  assert.equal((await request('POST', path, { key: 'mismatched-plan', data: {
+    ...data, participants: [{ ...participants[0], accountId: participants[1].accountId }],
+  } })).status, 409)
+  assert.equal((await request('POST', path, { key: 'duplicate-plan-identity', data: {
+    ...data, participants: [participants[0], participants[0]],
+  } })).status, 422)
+  const plan = await request('POST', path, { key: 'create-plan', data })
+  assert.equal(plan.status, 201, JSON.stringify(plan.body))
+  const id = plan.body.id as string
+  assert.equal((await request('POST', path, { key: 'create-plan', data })).body.id, id)
+  const planParticipants = await owner.simulationPlanParticipant.findMany({ where: { planId: id } })
+  const schedules = planParticipants.flatMap(({ scheduleId }) => scheduleId ? [scheduleId] : [])
+  assert.equal(schedules.length, 2)
+  assert.equal(planParticipants.find(({ accountId }) => accountId === participants[2].accountId)?.scheduleId, null)
+  assert.equal((await request('GET', base + '/schedules')).body.items.length, 0)
+  assert.equal((await request('PUT', base + '/schedules/' + schedules[0], {
+    ifMatch: '"1"', data: { enabled: false, zone: 'UTC', rule: data.rule },
+  })).status, 409)
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  try {
+    await Promise.all([...schedules, ...schedules].map((schedule) => dispatchSimulationSchedule(runtime, schedule, due)))
+    const occurrences = await owner.scheduleOccurrence.findMany({ where: { scheduleId: { in: schedules } } })
+    assert.equal(occurrences.length, 2)
+    const list = await request('GET', path)
+    assert.equal(list.status, 200, JSON.stringify(list.body))
+    assert.equal(list.body.items[0].source, 'MANUAL')
+    assert.equal(list.body.items[0].participants.length, 3)
+    for (const participant of participants) {
+      const item = list.body.items[0].participants.find(({ identityId }: { identityId: string }) => identityId === participant.identityId)
+      assert.equal(item.task, participant.task)
+      if (item.platform === 'newbi') assert.equal(item.lastRunId, null)
+      else assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: item.lastRunId } })).accountId, participant.accountId)
+    }
+
+    const edited = await request('PUT', path + '/' + id, {
+      ifMatch: '"1"', data: { ...data, title: 'Revised title', participants: participants.slice(1) },
+    })
+    assert.equal(edited.status, 200, JSON.stringify(edited.body))
+    assert.equal((await request('PUT', path + '/' + id, { ifMatch: '"1"', data })).status, 412)
+    const revised = await request('GET', path)
+    assert.equal(revised.body.items[0].participants.length, 2)
+    const remainingRun = revised.body.items[0].participants.find(({ platform }: { platform: string }) => platform === 'mock-b').lastRunId
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: remainingRun } })).state, 'QUEUED')
+    await owner.platformAccount.update({ where: { id: participants[2].accountId }, data: { status: 'REVOKED' } })
+    const paused = await request('PUT', path + '/' + id + '/state', { ifMatch: '"2"', data: { enabled: false } })
+    assert.equal(paused.status, 200, JSON.stringify(paused.body))
+    assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: remainingRun } })).state, 'CANCELED')
+    assert.equal((await request('PUT', path + '/' + id + '/state', { ifMatch: '"3"', data: { enabled: true } })).status, 409)
+  } finally {
+    await runtime.$disconnect()
+  }
 })

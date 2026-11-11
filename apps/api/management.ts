@@ -4,6 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { commitmentInput, commitmentQuery, commitmentUpdate, commitmentView } from '../../packages/contracts/commitments.js'
 import { scheduleInput, scheduleUpdate, scheduleView } from '../../packages/contracts/schedules.js'
+import { planInput, planStateInput, planView } from '../../packages/contracts/plans.js'
+import { listPlans, savePlan, setPlanEnabled } from '../../packages/persistence/plans.js'
 import { consoleSimulationInput, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '../../packages/contracts/simulation-observability.js'
 import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '../../packages/persistence/simulation-observability.js'
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
@@ -791,6 +793,60 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'simulation.resolve', targetScope: characterId + '/' + actionId,
       input: { input, expected }, requestId, key: headers['idempotency-key'],
     }, (tx) => resolveSimulationReconciliation(tx, scope, actionId, expected, input))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/plans`, security,
+    request: { params: characterParams, query: schema.listQuery },
+    responses: { ...errors, 200: success(schema.pageView(planView)) },
+  }), async (c) => c.json(await listPlans(db, { ...c.req.valid('param'), actor: c.get('actor') },
+    management.parsePage(c.req.valid('query'))), 200))
+
+  app.openapi(createRoute({
+    method: 'post', path: `${character}/plans`, security,
+    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(planInput) },
+    responses: { ...errors, 201: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'plan.create', targetScope: scope.characterId, input, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => savePlan(tx, scope, input))
+    return c.json({ ...result, requestId }, 201)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${character}/plans/{planId}`, security,
+    request: { params: characterParams.extend({ planId: schema.resourceId }), headers: schema.versionHeader, body: body(planInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, planId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'plan.update', targetScope: characterId + '/' + planId, input: { input, expected }, requestId,
+    }, (tx) => savePlan(tx, scope, input, { id: planId, expected }))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${character}/plans/{planId}/state`, security,
+    request: { params: characterParams.extend({ planId: schema.resourceId }), headers: schema.versionHeader, body: body(planStateInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, planId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'plan.set-state', targetScope: characterId + '/' + planId, input: { input, expected }, requestId,
+    }, (tx) => setPlanEnabled(tx, scope, planId, expected, input.enabled))
     return c.json({ ...result, requestId }, 200)
   })
 
