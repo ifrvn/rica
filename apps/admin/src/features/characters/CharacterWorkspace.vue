@@ -1,22 +1,30 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountRegistrationView, accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
+import type { accountRegistrationView, accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
 import { request, RequestError } from '../../shared/request.js'
 
 type Workspace = z.infer<typeof characterWorkspaceView>
+type Character = z.infer<typeof characterView>
 type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>
 type Registration = z.infer<typeof accountRegistrationView>
 type Page<T> = { items: T[]; nextCursor: string | null }
-type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'connector-account' | 'associate' | 'control'
+type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'connector-account' | 'associate' | 'control' | 'linked-account'
 type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; connector?: boolean; revoke?: boolean }
 
-const props = defineProps<{ characterId: string; canCreate: boolean; accountsOnly?: boolean; accountDetail?: string }>()
-const emit = defineEmits<{ created: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']]; account: [id?: string]; proposals: [id: string] }>()
+const props = defineProps<{
+  characterId: string; canCreate: boolean; accountsOnly?: boolean; accountDetail?: string;
+  characters: Character[]; moreCharacters: boolean;
+}>()
+const emit = defineEmits<{
+  created: [character: Workspace]; updated: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']];
+  account: [id?: string]; proposals: [id: string]; selectCharacter: [id: string]; loadCharacters: [];
+}>()
 const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
@@ -25,11 +33,12 @@ const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
 const target = ref<Control>()
+const linkedAccount = ref<Account>()
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
-  registrationId: '', platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '' })
+  registrationId: null as string | null, platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
 const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
@@ -37,8 +46,9 @@ const connector = computed(() => accounts.value.find(({ id, platform }) => id ==
 const isCharacter = computed(() => editor.value === 'character' || editor.value === 'core')
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
-  character: '创建角色', core: '编辑核心', identity: '创建身份', 'identity-edit': '编辑身份',
+  character: '新建角色', core: '角色设置', identity: '添加身份', 'identity-edit': '编辑身份',
   account: '添加模拟账号', 'connector-account': '添加连接器账号', associate: '关联平台账号',
+  'linked-account': '已关联的平台账号',
   control: target.value?.revoke ? '撤销账号'
     : (target.value?.status === 'ACTIVE' ? '暂停' : '恢复')
       + ({ CHARACTER: '角色', IDENTITY: '身份', ACCOUNT: '账号' }[target.value?.scope ?? 'ACCOUNT']),
@@ -49,6 +59,25 @@ const styles = [
 ]
 const editorHeading = ref<HTMLElement>()
 const workspaceHeading = ref<HTMLElement>()
+let editorTrigger: HTMLElement | undefined
+const accountsByIdentity = computed(() => {
+  const groups = new Map<string, Account[]>()
+  for (const account of accounts.value) {
+    if (account.status === 'REVOKED') continue
+    const group = groups.get(account.identityId) ?? []
+    group.push(account)
+    groups.set(account.identityId, group)
+  }
+  return groups
+})
+
+const identityName = (identity: Identity) => identity.profile?.displayName || identity.slug
+const boundAccountLabel = (account: Account) => account.platform + ' · ' + account.instanceKey
+
+function accountControl(account: Account, revoke = false) {
+  open('control', undefined, { scope: 'ACCOUNT', id: account.id, name: boundAccountLabel(account),
+    status: account.status, connector: account.platform === 'newbi', revoke })
+}
 const schemas = shallowRef<{
   management: typeof import('../../../../../packages/contracts/management.js')
   connector: typeof import('../../../../../packages/contracts/newbi-pilot.js')
@@ -125,7 +154,18 @@ function fieldInput(field: string) {
 
 function closeEditor() {
   editor.value = undefined
-  void nextTick(() => workspaceHeading.value?.focus())
+}
+
+function updateEditorOpen(show: boolean) {
+  if (!show && !busy.value) closeEditor()
+}
+
+function restoreEditorFocus(event: Event) {
+  event.preventDefault()
+  if (!active) return
+  if (editorTrigger?.isConnected) editorTrigger.focus()
+  else workspaceHeading.value?.focus()
+  editorTrigger = undefined
 }
 
 let pending: { signature: string; key: string } | undefined
@@ -167,6 +207,7 @@ async function load() {
   accounts.value = nextAccounts
   accountPool.value = pool
   emit('roles', current.roles)
+  emit('updated', current)
 }
 
 async function run(task: () => Promise<void>) {
@@ -183,6 +224,10 @@ async function run(task: () => Promise<void>) {
       emit('expired')
       return
     }
+    if (cause instanceof RequestError && cause.code === 'IDENTITY_ALREADY_BOUND') {
+      error.value = '该身份已有平台账号。撤销原账号后可重新关联。'
+      return
+    }
     if (code === 409 && target.value?.connector && target.value.status === 'PAUSED' && !target.value.revoke) {
       error.value = '恢复未完成。请核对部署中的读取凭据、服务地址和 Agent ID，再重试。'
       return
@@ -197,6 +242,7 @@ async function run(task: () => Promise<void>) {
 }
 
 function open(kind: Editor, identity?: Identity, resource?: Control) {
+  if (!editor.value) editorTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   attempted.value = false
   touched.value.clear()
   editor.value = kind
@@ -211,10 +257,15 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     timezone: kind === 'character' ? Intl.DateTimeFormat().resolvedOptions().timeZone : identity?.profile?.timezone ?? '',
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
-    registrationId: '', platform: workspace.value?.simulationPlatforms[0] ?? '',
+    registrationId: null, platform: workspace.value?.simulationPlatforms[0] ?? '',
     instance: kind === 'connector-account' ? '' : 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
   void loadSchemas().catch(() => {})
+}
+
+function openLinkedAccount(account: Account) {
+  linkedAccount.value = account
+  open('linked-account')
 }
 
 function command(path: string, data: object, version?: number) {
@@ -267,6 +318,7 @@ async function save() {
     if (!active) return
     const label = title.value
     pending = undefined
+    if (kind === 'associate') editorTrigger = undefined
     closeEditor()
     notice.value = kind === 'associate' ? '账号已关联，当前为暂停状态。' : label + '成功。'
     if (kind !== 'character') await load()
@@ -278,18 +330,31 @@ onMounted(() => { if (props.characterId) void run(load) })
 
 <template>
   <div class="character-workspace">
-    <div v-if="canCreate && !workspace && !editor" class="workspace-actions">
-      <NButton type="primary" :disabled="busy" @click="open('character')">创建角色</NButton>
-    </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="error && !editor" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <section v-if="editor" class="workspace-editor" aria-labelledby="workspace-editor-heading">
-      <h3 id="workspace-editor-heading" ref="editorHeading" tabindex="-1">{{ title }}</h3>
+    <DialogRoot :open="!!editor" @update:open="updateEditorOpen">
+    <DialogPortal>
+    <DialogOverlay class="workspace-overlay" />
+    <DialogContent class="workspace-editor" :aria-describedby="undefined" @close-auto-focus="restoreEditorFocus"
+      @open-auto-focus.prevent="editorHeading?.focus()" @pointer-down-outside.prevent>
+      <DialogTitle as-child><h3 ref="editorHeading" tabindex="-1">{{ title }}</h3></DialogTitle>
+      <NAlert v-if="error" class="editor-alert" type="error" role="alert">{{ error }}</NAlert>
       <p v-if="editor === 'control' && target">{{ target.name }} · {{ status(target.status) }}</p>
-      <p v-if="target?.connector">{{ target.revoke ? '撤销后，此绑定无法恢复。待核对记录和回执仍可查看。'
-        : target.status === 'ACTIVE' ? '暂停后，此账号无法领取新的读取任务或发送许可。'
+      <p v-if="target?.revoke">撤销后，原账号不能恢复，可为该身份关联其他账号。历史记录仍可查看。</p>
+      <p v-else-if="target?.connector">{{ target.status === 'ACTIVE' ? '暂停后，此账号无法领取新的读取任务或发送许可。'
           : '恢复前会核对读取权限。发送仍需独立审批和执行许可。' }}</p>
-      <NForm @submit.prevent="save">
+      <template v-if="editor === 'linked-account' && linkedAccount">
+        <p>{{ boundAccountLabel(linkedAccount) }} · {{ status(linkedAccount.status) }}</p>
+        <div class="workspace-actions editor-actions">
+          <NButton v-if="['ACTIVE', 'PAUSED'].includes(linkedAccount.status)" secondary
+            :type="linkedAccount.status === 'ACTIVE' ? 'warning' : 'default'" @click="accountControl(linkedAccount)">
+            {{ linkedAccount.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
+          </NButton>
+          <NButton type="error" @click="accountControl(linkedAccount, true)">撤销账号</NButton>
+          <NButton @click="closeEditor">关闭</NButton>
+        </div>
+      </template>
+      <NForm v-else @submit.prevent="save">
         <NFormItem v-if="editor === 'character' || editor === 'identity'" label="唯一标识" :label-props="{ for: 'workspace-slug' }" :validation-status="fieldError('slug') ? 'error' : undefined">
           <NInput v-model:value="form.slug" :input-props="fieldInput('slug')" @blur="touched.add('slug')" placeholder="小写字母、数字和连字符" maxlength="63" />
           <template v-if="fieldError('slug')" #feedback>
@@ -303,7 +368,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <NFormItem v-if="editor === 'character' || isIdentity" label="时区" :label-props="{ for: 'workspace-timezone' }" :validation-status="fieldError('timezone') ? 'error' : undefined">
-          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
+          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" :to="false" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
             :invalid="!!fieldError('timezone')" @blur="touched.add('timezone')" />
           <template v-if="fieldError('timezone')" #feedback>
             <span id="workspace-timezone-error">{{ fieldError('timezone') }}</span>
@@ -316,7 +381,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <NFormItem v-if="isIdentity" label="写作风格" :label-props="{ for: 'workspace-style' }" :validation-status="fieldError('style') ? 'error' : undefined">
-          <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
+          <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" :to="false" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
           <template v-if="fieldError('style')" #feedback>
             <span id="workspace-style-error">{{ fieldError('style') }}</span>
           </template>
@@ -334,7 +399,7 @@ onMounted(() => { if (props.characterId) void run(load) })
         </NFormItem>
         <template v-if="editor === 'account' || editor === 'connector-account'">
           <NFormItem v-if="editor === 'account'" label="模拟平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
-            <NSelect placeholder="选择模拟平台" filterable v-model:value="form.platform" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
+            <NSelect placeholder="选择模拟平台" filterable v-model:value="form.platform" :to="false" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
               :options="workspace?.simulationPlatforms.map(value => ({ label: value, value }))" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
@@ -354,10 +419,11 @@ onMounted(() => { if (props.characterId) void run(load) })
           </NFormItem>
         </template>
         <template v-if="editor === 'associate'">
-          <p>关联到 {{ editingIdentity?.profile?.displayName || editingIdentity?.slug }}</p>
-          <NFormItem label="平台账号" :label-props="{ for: 'workspace-registrationId' }"
+          <p>关联到 {{ editingIdentity && identityName(editingIdentity) }}</p>
+          <p v-if="!accountPool.length" class="workspace-muted">账号池暂无可关联账号，请先登记账号。</p>
+          <NFormItem v-else label="平台账号" :label-props="{ for: 'workspace-registrationId' }"
             :validation-status="fieldError('registrationId') ? 'error' : undefined">
-            <NSelect v-model:value="form.registrationId" filterable placeholder="从账号池选择未关联账号"
+            <NSelect v-model:value="form.registrationId" :to="false" filterable placeholder="从账号池选择未关联账号"
               :input-props="fieldInput('registrationId')" @blur="touched.add('registrationId')"
               :options="accountPool.map(item => ({ label: accountLabel(item), value: item.id }))" />
             <template v-if="fieldError('registrationId')" #feedback>
@@ -372,57 +438,91 @@ onMounted(() => { if (props.characterId) void run(load) })
             <span id="workspace-reason-error">{{ fieldError('reason') }}</span>
           </template>
         </NFormItem>
-        <div class="workspace-actions">
+        <div class="workspace-actions editor-actions">
           <NButton :type="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
-            attr-type="submit" :loading="busy" :disabled="busy">{{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : title }}</NButton>
+            attr-type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)">
+            {{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : title }}
+          </NButton>
           <NButton :disabled="busy" @click="closeEditor">取消</NButton>
         </div>
       </NForm>
-    </section>
-    <NSpin v-else-if="busy && !workspace" />
-    <NButton v-else-if="!workspace && characterId && error" size="small" @click="run(load)">重新加载</NButton>
-    <NEmpty v-else-if="!workspace && !error" :description="canCreate ? '尚未创建角色。' : '当前账号没有可访问的角色。'" />
-    <template v-else-if="workspace && !editor">
-      <section v-if="!accountsOnly" class="workspace-section" aria-labelledby="character-summary-heading">
+      <div v-if="editor === 'core' && workspace" class="editor-lifecycle">
+        <NButton secondary :type="workspace.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
+          @click="open('control', undefined, { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
+          {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
+        </NButton>
+      </div>
+      <div v-if="editor === 'identity-edit' && editingIdentity" class="editor-lifecycle">
+        <NButton secondary :type="editingIdentity.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
+          @click="open('control', undefined, { scope: 'IDENTITY', id: editingIdentity.id, name: identityName(editingIdentity), status: editingIdentity.status })">
+          {{ editingIdentity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
+        </NButton>
+      </div>
+    </DialogContent>
+    </DialogPortal>
+    </DialogRoot>
+    <div v-if="!accountsOnly" class="workspace-card character-columns">
+      <section class="character-list" aria-labelledby="characters-heading">
         <div class="console-section-heading">
-          <h3 id="character-summary-heading" ref="workspaceHeading" tabindex="-1">{{ workspace.profile?.name || workspace.slug }}</h3>
-          <div class="workspace-actions">
-            <NButton v-if="canCreate" text type="primary" :disabled="busy" @click="open('character')">创建角色</NButton>
-            <NButton text :disabled="busy" @click="run(load)">刷新</NButton>
-          </div>
+          <h3 id="characters-heading">角色</h3>
+          <NButton v-if="canCreate" size="small" :type="characters.length ? 'default' : 'primary'" :disabled="busy" @click="open('character')">新建角色</NButton>
         </div>
-        <div class="workspace-row">
-          <div>{{ workspace.timezone }} <NTag size="small" :bordered="false">{{ status(workspace.status) }}</NTag></div>
-          <div v-if="admin" class="workspace-actions">
-            <NButton size="small" :disabled="busy || !workspace.version" @click="open('core')">编辑核心</NButton>
-            <NButton size="small" :type="workspace.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="open('control', undefined,
-              { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
-              {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
-            </NButton>
-          </div>
-        </div>
+        <NEmpty v-if="!characters.length" :description="canCreate ? '尚未创建角色。' : '当前账号没有可访问的角色。'" />
+        <ul v-else class="role-list">
+          <li v-for="character in characters" :key="character.id" class="role-row">
+            <button type="button" class="role-select" :disabled="busy" :aria-pressed="character.id === characterId"
+              @click="emit('selectCharacter', character.id)">
+              <span class="role-title"><strong>{{ character.profile?.name || character.slug }}</strong>
+                <NTag size="small" :bordered="false" :type="character.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(character.status) }}</NTag></span>
+              <span class="role-note workspace-muted">{{ character.profile?.aiDisclosure || character.timezone }}</span>
+            </button>
+            <button v-if="character.id === characterId && admin && workspace?.version" class="role-settings" type="button"
+              :aria-label="'设置角色 ' + (character.profile?.name || character.slug)" :disabled="busy" @click="open('core')">
+              <span class="i-lucide-settings" aria-hidden="true" />
+            </button>
+          </li>
+        </ul>
+        <NButton v-if="moreCharacters" text size="small" :disabled="busy" @click="emit('loadCharacters')">加载更多角色</NButton>
       </section>
-      <section v-if="!accountsOnly" class="workspace-section" aria-labelledby="identities-heading">
+      <section class="identity-list" aria-labelledby="identities-heading">
         <div class="console-section-heading">
-          <h3 id="identities-heading">身份</h3>
-          <NButton v-if="admin" text type="primary" :disabled="busy" @click="open('identity')">创建身份</NButton>
+          <h3 id="identities-heading" ref="workspaceHeading" tabindex="-1">{{ workspace ? (workspace.profile?.name || workspace.slug) + '的身份' : '身份' }}</h3>
+          <div v-if="workspace" class="workspace-actions">
+            <span class="workspace-muted">{{ identities.length }} 个身份</span>
+            <NButton v-if="admin" size="small" type="primary" :disabled="busy" @click="open('identity')">添加身份</NButton>
+          </div>
         </div>
-        <NEmpty v-if="!identities.length" description="暂无身份。" />
+        <NSpin v-if="busy && !workspace" aria-label="正在加载身份" />
+        <NButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</NButton>
+        <NEmpty v-else-if="!identities.length" :description="workspace ? '尚未添加身份。' : '选择角色后查看身份。'" />
         <ul v-else class="workspace-list">
-          <li v-for="identity in identities" :key="identity.id" class="workspace-row">
-            <span>{{ identity.profile?.displayName || identity.slug }} <NTag size="small">{{ status(identity.status) }}</NTag></span>
-            <div v-if="admin" class="workspace-actions">
-              <NButton size="small" :disabled="busy || !accountPool.length" @click="open('associate', identity)">关联账号</NButton>
-              <NButton size="small" :disabled="busy || !identity.version" @click="open('identity-edit', identity)">编辑</NButton>
-              <NButton size="small" :type="identity.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="open('control', undefined,
-                { scope: 'IDENTITY', id: identity.id, name: identity.profile?.displayName || identity.slug, status: identity.status })">
-                {{ identity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
-              </NButton>
+          <li v-for="identity in identities" :key="identity.id" class="identity-row">
+            <div class="workspace-row">
+              <button v-if="admin && identity.version" class="identity-name" type="button" :disabled="busy"
+                :aria-label="'编辑身份 ' + identityName(identity)" @click="open('identity-edit', identity)">
+                {{ identityName(identity) }}<span class="i-lucide-pencil edit-icon" aria-hidden="true" />
+              </button>
+              <strong v-else>{{ identityName(identity) }}</strong>
+              <NTag size="small" :bordered="false" :type="identity.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(identity.status) }}</NTag>
+            </div>
+            <div v-if="accountsByIdentity.has(identity.id)" class="workspace-actions">
+              <template v-for="account in accountsByIdentity.get(identity.id)" :key="account.id">
+                <NButton v-if="admin" text type="primary" :disabled="busy" @click="openLinkedAccount(account)">{{ boundAccountLabel(account) }}</NButton>
+                <span v-else>{{ boundAccountLabel(account) }}</span>
+              </template>
+            </div>
+            <div v-else class="workspace-row">
+              <span class="workspace-muted">未关联平台账号</span>
+              <NButton v-if="admin" size="small" :disabled="busy" @click="open('associate', identity)">关联账号</NButton>
             </div>
           </li>
         </ul>
       </section>
-      <section class="workspace-section" aria-labelledby="platform-accounts-heading">
+    </div>
+    <NSpin v-else-if="busy && !workspace" />
+    <NButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</NButton>
+    <template v-else-if="workspace">
+      <section class="workspace-card" aria-labelledby="platform-accounts-heading">
         <div class="console-section-heading">
           <h3 id="platform-accounts-heading" :ref="(node) => { if (accountsOnly) workspaceHeading = node as HTMLElement | undefined }" tabindex="-1">平台账号池</h3>
           <div v-if="admin || accountsOnly" class="workspace-actions">
@@ -432,7 +532,7 @@ onMounted(() => { if (props.characterId) void run(load) })
             <NButton v-if="accountsOnly" text :disabled="busy" @click="run(load)">刷新账号</NButton>
           </div>
         </div>
-        <NAlert v-if="!accountsOnly && admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
+        <NAlert v-if="admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
         <ul v-if="accountPool.length" class="workspace-list">
           <li v-for="item in accountPool" :key="item.id" class="workspace-row">
             <span>{{ accountLabel(item) }}</span>
@@ -442,23 +542,24 @@ onMounted(() => { if (props.characterId) void run(load) })
         <NEmpty v-if="!accounts.length && !accountPool.length" description="暂无平台账号。" />
         <ul v-if="accounts.length" class="workspace-list">
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
-            <span>{{ account.platform }} · {{ account.instanceKey }} ·
-              {{ identities.find(item => item.id === account.identityId)?.profile?.displayName
-                || identities.find(item => item.id === account.identityId)?.slug }}
+            <div class="account-summary">
+              <span class="workspace-actions"><strong>{{ boundAccountLabel(account) }}</strong>
               <NTag size="small">{{ status(account.status) }}</NTag>
-            </span>
+              </span>
+              <span class="workspace-muted">{{ workspace.profile?.name || workspace.slug }} / {{
+                identities.find(item => item.id === account.identityId)?.profile?.displayName
+                  || identities.find(item => item.id === account.identityId)?.slug || '身份不可用'
+              }}</span>
+            </div>
             <div class="workspace-actions">
               <NButton v-if="inspectConnector && account.platform === 'newbi'" size="small"
                 @click="emit('account', account.id)">查看读取状态</NButton>
               <NButton v-if="admin && ['mock-a', 'mock-b', 'newbi'].includes(account.platform) && ['ACTIVE', 'PAUSED'].includes(account.status)"
-                size="small" :type="account.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="open('control', undefined,
-                  { scope: 'ACCOUNT', id: account.id, name: account.platform + ' · ' + account.instanceKey,
-                    status: account.status, connector: account.platform === 'newbi' })">
+                size="small" :type="account.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="accountControl(account)">
                 {{ account.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
               </NButton>
-              <NButton v-if="admin && account.platform === 'newbi' && account.status !== 'REVOKED'"
-                size="small" type="error" :disabled="busy" @click="open('control', undefined,
-                  { scope: 'ACCOUNT', id: account.id, name: account.instanceKey, status: account.status, connector: true, revoke: true })">
+              <NButton v-if="admin && account.status !== 'REVOKED'"
+                size="small" type="error" :disabled="busy" @click="accountControl(account, true)">
                 撤销账号
               </NButton>
             </div>
@@ -475,12 +576,48 @@ onMounted(() => { if (props.characterId) void run(load) })
 
 <style scoped>
 .character-workspace { display: grid; gap: 1.25rem; min-width: 0; }
-.workspace-section + .workspace-section { border-top: 1px solid var(--console-line); padding-top: 1rem; }
-.workspace-editor { max-width: 37rem; }
+.workspace-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }
+.character-columns { display: grid; grid-template-columns: minmax(12rem, 2fr) minmax(0, 3fr); align-items: start; }
+.character-list, .identity-list { min-width: 0; }
+.character-list { padding-inline-end: 1rem; }
+.identity-list { padding-inline-start: 1rem; border-inline-start: 1px solid var(--console-line); }
+.role-list { list-style: none; margin: 0; padding: 0; }
+.role-row { position: relative; border-top: 1px solid var(--console-line); }
+.role-select, .role-settings, .identity-name { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.role-select { display: grid; gap: .35rem; width: 100%; padding: .75rem 2.75rem .75rem .625rem; text-align: start; }
+.role-select:enabled:hover, .role-settings:enabled:hover { background: var(--console-hover); }
+.role-select[aria-pressed="true"] { background: var(--console-selected); }
+.role-title { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; overflow-wrap: anywhere; }
+.role-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-settings { position: absolute; display: grid; place-items: center; inset-inline-end: .25rem; inset-block-end: .25rem; width: 2rem; height: 2rem; border-radius: 4px; }
+.workspace-muted { color: var(--console-muted); font-size: .8125rem; }
+.identity-row, .account-summary { display: grid; gap: .5rem; }
+.identity-name { display: inline-flex; align-items: center; gap: .375rem; padding: 0; text-align: start; font-weight: 650; }
+.identity-name:enabled:hover { color: var(--console-accent-text); }
+.edit-icon { opacity: 0; flex: none; }
+.identity-row:hover .edit-icon, .identity-row:focus-within .edit-icon { opacity: 1; }
+.workspace-overlay { position: fixed; inset: 0; z-index: 1000; background: #0006; }
+.workspace-editor { position: fixed; z-index: 1001; inset-block-start: 50%; inset-inline-start: 50%; transform: translate(-50%, -50%);
+  box-sizing: border-box; width: min(34rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto;
+  padding: 1.25rem; color: var(--console-text); background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 8px; }
 .workspace-editor h3 { margin: 0 0 1rem; }
+.editor-alert { margin-block-end: 1rem; }
+.editor-actions { justify-content: flex-end; }
+.editor-lifecycle { margin-block-start: 1rem; padding-block-start: 1rem; border-top: 1px solid var(--console-line); }
 .workspace-list > li { padding-block: .625rem; }
 .workspace-actions, .workspace-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .workspace-row { justify-content: space-between; overflow-wrap: anywhere; }
 .workspace-list { list-style: none; margin: 0; padding: 0; }
 .workspace-list > li + li { border-top: 1px solid var(--console-line); margin-top: .5rem; padding-top: .5rem; }
+@media (max-width: 42rem) {
+  .character-columns { grid-template-columns: minmax(0, 1fr); }
+  .character-list { padding-inline-end: 0; }
+  .identity-list { padding-inline-start: 0; padding-block-start: 1rem; margin-block-start: 1rem; border-inline-start: 0; border-block-start: 1px solid var(--console-line); }
+}
+@media (pointer: coarse) {
+  .role-settings { width: 2.75rem; height: 2.75rem; }
+  .role-select { padding-inline-end: 3.25rem; }
+  .identity-name { min-height: 2.75rem; }
+  .edit-icon { opacity: 1; }
+}
 </style>

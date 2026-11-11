@@ -10,7 +10,7 @@ import PluginWorkspace from '../features/plugins/PluginWorkspace.vue'
 import { focusRecord } from '../shared/console-data.js'
 import { request, RequestError } from '../shared/request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
-import type { characterWorkspaceView } from '../../../../packages/contracts/management.js'
+import type { characterView, characterWorkspaceView } from '../../../../packages/contracts/management.js'
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../../../packages/contracts/action-review.js'
 
@@ -22,7 +22,7 @@ const MembershipWorkspace = defineAsyncComponent(() => import('../features/acces
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 
-type Character = { id: string; slug: string; profile: { name?: string } | null }
+type Character = z.infer<typeof characterView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Decision = 'APPROVE' | 'REJECT'
 
@@ -148,6 +148,10 @@ function characterCreated(character: Character) {
   notice.value = '角色已创建。'
 }
 
+function characterUpdated(character: Character) {
+  characters.value = characters.value.map((item) => item.id === character.id ? character : item)
+}
+
 function navigate(location: ConsoleLocation) {
   const hash = consoleHash(location)
   if (window.location.hash === hash && characterId.value === location.characterId
@@ -193,6 +197,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       if (current !== revision) return
       roles.value = workspace.roles
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
+      else characterUpdated(workspace)
     }
     characterId.value = target
     const page = landing && !roles.value.includes('ADMIN')
@@ -513,7 +518,9 @@ async function decide(decision: Decision) {
         @run="openRun" @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
       <CharacterWorkspace v-else-if="tab === 'character' || tab === 'accounts'" :key="characterId + '/' + tab" :character-id="characterId"
         :can-create="canCreate && tab === 'character'" :accounts-only="tab === 'accounts'" :account-detail="detailId"
-        @created="characterCreated" @expired="resetSession" @roles="roles = $event"
+        :characters="characters" :more-characters="!!characterCursor"
+        @created="characterCreated" @updated="characterUpdated" @expired="resetSession" @roles="roles = $event"
+        @select-character="changeCharacter" @load-characters="run(() => fetchCharacters(characterCursor ?? undefined))"
         @account="navigate({ characterId, page: 'accounts', detail: $event })"
         @proposals="navigate({ characterId, page: 'connector', connectorAccountId: $event })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">

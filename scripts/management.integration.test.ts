@@ -3262,4 +3262,27 @@ test('a role can register an account before its identities and associate it only
   const { items } = (await request('GET', path + '/accounts')).body
   assert.deepEqual(items.map(({ id, identityId, status }: { id: string; identityId: string; status: string }) =>
     ({ id, identityId, status })), [{ id: registrationId, identityId, status: 'PAUSED' }])
+
+  const secondIdentity = await request('POST', path + '/identities', {
+    key: 'second-pool-identity', data: { slug: 'second-pool-identity', roleProfile: {} },
+  })
+  assert.equal(secondIdentity.status, 201)
+  const candidates = await Promise.all(['a', 'b'].map((suffix) => request('POST', pool, {
+    key: 'register-candidate-' + suffix, data: { ...data, remoteAccountId: prefix + '-candidate-' + suffix },
+  })))
+  assert.deepEqual(candidates.map(({ status }) => status), [201, 201])
+  const race = await Promise.all(candidates.map(({ body }, index) => request('POST', pool + '/associations', {
+    key: 'associate-candidate-' + index, data: { registrationId: body.id, identityId: secondIdentity.body.id },
+  })))
+  assert.deepEqual(race.map(({ status }) => status).sort(), [201, 409])
+  assert.equal(race.find(({ status }) => status === 409)?.body.error.code, 'IDENTITY_ALREADY_BOUND')
+  const remaining = candidates[race.findIndex(({ status }) => status === 409)].body.id
+  assert.deepEqual((await request('GET', pool)).body.items.map(({ id }: { id: string }) => id), [remaining])
+  const winner = race.find(({ status }) => status === 201)?.body.id
+  assert.equal((await request('POST', path + '/controls', {
+    key: 'revoke-winner', data: { scope: 'ACCOUNT', scopeId: winner, operation: 'REVOKE_ACCOUNT' },
+  })).status, 200)
+  assert.equal((await request('POST', pool + '/associations', {
+    key: 'associate-replacement', data: { registrationId: remaining, identityId: secondIdentity.body.id },
+  })).status, 201)
 })

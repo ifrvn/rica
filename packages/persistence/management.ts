@@ -199,6 +199,11 @@ export async function associateAccount(tx: Tx, scope: Scope, input: Input<typeof
     where: { id: registration.id, characterId, boundAt: null }, data: { boundAt: new Date() },
   })
   if (!claimed.count) throw new ManagementError(409, 'ACCOUNT_ALREADY_BOUND', 'Platform account already associated')
+  // Management commands serialize writes under the character lock.
+  const current = await tx.platformAccount.findFirst({
+    where: { characterId, identityId: input.identityId, status: { not: 'REVOKED' } }, select: { id: true },
+  })
+  if (current) throw new ManagementError(409, 'IDENTITY_ALREADY_BOUND', 'Identity already has a platform account')
   const { id, platform, instanceKey, remoteAccountId } = registration
   const account = await tx.platformAccount.create({
     data: { id, characterId, identityId: input.identityId, platform, instanceKey, remoteAccountId, status: 'PAUSED' },
