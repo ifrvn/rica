@@ -44,12 +44,18 @@ const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
 const runPages: ConsolePage[] = ['runs', 'outbox', 'metrics']
 const inRuns = computed(() => runPages.includes(tab.value))
+const knowledgePages = ['knowledge', 'growth'] as const
+const accessPages = ['members', 'audit'] as const
+const inKnowledge = computed(() => tab.value === 'knowledge' || tab.value === 'growth')
+const inAccess = computed(() => tab.value === 'members' || tab.value === 'audit')
 const mainPage = computed(() => inRuns.value ? 'runs'
-  : tab.value === 'connector' ? 'review' : tab.value)
+  : inKnowledge.value ? 'knowledge'
+    : inAccess.value ? 'audit'
+      : tab.value === 'connector' ? 'review' : tab.value)
 watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
-  home: '工作台', members: '角色成员', knowledge: '记忆与授权', growth: '身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
-  character: '角色与身份', review: '审批', runs: '运行记录', outbox: '失败任务', audit: '审计', plugins: '插件中心',
+  home: '工作台', members: '成员与审计', knowledge: '记忆与身份成长', growth: '记忆与身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
+  character: '角色与身份', review: '审批', runs: '运行记录', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
   health: '系统运行状况', accounts: '平台账号池', connector: '审批',
 }
 const detailId = ref<string>()
@@ -62,16 +68,19 @@ watch(detailId, (id, previous) => {
   })
 })
 const runQuery = ref('')
+const startSimulation = ref(false)
 const connectorAccountId = ref<string>()
 const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
 const roles = ref<string[]>([])
+const simulationPlatforms = ref<z.infer<typeof characterWorkspaceView>['simulationPlatforms']>([])
 const canReadRuns = computed(() => roles.value.some((role) => role === 'ADMIN' || role === 'AUDITOR'))
 const canReviewSimulation = computed(() => roles.value.includes('REVIEWER'))
 const canReview = computed(() => canReviewSimulation.value || roles.value.includes('ADMIN'))
 const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
+const currentCharacter = computed(() => characters.value.find(({ id }) => id === characterId.value))
 const actions = ref<ActionView[]>([])
 const nextCursor = ref<string | null>(null)
 let queueLoaded = false
@@ -200,6 +209,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       const workspace = await request<z.infer<typeof characterWorkspaceView>>('/v1/characters/' + target)
       if (current !== revision) return
       roles.value = workspace.roles
+      simulationPlatforms.value = workspace.simulationPlatforms
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
       else characterUpdated(workspace)
     }
@@ -214,10 +224,12 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     tab.value = denied ? 'character' : page === 'review' && !canReviewSimulation.value ? 'connector' : page
     detailId.value = denied ? undefined : location.detail
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
+    startSimulation.value = tab.value === 'runs' && roles.value.includes('ADMIN') && !!location.startSimulation
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
     if (denied) error.value = '当前账号无权打开此链接。'
-    if (replace || tab.value !== location.page) {
-      window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value, runQuery: runQuery.value }))
+    if (replace || tab.value !== location.page || (location.startSimulation && !startSimulation.value)) {
+      window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value,
+        runQuery: runQuery.value, startSimulation: startSimulation.value }))
     }
     if (tab.value === 'review' && canReviewSimulation.value) {
       if (!queueLoaded) await fetchQueue(current)
@@ -483,15 +495,11 @@ async function decide(decision: Decision) {
           <button type="button" :aria-current="mainPage === 'accounts' ? 'page' : undefined" :disabled="busy || routing"
             @click="changeTab('accounts')"><span class="i-lucide-contact" aria-hidden="true" />平台账号池</button>
           <button type="button" :aria-current="mainPage === 'knowledge' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('knowledge')"><span class="i-lucide-book-open" aria-hidden="true" />记忆与授权</button>
-          <button type="button" :aria-current="mainPage === 'growth' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('growth')"><span class="i-lucide-sprout" aria-hidden="true" />身份成长</button>
+            @click="changeTab('knowledge')"><span class="i-lucide-book-open" aria-hidden="true" />记忆与身份成长</button>
           <button v-if="roles.includes('ADMIN')" type="button" :aria-current="mainPage === 'planning' ? 'page' : undefined" :disabled="busy || routing"
             @click="changeTab('planning')"><span class="i-lucide-calendar-days" aria-hidden="true" />计划与承诺</button>
-          <button type="button" :aria-current="mainPage === 'members' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('members')"><span class="i-lucide-user-round-cog" aria-hidden="true" />角色成员</button>
           <button type="button" :aria-current="mainPage === 'audit' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('audit')"><span class="i-lucide-history" aria-hidden="true" />审计</button>
+            @click="changeTab(roles.includes('ADMIN') ? 'members' : 'audit')"><span class="i-lucide-history" aria-hidden="true" />成员与审计</button>
           <span class="console-nav-label">部署管理</span>
           <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="busy || routing"
             @click="changeTab('plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件中心</button>
@@ -501,7 +509,12 @@ async function decide(decision: Decision) {
       </nav>
       <div class="workspace-content">
       <div class="workspace-header">
-        <h2 id="review-heading" ref="pageHeading" tabindex="-1">{{ pageTitle[tab] }}</h2>
+        <h2 id="review-heading" ref="pageHeading" tabindex="-1">
+          {{ tab === 'home' && currentCharacter ? (currentCharacter.profile?.name || currentCharacter.slug) + '的工作台' : pageTitle[tab] }}
+        </h2>
+        <NTag v-if="tab === 'home' && currentCharacter" :type="currentCharacter.status === 'ACTIVE' ? 'success' : 'default'" size="small" :bordered="false">
+          {{ currentCharacter.status === 'ACTIVE' ? '已启用' : '已暂停' }}
+        </NTag>
       </div>
       <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
@@ -512,6 +525,18 @@ async function decide(decision: Decision) {
           {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : '失败任务' }}
         </NButton>
       </nav>
+      <nav v-if="inKnowledge && characterId && canReadRuns" class="run-navigation" aria-label="记忆与身份成长分区">
+        <NButton v-for="page in knowledgePages" :key="page" text :type="tab === page ? 'primary' : 'default'"
+          :aria-current="tab === page ? 'page' : undefined" :disabled="busy || routing" @click="changeTab(page)">
+          {{ page === 'knowledge' ? '记忆与授权' : '身份成长' }}
+        </NButton>
+      </nav>
+      <nav v-if="inAccess && characterId && canReadRuns" class="run-navigation" aria-label="成员与审计分区">
+        <NButton v-for="page in accessPages" :key="page" text :type="tab === page ? 'primary' : 'default'"
+          :aria-current="tab === page ? 'page' : undefined" :disabled="busy || routing" @click="changeTab(page)">
+          {{ page === 'members' ? '成员权限' : '审计记录' }}
+        </NButton>
+      </nav>
 
       <nav v-if="canReviewSimulation && (tab === 'review' || tab === 'connector')" class="account-actions" aria-label="审批类型">
         <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
@@ -520,9 +545,11 @@ async function decide(decision: Decision) {
           @click="changeTab('connector')">Newbi 平台提案</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
-      <ConsoleHome v-else-if="tab === 'home' && characterId && canReadRuns" :key="characterId" :character-id="characterId"
+      <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canReadRuns" :key="characterId" :character="currentCharacter"
+        :simulation-platforms="simulationPlatforms"
         :can-review="canReviewSimulation" :can-start="roles.includes('ADMIN')" @expired="resetSession" @navigate="changeTab"
-        @run="openRun" @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
+        @run="openRun" @start="navigate({ characterId, page: 'runs', startSimulation: true })"
+        @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
       <CharacterWorkspace v-else-if="tab === 'character' || tab === 'accounts'" :key="characterId + '/' + tab" :character-id="characterId"
         :can-create="canCreate && tab === 'character'" :accounts-only="tab === 'accounts'" :account-detail="detailId"
         :characters="characters" :more-characters="!!characterCursor"
@@ -532,10 +559,11 @@ async function decide(decision: Decision) {
         @proposals="navigate({ characterId, page: 'connector', connectorAccountId: $event })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReviewSimulation"
-          :detail-id="detailId" :run-query="runQuery" @expired="resetSession" @open="openRun" @audit="openRunAudit"
+          :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @review="navigate({ characterId, page: 'review', detail: $event })"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
-          @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event })" />
+          @form="navigate({ characterId, page: 'runs', runQuery, startSimulation: $event })"
+          @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event, startSimulation })" />
         <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')"
           @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />

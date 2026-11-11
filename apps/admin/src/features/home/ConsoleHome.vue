@@ -2,18 +2,29 @@
 import { computed, onMounted, ref } from 'vue'
 import { NAlert, NButton, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
+import type { accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import type { simulationBacklogView, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
-import { characterPath, formatTime, useConsoleTask, type Page } from '../../shared/console-data.js'
+import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '../../shared/console-data.js'
 import type { ConsolePage } from '../../app/console-location.js'
+import { simulationAccounts } from '../runs/simulation-accounts.js'
 import { request } from '../../shared/request.js'
 
 type Backlog = z.infer<typeof simulationBacklogView>
 type Run = z.infer<typeof simulationRunSummary>
-const props = defineProps<{ characterId: string; canReview: boolean; canStart: boolean }>()
-const emit = defineEmits<{ expired: []; navigate: [page: ConsolePage]; run: [id: string]; reconcile: [] }>()
+type Account = z.infer<typeof accountView>
+type Identity = z.infer<typeof identityView>
+const props = defineProps<{ character: z.infer<typeof characterView>; simulationPlatforms: z.infer<typeof characterWorkspaceView>['simulationPlatforms'];
+  canReview: boolean; canStart: boolean }>()
+const emit = defineEmits<{ expired: []; navigate: [page: ConsolePage]; run: [id: string]; reconcile: []; start: [] }>()
 const { busy, error, active, run } = useConsoleTask(() => emit('expired'))
 const backlog = ref<Backlog>()
 const recent = ref<Run[]>([])
+const identities = ref<Identity[]>([])
+const accounts = ref<Account[]>([])
+const identityNames = computed(() => new Map(identities.value.map(({ id, profile, slug }) => [id, profile?.displayName || slug])))
+const accountNames = computed(() => new Map(accounts.value.map(({ id, platform, instanceKey }) => [id, platform + ' · ' + instanceKey])))
+const canSimulate = computed(() => simulationAccounts({ status: props.character.status, simulationPlatforms: props.simulationPlatforms },
+  identities.value, accounts.value).length > 0)
 const labels: Record<string, string> = {
   QUEUED: '排队中', CONTEXT_READY: '上下文已就绪', DRAFTED: '已生成草稿', WAITING_APPROVAL: '待审批',
   READY: '已批准', EXECUTING: '执行中', RECONCILING: '待对账', SIMULATED: '已获得模拟回执',
@@ -23,35 +34,48 @@ const priority = computed(() => {
   const summary = backlog.value
   if (!summary) return
   if (props.canReview && summary.approvals.count) return {
-    title: summary.approvals.count + ' 条模拟提案待审批', label: '查看待审批', action: () => emit('navigate', 'review'),
+    title: summary.approvals.count + ' 条模拟提案待审批', detail: '查看回复内容、身份和目标后决定是否批准。',
+    label: '查看待审批', action: () => emit('navigate', 'review'),
   }
   if (summary.reconciliation.count) return {
-    title: summary.reconciliation.count + ' 条模拟运行待对账', label: '查看待对账', action: () => emit('reconcile'),
+    title: summary.reconciliation.count + ' 条模拟运行待对账', detail: '核对执行许可与回执。',
+    label: '查看待对账', action: () => emit('reconcile'),
   }
   if (summary.outbox.quarantined) return {
-    title: summary.outbox.quarantined + ' 项失败任务待处理', label: '查看失败任务', action: () => emit('navigate', 'outbox'),
+    title: summary.outbox.quarantined + ' 项失败任务待处理', detail: '查看失败原因和关联运行。',
+    label: '查看失败任务', action: () => emit('navigate', 'outbox'),
   }
-  return props.canStart
-    ? { title: '试跑一次角色回复', label: '前往运行记录', action: () => emit('navigate', 'runs') }
-    : undefined
+  if (!props.canStart) return
+  if (canSimulate.value) return {
+    title: '试跑一次角色回复', detail: '选择身份账号，查看草稿、审批和模拟回执。',
+    label: '发起模拟', action: () => emit('start'),
+  }
+  return {
+    title: props.character.status === 'ACTIVE' ? '还没有可用的模拟账号' : '当前角色未启用',
+    detail: props.character.status === 'ACTIVE' ? '为已启用的身份关联并启用模拟账号。' : '启用角色后可以发起模拟。',
+    label: '查看角色与身份', action: () => emit('navigate', 'character'),
+  }
 })
 const tools = [
   { page: 'character', icon: 'i-lucide-users', title: '角色与身份', hint: '查看角色和身份' },
-  { page: 'accounts', icon: 'i-lucide-contact', title: '平台账号池', hint: '查看账号及其关联身份' },
   { page: 'plugins', icon: 'i-lucide-puzzle', title: '插件中心', hint: '查看可用插件和配置入口' },
   { page: 'health', icon: 'i-lucide-server', title: '系统运行状况', hint: '查看进程与外部连接' },
 ] as const
 
 function refresh() {
   return run(async () => {
-    const path = characterPath(props.characterId)
-    const [summary, page] = await Promise.all([
+    const path = characterPath(props.character.id)
+    const [summary, page, roleIdentities, roleAccounts] = await Promise.all([
       request<Backlog>(path + '/monitoring'),
       request<Page<Run>>(path + '/runs?limit=3'),
+      readAll<Identity>(path + '/identities', active),
+      readAll<Account>(path + '/accounts', active),
     ])
     if (!active()) return
     backlog.value = summary
     recent.value = page.items
+    identities.value = roleIdentities
+    accounts.value = roleAccounts
   })
 }
 
@@ -64,7 +88,10 @@ onMounted(refresh)
     <section v-if="priority" class="home-card home-priority" aria-label="优先处理">
       <div class="home-action-copy">
         <span class="i-lucide-message-circle" aria-hidden="true" />
-        <h3>{{ priority.title }}</h3>
+        <div>
+          <h3>{{ priority.title }}</h3>
+          <p>{{ priority.detail }}</p>
+        </div>
       </div>
       <NButton type="primary" @click="priority.action">{{ priority.label }}</NButton>
     </section>
@@ -79,7 +106,10 @@ onMounted(refresh)
         <li v-for="item in recent" :key="item.id">
           <button type="button" class="home-row" @click="emit('run', item.id)">
             <span class="home-node" aria-hidden="true"><span class="i-lucide-flask-conical" /></span>
-            <span class="home-row-copy"><strong>{{ labels[item.state] ?? item.state }}</strong><small>模拟运行 · {{ item.platform }}</small></span>
+            <span class="home-row-copy">
+              <strong>{{ identityNames.get(item.identityId) ? identityNames.get(item.identityId) + ' · ' : '' }}{{ labels[item.state] ?? item.state }}</strong>
+              <small>模拟运行 · {{ accountNames.get(item.accountId) ?? item.platform }}</small>
+            </span>
             <time :datetime="item.createdAt">{{ formatTime(item.createdAt) }}</time>
           </button>
         </li>
@@ -104,15 +134,17 @@ onMounted(refresh)
 .home-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }
 .home-priority { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem; background: var(--console-selected); }
 .home-action-copy { display: flex; align-items: center; gap: .625rem; }
-.home-action-copy h3, .home-empty { margin: 0; }
+.home-action-copy h3, .home-action-copy p, .home-empty { margin: 0; }
 .home-action-copy h3 { font-size: .9375rem; }
+.home-action-copy p { color: var(--console-muted); font-size: .8125rem; }
+.home-action-copy > span { flex: none; }
 .home-timeline { position: relative; list-style: none; margin: 0; padding: 0; }
 .home-timeline::before { content: ''; position: absolute; inset-block: 1.5rem; inset-inline-start: calc(.625rem + 15px); width: 1px; background: var(--console-line); }
 .home-row { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
   gap: .625rem; width: 100%; min-height: 3.25rem; padding: .5rem .625rem; border: 0; border-radius: 3px;
   background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
 .home-row:hover { background: var(--console-hover); }
-.home-row-copy { display: grid; gap: .125rem; }
+.home-row-copy { display: grid; gap: .125rem; overflow-wrap: anywhere; }
 .home-row small, .home-row time, .home-empty { color: var(--console-muted); font-size: .8125rem; }
 .home-node { display: grid; place-items: center; width: 31px; aspect-ratio: 1; border-radius: 50%; background: var(--console-selected); }
 .home-node, .home-tools .home-row > :is(:first-child, :last-child), .home-action-copy > span { color: var(--console-accent-text); }

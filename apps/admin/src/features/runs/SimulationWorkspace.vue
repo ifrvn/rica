@@ -5,6 +5,8 @@ import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
 import SimulationReconciliation from './SimulationReconciliation.vue'
+import { simulationAccounts } from './simulation-accounts.js'
+import { readAll } from '../../shared/console-data.js'
 import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
 import { runFilterKeys } from '../../app/console-location.js'
 import { request, RequestError } from '../../shared/request.js'
@@ -16,8 +18,9 @@ type Character = z.infer<typeof characterWorkspaceView>
 type Identity = z.infer<typeof identityView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 
-const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string }>()
-const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string]; audit: [id: string]; commitment: [id: string]; filter: [query: string] }>()
+const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string; showForm: boolean }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string]; audit: [id: string]; commitment: [id: string];
+  filter: [query: string]; form: [open: boolean] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -65,7 +68,6 @@ const loadingList = ref(false)
 let listRevision = 0
 const filters = ref({ state: '', identityId: '', accountId: '', from: '', through: '' })
 const invalidDates = computed(() => !!filters.value.from && !!filters.value.through && filters.value.from > filters.value.through)
-const showForm = ref(false)
 let pending: { body: string; key: string } | undefined
 let active = true
 onBeforeUnmount(() => { active = false })
@@ -101,23 +103,9 @@ function identityName(id: string) {
   return identity?.profile?.displayName || identity?.slug || id
 }
 
-const options = computed(() => accounts.value.filter((item) => item.status === 'ACTIVE'
-  && character.value?.status === 'ACTIVE'
-  && character.value.simulationPlatforms.some((platform) => platform === item.platform)
-  && identities.value.some((identity) => identity.id === item.identityId && identity.status === 'ACTIVE')).map((item) => ({
+const options = computed(() => simulationAccounts(character.value, identities.value, accounts.value).map((item) => ({
   value: item.id, label: identityName(item.identityId) + ' · ' + item.platform + ' · ' + item.instanceKey,
 })))
-
-async function all<T>(path: string) {
-  const items: T[] = []
-  let next: string | null = null
-  do {
-    const page: Page<T> = await request(path + '?limit=100' + (next ? '&cursor=' + encodeURIComponent(next) : ''))
-    items.push(...page.items)
-    next = page.nextCursor
-  } while (next && active)
-  return items
-}
 
 async function list(append = false) {
   const current = ++listRevision
@@ -209,8 +197,8 @@ async function load() {
   await Promise.all([
     list(),
     Promise.all([
-      all<Identity>(base.value + '/identities'),
-      all<Account>(base.value + '/accounts'),
+      readAll<Identity>(base.value + '/identities', () => active),
+      readAll<Account>(base.value + '/accounts', () => active),
       props.canStart ? request<Character>(base.value) : Promise.resolve(undefined),
     ]).then(([names, choices, current]) => {
       if (active) { identities.value = names; accounts.value = choices; character.value = current }
@@ -228,13 +216,13 @@ function refresh() {
   })
 }
 
-function toggleForm(open: boolean) {
-  showForm.value = open
+watch(() => props.showForm, (open, previous) => {
   void nextTick(() => {
+    if (!active || props.detailId || open !== props.showForm) return
     if (open) editorHeading.value?.focus()
-    else document.getElementById('run-start-trigger')?.focus()
+    else if (previous) document.getElementById('run-start-trigger')?.focus()
   })
-}
+}, { immediate: true })
 
 function reconciled(outcome: NonNullable<ReconciliationView['outcome']>) {
   resolutionNotice.value = outcome === 'CONFIRMED' ? '已确认模拟回执。' : '已按未写入回执结案。'
@@ -252,7 +240,6 @@ function start() {
       method: 'POST', body, headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
     })
     if (!active) return
-    showForm.value = false
     message.value = ''
     pending = undefined
     emit('open', result.id)
@@ -267,13 +254,13 @@ onMounted(() => { void act(load) })
   <div class="simulation-workspace">
     <div v-if="!detailId" class="run-actions">
       <NButton v-if="canStart && !showForm" id="run-start-trigger" type="primary" :disabled="busy || !options.length"
-        @click="toggleForm(true)">发起模拟</NButton>
+        @click="emit('form', true)">发起模拟</NButton>
       <NButton quaternary :disabled="busy || loadingList" @click="refresh">刷新运行</NButton>
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
     <p v-if="!detailId && canStart && !busy && !options.length && !loadingError" class="run-muted">发起模拟前，请在「角色与身份」启用模拟账号及其角色和身份。</p>
-    <section v-if="showForm && !detailId" class="run-editor console-record-workspace" aria-labelledby="run-editor-heading">
+    <section v-if="canStart && showForm && !detailId" class="run-editor console-record-workspace" aria-labelledby="run-editor-heading">
       <h3 id="run-editor-heading" ref="editorHeading" tabindex="-1">发起模拟</h3>
       <NForm @submit.prevent="start">
         <NFormItem label="模拟账号" :label-props="{ for: 'run-account' }">
@@ -285,7 +272,7 @@ onMounted(() => { void act(load) })
         </NFormItem>
         <div class="run-actions">
           <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !accountId || !message.trim()">开始模拟</NButton>
-          <NButton :disabled="busy" @click="toggleForm(false)">取消</NButton>
+          <NButton :disabled="busy" @click="emit('form', false)">取消</NButton>
         </div>
       </NForm>
     </section>

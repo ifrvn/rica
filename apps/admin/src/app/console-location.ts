@@ -1,5 +1,5 @@
 export type ConsolePage = 'home' | 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'health' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics'
-export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; connectorAccountId?: string }
+export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string }
 
 export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'through'] as const
 
@@ -24,11 +24,14 @@ export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
   const connectorAccountId = query.get('accountId')
   return { characterId: characterId.toLowerCase(), page: page as ConsolePage, detail: detail?.toLowerCase(),
     ...(runQuery ? { runQuery } : {}),
+    ...(page === 'runs' && !detail && query.get('start') === '1' ? { startSimulation: true } : {}),
     ...(page === 'connector' && connectorAccountId && id.test(connectorAccountId) ? { connectorAccountId } : {}) }
 }
 
-export function consoleHash({ characterId, page, detail, runQuery, connectorAccountId }: ConsoleLocation) {
+export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId }: ConsoleLocation) {
+  const filters = new URLSearchParams(runQuery)
+  if (page === 'runs' && !detail && startSimulation) filters.set('start', '1')
   return '#/characters/' + characterId + '/' + page + (detail ? '/' + detail : '')
-    + (page === 'runs' && runQuery ? '?' + runQuery : '')
+    + (page === 'runs' && filters.size ? '?' + filters.toString() : '')
     + (page === 'connector' && connectorAccountId ? '?accountId=' + encodeURIComponent(connectorAccountId) : '')
 }
