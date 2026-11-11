@@ -431,36 +431,40 @@ async function decide(decision: Decision) {
     </NCard>
 
     <template v-else>
-      <div class="workspace-toolbar">
-        <div v-if="characters.length" class="role-picker">
+      <Teleport v-if="characters.length" to="#masthead-role">
+        <div class="role-picker">
           <label for="review-character">角色</label>
           <NSelect :value="characterId || null" :options="characterOptions" :disabled="busy"
             :input-props="{ id: 'review-character' }" placeholder="选择角色" filterable @update:value="changeCharacter" />
           <NButton v-if="characterCursor" size="small" :disabled="busy"
             @click="run(() => fetchCharacters(characterCursor ?? undefined))">更多角色</NButton>
         </div>
-        <NButton v-if="canCreate" size="small" secondary :disabled="busy" @click="modelSettingsOpen = true">模型设置</NButton>
-        <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
-          @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
-          <template #trigger>
-            <NButton size="small" quaternary class="account-name" :aria-expanded="accountMenuOpen"
-              :aria-label="'账号设置 · ' + username">{{ username }} <span aria-hidden="true">⌄</span></NButton>
-          </template>
-          <div class="account-menu">
-            <NButton v-if="passkeysAvailable && !showPasskeyForm" size="small" quaternary
-              :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</NButton>
-            <NForm v-if="showPasskeyForm" :show-feedback="false" @submit.prevent="registerPasskey">
-              <NFormItem label="确认密码" :label-props="{ for: 'review-passkey-password' }">
-                <NInput v-model:value="passkeyPassword" type="password"
-                  :input-props="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
-                  :disabled="busy" placeholder="输入当前密码以确认身份" />
-              </NFormItem>
-              <NButton attr-type="submit" type="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</NButton>
-            </NForm>
-            <NButton size="small" quaternary :disabled="busy" @click="disconnect">退出登录</NButton>
-          </div>
-        </NPopover>
-      </div>
+      </Teleport>
+      <Teleport to="#masthead-account">
+        <div class="workspace-account">
+          <NButton v-if="canCreate" size="small" secondary :disabled="busy" @click="modelSettingsOpen = true">模型设置</NButton>
+          <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
+            @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
+            <template #trigger>
+              <NButton size="small" quaternary class="account-name" :aria-expanded="accountMenuOpen"
+                :aria-label="'账号设置 · ' + username">{{ username }} <span aria-hidden="true">⌄</span></NButton>
+            </template>
+            <div class="account-menu">
+              <NButton v-if="passkeysAvailable && !showPasskeyForm" size="small" quaternary
+                :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</NButton>
+              <NForm v-if="showPasskeyForm" :show-feedback="false" @submit.prevent="registerPasskey">
+                <NFormItem label="确认密码" :label-props="{ for: 'review-passkey-password' }">
+                  <NInput v-model:value="passkeyPassword" type="password"
+                    :input-props="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
+                    :disabled="busy" placeholder="输入当前密码以确认身份" />
+                </NFormItem>
+                <NButton attr-type="submit" type="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</NButton>
+              </NForm>
+              <NButton size="small" quaternary :disabled="busy" @click="disconnect">退出登录</NButton>
+            </div>
+          </NPopover>
+        </div>
+      </Teleport>
       <ModelSettings v-if="canCreate && modelSettingsOpen" @close="modelSettingsOpen = false" @expired="resetSession" />
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
@@ -639,11 +643,9 @@ async function decide(decision: Decision) {
 .login-alert { margin-block: .5rem; }
 .workspace-header, .account-actions, .decision-buttons { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
 .workspace-header { justify-content: space-between; }
-.workspace-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .75rem; min-width: 0;
-  padding: .625rem clamp(1rem, 4vw, 2.5rem); background: var(--console-surface); border-bottom: 1px solid var(--console-line); }
-.workspace-toolbar > :last-child { margin-inline-start: auto; }
+.workspace-account { display: flex; align-items: center; gap: .5rem; }
 .account-menu { display: grid; gap: .5rem; min-width: 10rem; justify-items: start; }
-.workspace-shell { display: grid; min-height: calc(100vh - 7rem); }
+.workspace-shell { display: grid; min-height: calc(100vh - 3.75rem); }
 .workspace-shell--with-nav { grid-template-columns: 10.25rem minmax(0, 1fr); }
 .workspace-content { display: grid; align-content: start; gap: 1rem; min-width: 0; padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 2rem; }
 .console-navigation { display: flex; flex-direction: column; gap: .1875rem; padding: 1rem .625rem; min-width: 0;
@@ -660,10 +662,11 @@ async function decide(decision: Decision) {
 .run-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.125rem; }
 .run-navigation [aria-current] { font-weight: 650; }
 .workspace-header h2 { font-size: 1.5rem; line-height: 1.25; letter-spacing: -.025em; }
-.account-name { max-width: 12rem; }
+.account-name { max-width: 8rem; }
 .account-name :deep(.n-button__content) { overflow: hidden; text-overflow: ellipsis; }
-.role-picker { display: flex; align-items: center; gap: .75rem; width: min(100%, 22rem); min-width: 0; }
+.role-picker { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .role-picker > label { flex: none; color: var(--console-muted); }
+.role-picker :deep(.n-select) { width: clamp(7rem, 15vw, 13rem); }
 .proposal-actions { margin-bottom: .75rem; }
 .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
 .metadata dt { color: var(--console-muted); font-size: .8125rem; }
@@ -678,7 +681,7 @@ async function decide(decision: Decision) {
   .console-nav-label { display: none; }
 }
 @media (max-width: 30rem) {
-  .workspace-toolbar .account-name { max-width: 7rem; }
+  .account-name { max-width: 7rem; }
   .metadata { grid-template-columns: minmax(0, 1fr); }
 }
 @media (pointer: coarse) {

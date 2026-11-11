@@ -1,15 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watchEffect } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from 'vue'
 import { darkTheme, NButton, NConfigProvider, NGlobalStyle, NTag, zhCN, type GlobalThemeOverrides } from 'naive-ui'
-import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
+import {
+  DropdownMenuContent, DropdownMenuItemIndicator, DropdownMenuPortal, DropdownMenuRadioGroup,
+  DropdownMenuRadioItem, DropdownMenuRoot, DropdownMenuTrigger,
+  PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
+} from 'reka-ui'
 import ReviewDesk from './ReviewDesk.vue'
 import type { Readiness } from '../../../../packages/contracts/health.js'
 import { palettes, readAppearance, saveAppearance } from './appearance.js'
 import '../styles/console-theme.css'
 
 const appearance = ref(readAppearance())
+const systemPreference = window.matchMedia('(prefers-color-scheme: dark)')
+const systemMode = ref<'light' | 'dark'>(systemPreference.matches ? 'dark' : 'light')
+const effectiveMode = computed(() => appearance.value.mode === 'system' ? systemMode.value : appearance.value.mode)
+const nextMode = computed(() => {
+  if (appearance.value.mode === 'system') return systemMode.value === 'dark' ? 'light' : 'dark'
+  return appearance.value.mode === systemMode.value ? 'system' : systemMode.value
+})
+const modes = {
+  system: { label: '跟随系统', icon: 'i-lucide-monitor' },
+  light: { label: '浅色', icon: 'i-lucide-sun' },
+  dark: { label: '深色', icon: 'i-lucide-moon' },
+} as const
+const modeLabel = computed(() => '外观：' + modes[appearance.value.mode].label + '，点击切换至' + modes[nextMode.value].label)
+
+function updateSystemMode(event: MediaQueryListEvent) {
+  systemMode.value = event.matches ? 'dark' : 'light'
+}
+
 const theme = computed<GlobalThemeOverrides>(() => {
-  const [primary, hover] = palettes[appearance.value.palette][appearance.value.mode]
+  const [primary, hover] = palettes[appearance.value.palette][effectiveMode.value]
   return {
     common: {
       primaryColor: primary, primaryColorHover: hover, primaryColorPressed: hover, primaryColorSuppl: hover,
@@ -22,7 +44,7 @@ const theme = computed<GlobalThemeOverrides>(() => {
 
 watchEffect(() => {
   document.documentElement.dataset.consolePalette = appearance.value.palette
-  document.documentElement.dataset.consoleMode = appearance.value.mode
+  document.documentElement.dataset.consoleMode = effectiveMode.value
   saveAppearance(appearance.value)
 })
 
@@ -49,11 +71,15 @@ async function refresh() {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  systemPreference.addEventListener('change', updateSystemMode)
+  void refresh()
+})
+onBeforeUnmount(() => systemPreference.removeEventListener('change', updateSystemMode))
 </script>
 
 <template>
-  <NConfigProvider :locale="zhCN" :theme="appearance.mode === 'dark' ? darkTheme : null" :theme-overrides="theme">
+  <NConfigProvider :locale="zhCN" :theme="effectiveMode === 'dark' ? darkTheme : null" :theme-overrides="theme">
     <NGlobalStyle />
     <div class="admin-shell">
       <header class="masthead">
@@ -62,20 +88,29 @@ onMounted(refresh)
             <span class="brand-mark" aria-hidden="true">R</span>
             <h1>Rica 控制台</h1>
           </div>
+          <div id="masthead-role" />
           <div class="masthead-actions" flex="~ wrap" items="center" gap="2">
-            <div class="appearance-picker">
-              <label for="console-palette">主题</label>
-              <select id="console-palette" v-model="appearance.palette">
-                <option v-for="(palette, key) in palettes" :key="key" :value="key">{{ palette.label }}</option>
-              </select>
-            </div>
-            <div class="appearance-picker">
-              <label for="console-mode">外观</label>
-              <select id="console-mode" v-model="appearance.mode">
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
-              </select>
-            </div>
+            <DropdownMenuRoot>
+              <DropdownMenuTrigger type="button" class="appearance-icon"
+                :aria-label="'切换主题，当前为' + palettes[appearance.palette].label" title="切换主题">
+                <span class="i-lucide-palette" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuContent class="theme-menu" align="end" :side-offset="8" :collision-padding="12" aria-label="主题颜色">
+                  <DropdownMenuRadioGroup :model-value="appearance.palette">
+                    <DropdownMenuRadioItem v-for="(palette, key) in palettes" :key="key" :value="key" class="theme-option"
+                      :style="{ color: palette.text[effectiveMode] }" @select="appearance.palette = key">
+                      <span class="theme-swatch" :style="{ backgroundColor: palette.light[0] }" aria-hidden="true" />
+                      <span>{{ palette.label }}</span>
+                      <DropdownMenuItemIndicator class="i-lucide-check theme-indicator" aria-hidden="true" />
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenuPortal>
+            </DropdownMenuRoot>
+            <button type="button" class="appearance-icon" :aria-label="modeLabel" :title="modeLabel" @click="appearance.mode = nextMode">
+              <span :class="modes[appearance.mode].icon" aria-hidden="true" />
+            </button>
             <PopoverRoot>
               <PopoverTrigger class="service-trigger" type="button" aria-label="服务状态">
                 <span class="service-dot" :data-tone="serviceStatus.tone" aria-hidden="true" />
@@ -98,6 +133,7 @@ onMounted(refresh)
                 </PopoverContent>
               </PopoverPortal>
             </PopoverRoot>
+            <div id="masthead-account" />
           </div>
         </div>
       </header>
@@ -118,27 +154,44 @@ body { margin: 0; }
 .brand { display: flex; align-items: center; gap: .75rem; }
 .brand h1 { margin: 0; font-size: 1rem; font-weight: 650; }
 .brand-mark { color: var(--console-accent-text); font-size: 1.5rem; font-weight: 760; line-height: 1; }
-.appearance-picker { display: inline-flex; align-items: center; gap: .375rem; color: var(--console-muted); font-size: .8125rem; }
-.appearance-picker select, .service-trigger {
+.masthead-actions { margin-inline-start: auto; min-width: 0; }
+#masthead-role:empty, #masthead-account:empty { display: none; }
+.appearance-icon, .service-trigger {
   font: inherit; color: var(--console-text); background: var(--console-surface); border: 1px solid var(--console-field);
   border-radius: 5px; min-height: 2rem; padding-inline: .5rem;
 }
+.appearance-icon { display: grid; place-items: center; width: 2rem; padding: 0; border-color: transparent; cursor: pointer; font-size: 1rem; }
+.appearance-icon:hover, .appearance-icon[data-state='open'] { background: var(--console-hover); }
 .service-trigger { display: inline-flex; align-items: center; border-color: var(--console-line); cursor: pointer; }
 .service-trigger:hover { background: var(--console-hover); }
 .service-dot { width: .42rem; aspect-ratio: 1; border-radius: 50%; margin-inline-end: .45rem; background: #82908f; }
 .service-dot[data-tone='success'] { background: var(--console-good); }
 .service-dot[data-tone='warning'] { background: #ad710c; }
 .service-dot[data-tone='error'] { background: #bd454c; }
-.service-panel { z-index: 20; min-width: 11.5rem; display: grid; gap: .75rem; padding: .875rem;
+.service-panel, .theme-menu { z-index: 20;
   background: var(--console-surface); color: var(--console-text); border: 1px solid var(--console-line);
   border-radius: 6px; box-shadow: 0 .5rem 1.5rem #0002; }
+.service-panel { min-width: 11.5rem; display: grid; gap: .75rem; padding: .875rem; }
+.theme-menu { min-width: 9.25rem; padding: .25rem; }
+.theme-option { display: grid; grid-template-columns: .875rem 1fr 1rem; align-items: center; gap: .625rem;
+  min-height: 2.25rem; padding: .25rem .5rem; border-radius: 4px; cursor: pointer; font-size: .875rem; }
+.theme-option[data-highlighted] { background: var(--console-hover); outline: none; }
+.theme-swatch { width: .875rem; height: .875rem; border-radius: 3px; }
+.theme-indicator { justify-self: end; }
 .service-panel p, .service-checks, .service-checks dd { margin: 0; }
 .service-checks { display: grid; gap: .5rem; }
 .service-checks div { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .service-panel > .n-button { justify-self: end; }
+@media (min-width: 44rem) and (max-width: 56rem) {
+  .masthead-inner { padding-inline: 1rem; gap: .5rem; }
+}
 @media (max-width: 42rem) {
   .masthead-inner { gap: .5rem; }
   .brand { gap: .5rem; }
   .brand h1 { font-size: .925rem; }
+}
+@media (pointer: coarse) {
+  .appearance-icon { width: 2.75rem; min-height: 2.75rem; }
+  .theme-option { min-height: 2.75rem; }
 }
 </style>

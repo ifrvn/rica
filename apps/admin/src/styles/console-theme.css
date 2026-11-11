@@ -36,6 +36,18 @@
   --console-selected: #f3ecfb;
   --console-accent-text: #553780;
 }
+:root[data-console-palette="blue"] {
+  --console-page: #f6f9fd;
+  --console-surface: #fffefa;
+  --console-nav: #f9fbff;
+  --console-text: #222d46;
+  --console-muted: #515f77;
+  --console-line: #e5ecf6;
+  --console-field: #899dbb;
+  --console-hover: #f0f5fd;
+  --console-selected: #e7effc;
+  --console-accent-text: #304e88;
+}
 :root[data-console-mode="dark"] {
   color-scheme: dark;
   --console-page: #1c1a1c;
@@ -59,4 +71,9 @@
   --console-hover: #2a2333;
   --console-selected: #382e47;
   --console-accent-text: #e4d4ff;
+}
+:root[data-console-mode="dark"][data-console-palette="blue"] {
+  --console-hover: #242c3b;
+  --console-selected: #293851;
+  --console-accent-text: #c9dcff;
 }
