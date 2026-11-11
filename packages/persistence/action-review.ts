@@ -1,5 +1,6 @@
 import type { z } from '@hono/zod-openapi'
 import { reviewTarget, type ActionView, type actionDecision } from '../contracts/action-review.js'
+import { simulationFollowUp } from '../contracts/simulation-follow-up.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
@@ -25,6 +26,7 @@ type Proposal = {
   proposerId: string | null
   expiresAt: Date
   expired: boolean
+  followUp: unknown
 }
 
 function notFound(): never {
@@ -35,7 +37,7 @@ async function proposalRows(
   tx: Prisma.TransactionClient, characterId: string, actionId: string | null, limit = 25, cursor: string | null = null,
 ) {
   return tx.$queryRaw<Proposal[]>`
-    SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest",
+    SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest", a.follow_up AS "followUp",
       a.policy_version AS "policyVersion", a.adapter_id AS "adapterId", a.adapter_version AS "adapterVersion",
       a.adapter_contract_version AS "adapterContractVersion",
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
@@ -95,6 +97,8 @@ export async function listReviewActions(
         riskCodes: row.crossPlatformDuplicate
           ? ['HUMAN_REVIEW_REQUIRED', 'CROSS_PLATFORM_NEAR_DUPLICATE'] : ['HUMAN_REVIEW_REQUIRED'],
         content: actionId && row.proposerId !== scope.actor.id ? content : null,
+        followUp: actionId && content && row.proposerId !== scope.actor.id
+          ? simulationFollowUp.safeParse(row.followUp).data ?? null : null,
       })
     }
     return { items: actions, nextCursor: rows.length > limit ? actions.at(-1)?.id ?? null : null }

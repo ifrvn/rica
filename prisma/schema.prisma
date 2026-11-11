@@ -761,6 +761,7 @@ model ActionProposal {
   adapterVersion    String             @map("adapter_version")
   adapterContractVersion Int            @map("adapter_contract_version")
   proposerId        String?            @map("proposer_id")
+  followUp          Json?              @map("follow_up")
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
   draft             SimulatedDraft     @relation(fields: [characterId, runId], references: [characterId, runId], onDelete: Restrict, onUpdate: NoAction)
@@ -942,6 +943,7 @@ model SimulationCommitment {
   scheduleId  String               @map("schedule_id") @db.Uuid
   title       String
   task        String?
+  source      String               @default("MANUAL")
   state       CommitmentState      @default(OPEN)
   dueAt       DateTime             @map("due_at") @db.Timestamptz
   version     Int                  @default(1)

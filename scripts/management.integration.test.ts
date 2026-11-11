@@ -1026,6 +1026,93 @@ async function confirmCommitmentReceipt(actionId: string) {
   }
 }
 
+for (const kind of ['PLAN', 'COMMITMENT'] as const) {
+  test(`AI follow-up registers a ${kind} once from an approved simulation receipt`, async () => {
+    await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+    const accountId = await newSimulationAccount()
+    const followUp = {
+      kind, title: 'Review follow-up ' + kind, task: '整理活动报名问题',
+      dueAt: new Date(await databaseNow() + 86_400_000).toISOString(),
+    }
+    const model = {
+      ...simulatedModelPlugin,
+      implementation: {
+        hostedModel: 'fixture',
+        decide: async () => 'REPLY',
+        write: async () => ({ text: '我会在明天整理活动报名问题。', evidenceIds: [], followUp }),
+      },
+    }
+    const { action } = await proposeReview(accountId, undefined, model)
+    const path = actionPath(action.id)
+    assert.equal((await request('GET', path)).status, 403)
+    const preview = await request('GET', path, { actor: 'reviewer' })
+    assert.deepEqual(preview.body.followUp, followUp)
+    assert.equal(preview.body.target.accountId, accountId)
+    const decide = await request('POST', path + '/decisions', {
+      actor: 'reviewer', key: 'follow-up-' + action.id, ifMatch: preview.headers.get('etag')!,
+      data: { decision: 'APPROVE', reason: 'Reviewed the reply and follow-up', reviewDigest: action.reviewDigest },
+    })
+    assert.equal(decide.status, 200, JSON.stringify(decide.body))
+
+    const list = characterPath(a) + (kind === 'PLAN' ? '/plans' : '/commitments?accountId=' + accountId)
+    const registered = async () => (await request('GET', list)).body.items.filter(
+      ({ title }: { title: string }) => title === followUp.title,
+    )
+    assert.deepEqual(await registered(), [])
+    await confirmCommitmentReceipt(action.id)
+    await confirmCommitmentReceipt(action.id)
+    const items = await registered()
+    assert.equal(items.length, 1)
+    const [item] = items
+    assert.equal(item.source, 'AI')
+    if (kind === 'PLAN') {
+      assert.deepEqual(item.rule, { kind: 'REMINDER', dueAt: followUp.dueAt })
+      assert.deepEqual(item.participants.map(({ identityId, accountId, task }: Record<string, string>) =>
+        ({ identityId, accountId, task })), [{ identityId: identityA, accountId, task: followUp.task }])
+    } else {
+      assert.equal(item.actionId, action.id)
+      assert.equal(item.task, followUp.task)
+      assert.equal(item.dueAt, followUp.dueAt)
+      assert.deepEqual((await request('GET', characterPath(a) + '/commitment-receipts?runId=' + action.runId)).body.items, [])
+    }
+  })
+}
+
+test('AI follow-up ignores promises missing from the reply and respects rejection', async () => {
+  const accountId = await newSimulationAccount()
+  const followUp = {
+    kind: 'COMMITMENT', title: 'Unapproved follow-up', task: '整理活动报名问题',
+    dueAt: new Date(await databaseNow() + 86_400_000).toISOString(),
+  }
+  const model = (text: string) => ({
+    ...simulatedModelPlugin,
+    implementation: {
+      hostedModel: 'fixture',
+      decide: async () => 'REPLY',
+      write: async () => ({ text, evidenceIds: [], followUp }),
+    },
+  })
+  const ungrounded = await proposeReview(accountId, undefined, model('报名时间尚未确定。'))
+  assert.equal((await request('GET', actionPath(ungrounded.action.id), { actor: 'reviewer' })).body.followUp, null)
+  const grounded = await proposeReview(accountId, undefined, model('我会在明天整理活动报名问题。'))
+  const path = actionPath(grounded.action.id)
+  const preview = await request('GET', path, { actor: 'reviewer' })
+  assert.deepEqual(preview.body.followUp, followUp)
+  const rejected = await request('POST', path + '/decisions', {
+    actor: 'reviewer', key: 'reject-follow-up-' + grounded.action.id, ifMatch: preview.headers.get('etag')!,
+    data: { decision: 'REJECT', reason: 'Reject the simulated reply', reviewDigest: grounded.action.reviewDigest },
+  })
+  assert.equal(rejected.status, 200, JSON.stringify(rejected.body))
+  const executor = simulationDatabase()
+  try {
+    await executeSimulation(executor, grounded.action.id, simulationPlatforms.resolveAdapter)
+  } finally {
+    await executor.$disconnect()
+  }
+  assert.equal(await owner.simulationReceipt.count({ where: { actionId: grounded.action.id } }), 0)
+  assert.deepEqual((await request('GET', characterPath(a) + '/commitments?accountId=' + accountId)).body.items, [])
+})
+
 test('commitments require a confirmed receipt and preserve its recipient across filters', async () => {
   const { accountId, contactId, action, due } = await commitmentFixture(true)
   const path = characterPath(a) + '/commitments'

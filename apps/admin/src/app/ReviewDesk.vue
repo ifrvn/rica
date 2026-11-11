@@ -619,6 +619,11 @@ async function decide(decision: Decision) {
             <template v-if="selected.content">
               <h4>拟回复内容</h4>
               <p class="console-payload">{{ selected.content }}</p>
+              <NAlert v-if="selected.followUp" type="info">
+                <strong>{{ selected.followUp.kind === 'PLAN' ? 'AI 拟定计划' : 'AI 拟登记承诺' }} · {{ selected.followUp.title }}</strong>
+                <p>{{ selected.followUp.task }}</p>
+                <p>截止 {{ new Date(selected.followUp.dueAt).toLocaleString() }}。批准后，模拟回执确认且未过期时自动登记。</p>
+              </NAlert>
             </template>
             <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
             <NForm v-if="selected.state === 'WAITING_APPROVAL' && selected.content" :show-feedback="false"
@@ -628,7 +633,9 @@ async function decide(decision: Decision) {
                   :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="例如：已核对目标和拟发送内容" />
               </NFormItem>
               <div class="decision-buttons">
-                <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">批准模拟回复</NButton>
+                <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">
+                  {{ selected.followUp ? '批准回复及后续事项' : '批准模拟回复' }}
+                </NButton>
                 <NButton type="error" :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
               </div>
             </NForm>

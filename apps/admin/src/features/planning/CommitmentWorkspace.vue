@@ -218,7 +218,9 @@ onMounted(() => {
         <div class="commitment-title">
           <h4>{{ item.title }}</h4>
           <div class="console-actions">
-            <NTag size="small" :bordered="false">人工登记</NTag>
+            <NTag size="small" :type="item.source === 'AI' ? 'info' : 'default'" :bordered="false">
+              {{ item.source === 'AI' ? 'AI 从回执登记' : '人工登记' }}
+            </NTag>
             <NTag size="small" :type="isOverdue(item) ? 'warning' : item.state === 'FULFILLED' ? 'success' : 'default'" :bordered="false">
               {{ isOverdue(item) ? '已逾期' : stateLabels[item.state] }}
             </NTag>

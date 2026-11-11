@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi'
 import { reasonInput } from './management.js'
+import { simulationFollowUp } from './simulation-follow-up.js'
 
 export const reviewTarget = z.object({
   platform: z.enum(['mock-a', 'mock-b']),
@@ -21,6 +22,7 @@ export const actionView = z.object({
   version: z.number().int(), target: reviewTarget,
   expiresAt: z.iso.datetime(), reviewDigest: z.string(),
   riskCodes: z.array(z.string()), content: z.string().nullable(),
+  followUp: simulationFollowUp.nullable(),
 })
 export const actionDecision = reasonInput.extend({
   decision: z.enum(['APPROVE', 'REJECT']),

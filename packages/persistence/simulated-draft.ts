@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { reviewTarget } from '../contracts/action-review.js'
+import { simulationFollowUp } from '../contracts/simulation-follow-up.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '../runtime/model-provider.js'
@@ -62,7 +63,7 @@ async function reserveModelBudget(tx: Prisma.TransactionClient, runId: string, i
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
-  provider: ModelProvider, signal: AbortSignal,
+  provider: ModelProvider, signal: AbortSignal, suggestFollowUp = false,
 ) {
   if (text.length > maxSimulatedTextLength) throw new Error('Simulated message is too long')
   signal.throwIfAborted()
@@ -98,7 +99,8 @@ async function buildSimulatedDraft(
       SELECT style, prompt FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
     if (!profile) return null
-    const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined }
+    const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined,
+      ...(suggestFollowUp ? { suggestFollowUp } : {}) }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
     return await reserveModelBudget(tx, runId, input, outputUnits) ? input : null
   })
@@ -110,8 +112,14 @@ async function buildSimulatedDraft(
   const output = await provider.write(writing, signal)
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
+  const suggestion = suggestFollowUp && output && typeof output === 'object' && 'followUp' in output
+    ? simulationFollowUp.safeParse(output.followUp).data : undefined
+  const due = suggestion ? Date.parse(suggestion.dueAt) : NaN
+  const now = Date.parse(time.now)
+  const followUp = suggestion && due > now && due <= now + 7 * 86_400_000
+    && (suggestion.kind === 'PLAN' || draft.text.includes(suggestion.task)) ? suggestion : undefined
 
-  return { draft, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
+  return { draft, followUp, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
@@ -179,7 +187,8 @@ export async function processSimulatedDraft(
   const signal = AbortSignal.timeout(model.implementation.hostedModel ? 20_000 : 5_000)
   const text = input?.text ?? null
   const candidate = request && text !== null
-    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal)
+    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal,
+      request.purpose === 'PUBLIC_REFERENCE' && Boolean(model.implementation.hostedModel))
     : null
 
   await db.$transaction(async (tx) => {
@@ -216,7 +225,7 @@ export async function processSimulatedDraft(
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
           selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
-          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion,
+          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion, followUp: candidate.followUp,
         })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({
@@ -236,6 +245,7 @@ export async function processSimulatedDraft(
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
             policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
+            followUp: candidate.followUp,
           },
         })
       }

@@ -838,7 +838,7 @@ export async function listCommitments(db: PrismaClient, scope: Scope, input: Inp
     const args = await pageArgs(page, (id) => tx.simulationCommitment.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.simulationCommitment.findMany({
       ...args, where,
-      select: { id: true, actionId: true, scheduleId: true, title: true, task: true, state: true, version: true, dueAt: true,
+      select: { id: true, actionId: true, scheduleId: true, title: true, task: true, state: true, version: true, dueAt: true, source: true,
         collaborators: { orderBy: { identityId: 'asc' }, select: {
           identityId: true, accountId: true, account: { select: { platform: true, status: true } },
         } },
@@ -847,6 +847,7 @@ export async function listCommitments(db: PrismaClient, scope: Scope, input: Inp
     })
     return makePage(rows, page, ({ schedule: { contact, nextAt, ...schedule }, dueAt, collaborators, ...row }) => ({
       ...row, ...schedule, contactLabel: contact?.displayLabel ?? null,
+      source: row.source === 'AI' ? 'AI' as const : 'MANUAL' as const,
       dueAt: dueAt.toISOString(), nextAt: nextAt?.toISOString() ?? null,
       collaborators: collaborators.map(({ account, ...item }) => ({ ...item, platform: account.platform, accountStatus: account.status })),
     }))

@@ -30,6 +30,7 @@ test('built-in model plugins send only writing input and parse their provider re
   ] as const
   for (const [id, header, keyValue, endpoint, result] of fixtures) {
     const signal = new AbortController().signal
+    let responseBody: unknown = result
     const fetch = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
       assert.equal(url, endpoint)
       assert.equal(new Headers(options.headers).get(header), keyValue)
@@ -44,7 +45,7 @@ test('built-in model plugins send only writing input and parse their provider re
         : id === 'anthropic' ? body.system : body.messages[0].content
       assert.ok(instructions.includes(input.identityPrompt))
       if (id === 'openai') assert.equal(body.store, false)
-      return Response.json(result)
+      return Response.json(responseBody)
     })
     const plugins = await startCognitionPlugins({}, undefined, {
       provider: id, model: 'fixture-model', apiKey: 'fixture-key',
@@ -57,6 +58,14 @@ test('built-in model plugins send only writing input and parse their provider re
       assert.equal(fetch.mock.callCount(), 0)
       assert.deepEqual(await model.write(input, signal), { text: '下午三点。', evidenceIds: ['internal-memory-id'] })
       assert.equal(fetch.mock.callCount(), 1)
+      if (id === 'openai') {
+        const followUp = { kind: 'COMMITMENT', title: '整理报名问题', task: '整理活动报名问题', dueAt: '2026-11-11T02:00:00Z' }
+        const output = { text: '我明天会整理活动报名问题。', followUp }
+        responseBody = { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }
+        assert.deepEqual(await model.write({ ...input, suggestFollowUp: true }, signal), {
+          ...output, evidenceIds: ['internal-memory-id'],
+        })
+      }
     } finally {
       fetch.mock.restore()
       await plugins.stop()

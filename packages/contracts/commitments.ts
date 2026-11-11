@@ -27,6 +27,7 @@ export const commitmentView = z.object({
   accountId: resourceId, identityId: resourceId, conversationId: resourceId, contactId: resourceId.nullable(),
   contactLabel: z.string().nullable(),
   title: z.string(), task: z.string().nullable(), state: z.enum(['OPEN', 'DEFERRED', 'FULFILLED', 'CANCELED', 'EXPIRED']),
+  source: z.enum(['MANUAL', 'AI']),
   collaborators: z.array(collaborator.extend({ platform: z.string(), accountStatus: z.string() })),
   version: z.number().int(), dueAt: z.iso.datetime(), nextAt: z.iso.datetime().nullable(),
 })
