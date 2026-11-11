@@ -2,12 +2,15 @@ import { startOutboxWorker, WorkerDependencyUnavailable } from './outbox.js'
 import { loadConfig } from '../../packages/runtime/config.js'
 import { startConfiguredModel, startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
+import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
 async function main() {
   const config = loadConfig()
-  const settings = createModelSettingsStore(modelSettingsDirectory(config.databaseUrl))
-  const selected = await startConfiguredModel(settings, 'worker').catch(async (error: unknown) => {
+  const directory = modelSettingsDirectory(config.databaseUrl)
+  const settings = createModelSettingsStore(directory)
+  const plugins = createDeploymentPluginStore(directory)
+  const selected = await startConfiguredModel({ read: () => plugins.readModel(settings) }, 'worker').catch(async (error: unknown) => {
     await reportPluginResult(config.redisUrl, 'worker', observationError(error, 'START_FAILED'))
     throw error
   })

@@ -3,8 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NTag } from 'naive-ui'
 import type { PluginService } from '../../../../../packages/contracts/plugin-status.js'
 import type { Readiness } from '../../../../../packages/contracts/health.js'
+import { deploymentPluginIds } from '../../../../../packages/contracts/deployment-plugins.js'
 import { formatTime } from '../../shared/console-data.js'
-import { usePluginStatus } from '../plugins/plugin-status.js'
+import { pluginNames, usePluginStatus } from '../plugins/plugin-status.js'
 
 type Tone = 'default' | 'success' | 'warning' | 'error'
 type Node = { id: string; label: string; description: string; state: string; tone: Tone; at?: string; diagnostic?: string }
@@ -43,46 +44,58 @@ function dependency(id: keyof Readiness['checks'], label: string, description: s
 
 const layers = computed(() => {
   const services = status.value?.services
+  const deployment = status.value?.deployment
   const apiReport = services?.find(({ service }) => service === 'api')?.report
   const adapterCount = apiReport?.status === 'READY' ? apiReport.plugins.filter(({ kind }) => kind === 'platform').length : undefined
   const api: Node = {
-    id: 'api', label: '管理 API', description: '处理设置、记录查询和人工审批，并探测 PostgreSQL 与 Redis。',
+    id: 'api', label: '管理与审批入口', description: '管理 API 处理设置、记录查询和人工审批，并探测 PostgreSQL 与 Redis。',
     state: props.readiness?.status === 'ready' ? '已就绪' : props.readiness ? '未就绪' : '无法确认',
     tone: props.readiness?.status === 'ready' ? 'success' : props.readiness ? 'warning' : 'default', at: props.checkedAt,
   }
-  const adapters: Node = { id: 'platforms', label: '模拟适配器', description: '向运行流程提供模拟事件。',
+  const adapters: Node = { id: 'platforms', label: '模拟事件入口', description: '模拟适配器向运行流程提供测试事件。',
     state: adapterCount === undefined ? '载入状态未知' : '已载入 ' + adapterCount + ' 个',
     tone: adapterCount ? 'success' : 'default' }
-  const reader = processNode('connector-reader', '读取 Newbi 消息', '单次读取命令的最近报告。账号接入及读取记录可在平台账号池查看。')
+  const reader = processNode('connector-reader', '读取 Newbi 消息', '独立读取平台事件到账号收件箱。账号接入及读取记录可在平台账号池查看。')
   const executor = processNode('connector-executor', '发送 Newbi 回复', '单次发送命令的最近报告。每条回复都须取得对应的发送许可。')
-  const hasNewbi = status.value?.newbiRegistrationAvailable || reader.at || executor.at
-  const worker = processNode('worker', '认知 Worker', '消费队列任务并生成草稿。已载入的模型见插件中心。')
+  const hasNewbi = deployment?.plugins.newbi === 'ENABLED'
+  const worker = processNode('worker', '生成草稿', '认知 Worker 消费模拟任务并生成草稿。')
+  const loadedModel = services?.find(({ service }) => service === 'worker')?.report?.plugins.find(({ kind }) => kind === 'model')?.id
+  const enabledModels = deploymentPluginIds.filter((id) => id !== 'newbi' && deployment?.plugins[id] === 'ENABLED')
+  const models: Node[] = enabledModels
+    .map((id) => {
+      const configured = deployment?.configuredModel === id
+      return { id, label: pluginNames[id] + ' 写作', description: '由认知 Worker 在公开模拟草稿任务中使用。',
+        state: !configured ? '待配置' : loadedModel === id ? '已载入' : '已配置 · 等待载入',
+        tone: configured && loadedModel === id ? 'success' : 'default' }
+    })
   const approval: Node = { id: 'approval', label: '人工审批与发送许可', description: '管理 API 校验审批权限、回复目标和发送许可。',
     state: '由管理 API 提供', tone: 'default' }
   const dependencies = [
     dependency('postgres', 'PostgreSQL', '存储角色配置、审批、回执与运行记录。连接状态来自管理 API 的探测。'),
     dependency('redis', 'Redis', '提供任务队列和进程报告缓存。连接状态来自管理 API 的探测。'),
   ]
-  const external = (id: string, label: string, description: string): Node =>
-    ({ id, label, description, state: '暂无独立探测', tone: 'default' })
+  const external = (id: string, label: string, description: string, configured: boolean): Node =>
+    ({ id, label, description, state: configured ? '暂无独立探测' : '待配置', tone: 'default' })
   if (hasNewbi) {
     dependencies.push(
-      external('newbi-read', 'Newbi 读取 API', '账号级连接核验与读取结果可在平台账号池查看。'),
-      external('newbi-write', 'Newbi 发送 API', '发送结果可在 Newbi 提案中查看。读取连接与发送许可分别校验。'),
+      external('newbi-read', 'Newbi 读取 API', '账号级连接核验与读取结果可在平台账号池查看。', !!deployment?.newbi.hasCredential),
+      external('newbi-write', 'Newbi 发送 API', '发送结果可在 Newbi 提案中查看。读取连接与发送许可分别校验。', !!deployment?.newbi.hasCredential),
     )
   }
-  if (services?.find(({ service }) => service === 'worker')?.report?.plugins.some(({ kind, id }) => kind === 'model' && id !== 'simulated')) {
-    dependencies.push(external('model-api', '外部模型 API', '认知 Worker 已载入外部模型。实际调用结果可通过发起模拟查看。'))
+  for (const id of enabledModels) {
+    const configured = deployment?.configuredModel === id
+    dependencies.push(external('model-api-' + id, pluginNames[id] + ' API',
+      configured ? '实际调用结果可通过发起模拟查看。' : '在插件中心保存模型 ID 和 API 密钥后即可试写。', configured))
   }
   return [
     { label: '控制面', nodes: [api] },
-    { label: '接收模拟事件', nodes: [adapters] },
-    { label: '生成草稿', edge: '事件入队', nodes: [worker] },
+    { label: '接收事件', nodes: [adapters, ...(hasNewbi ? [reader] : [])] },
+    { label: '生成草稿', edge: '模拟事件入队', nodes: [worker, ...models] },
     { label: '审核动作', edge: '提案送审', nodes: [approval] },
-    { label: '执行模拟动作', edge: '审批通过并取得许可', nodes: [
+    { label: '执行动作', edge: '按运行模式及许可分流', nodes: [
       processNode('simulation-executor', '写入模拟回执', '执行已获许可的模拟动作，并把回执写入模拟账本。'),
+      ...(hasNewbi ? [executor] : []),
     ] },
-    ...(hasNewbi ? [{ label: 'Newbi 连接器', separate: true, nodes: [reader, executor] }] : []),
     { label: '外部连接', nodes: dependencies },
   ]
 })
@@ -104,7 +117,7 @@ const detail = computed(() => {
         <div v-if="layer.edge" class="health-edge">
           <span class="i-lucide-arrow-down" aria-hidden="true" /> {{ layer.edge }}
         </div>
-        <div class="health-layer" :class="{ 'health-layer--separate': layer.separate }">
+        <div class="health-layer">
           <h3>{{ layer.label }}</h3>
           <div class="health-nodes">
             <button v-for="node in layer.nodes" :key="node.id" type="button" class="health-node"
@@ -126,7 +139,12 @@ const detail = computed(() => {
       <p v-if="detail.diagnostic">错误码 <code>{{ detail.diagnostic }}</code></p>
       <NButton v-if="detail.id === 'connector-reader' || detail.id === 'newbi-read'" size="small" secondary
         @click="emit('accounts')">查看平台账号池</NButton>
-      <NButton v-if="detail.id === 'model-api'" size="small" secondary @click="emit('runs')">查看运行记录</NButton>
+      <NButton v-if="detail.id.startsWith('model-api-')" size="small" secondary
+        @click="detail.state === '待配置' ? emit('plugins') : emit('runs')">
+        {{ detail.state === '待配置' ? '前往插件中心' : '查看运行记录' }}
+      </NButton>
+      <NButton v-if="detail.id === 'postgres' || detail.id === 'redis'" size="small" secondary
+        :disabled="checking" @click="emit('check')">重试探测</NButton>
     </section>
   </div>
 </template>
@@ -138,8 +156,7 @@ const detail = computed(() => {
 .health-layer { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .625rem; align-items: center; }
 .health-layer:first-child, .health-layer:last-child { padding-block: .5rem; }
 .health-layer:first-child { border-bottom: 1px solid var(--console-line); }
-.health-layer:last-child, .health-layer--separate { border-top: 1px solid var(--console-line); }
-.health-layer--separate { padding-block: .5rem; }
+.health-layer:last-child { border-top: 1px solid var(--console-line); }
 .health-layer h3 { margin: 0; font-size: .875rem; font-weight: 650; }
 .health-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .5rem; min-width: 0; }
 .health-node { display: grid; justify-items: start; gap: .3rem; padding: .625rem .75rem; border: 1px solid var(--console-line);

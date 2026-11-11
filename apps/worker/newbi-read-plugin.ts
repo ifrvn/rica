@@ -1,18 +1,14 @@
 import { newbiEndpoint, newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
-import { createNewbiReadClient, isNewbiCredential } from '../../packages/runtime/newbi-client.js'
+import { createNewbiReadClient } from '../../packages/runtime/newbi-client.js'
 import { startPluginHost, type PluginDefinition } from '../../packages/runtime/plugin-registry.js'
 
 const credentialService = 'local-agent-credential'
 
-export function canVerifyNewbiBinding(env = process.env) {
-  return isNewbiCredential(env.NEWBI_AGENT_KEY ?? '') && newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).success
-}
-
-export async function verifyNewbiBinding(endpoint: string, agentId: string, env = process.env) {
+export async function verifyNewbiBinding(endpoint: string, agentId: string, env = process.env, beforeRequest?: () => Promise<void>) {
   // Only the deployment-configured endpoint may receive the deployment credential.
   if (newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).data !== endpoint) return false
   try {
-    const host = await startNewbiReader(env, AbortSignal.timeout(2000))
+    const host = await startNewbiReader(env, AbortSignal.timeout(2000), beforeRequest)
     try {
       return (await host.plugin.implementation.verify()).id === agentId
     } finally {
@@ -23,7 +19,7 @@ export async function verifyNewbiBinding(endpoint: string, agentId: string, env 
   }
 }
 
-export async function startNewbiReader(env = process.env, signal?: AbortSignal) {
+export async function startNewbiReader(env = process.env, signal?: AbortSignal, beforeRequest?: () => Promise<void>) {
   const credential = env.NEWBI_AGENT_KEY ?? ''
   const definition: PluginDefinition<ReturnType<typeof createNewbiReadClient>> = {
     ...newbiReaderIdentity,
@@ -33,7 +29,7 @@ export async function startNewbiReader(env = process.env, signal?: AbortSignal) 
       const stop = new AbortController()
       const requestSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
       return {
-        implementation: createNewbiReadClient(newbiEndpoint.parse(config), credential, requestSignal),
+        implementation: createNewbiReadClient(newbiEndpoint.parse(config), credential, requestSignal, beforeRequest),
         stop: () => stop.abort(),
       }
     },

@@ -31,6 +31,7 @@ const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
 const newbiRegistrationAvailable = ref(false)
+const newbiEndpoint = ref<string>()
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
@@ -215,6 +216,7 @@ async function load() {
   accounts.value = nextAccounts
   accountPool.value = pool
   newbiRegistrationAvailable.value = pluginStatus?.newbiRegistrationAvailable === true
+  newbiEndpoint.value = pluginStatus?.deployment?.newbi.endpoint ?? undefined
   emit('roles', current.roles)
   emit('updated', current)
 }
@@ -267,7 +269,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
     registrationId: null, platform: workspace.value?.simulationPlatforms[0] ?? '',
-    instance: kind === 'connector-account' ? '' : 'local', remoteId: '', reason: '' })
+    instance: kind === 'connector-account' ? newbiEndpoint.value ?? '' : 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
   void loadSchemas().catch(() => {})
 }
@@ -415,7 +417,9 @@ onMounted(() => { if (props.characterId) void run(load) })
             </template>
           </NFormItem>
           <NFormItem :label="editor === 'account' ? '实例标识' : '本机 API 地址'" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
-            <NInput :placeholder="editor === 'account' ? '例如：sandbox' : '例如：http://127.0.0.1:5000/agent-api/v1'" v-model:value="form.instance" :input-props="fieldInput('instance')" @blur="touched.add('instance')" :maxlength="editor === 'account' ? 120 : 160" />
+            <NInput :placeholder="editor === 'account' ? '例如：sandbox' : '例如：http://127.0.0.1:5000/agent-api/v1'" v-model:value="form.instance"
+              :readonly="editor === 'connector-account' && !!newbiEndpoint" :input-props="fieldInput('instance')"
+              @blur="touched.add('instance')" :maxlength="editor === 'account' ? 120 : 160" />
             <template v-if="fieldError('instance')" #feedback>
               <span id="workspace-instance-error">{{ fieldError('instance') }}</span>
             </template>

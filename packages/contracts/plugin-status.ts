@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi'
+import { deploymentPluginsView } from './deployment-plugins.js'
 
 export const pluginServices = ['api', 'worker', 'simulation-executor', 'connector-reader', 'connector-executor'] as const
 export type PluginService = typeof pluginServices[number]
@@ -27,6 +28,7 @@ export type PluginReport = z.infer<typeof pluginReport>
 
 export const pluginStatusView = z.object({
   newbiRegistrationAvailable: z.boolean(),
+  deployment: deploymentPluginsView.optional(),
   services: z.array(z.object({
     service: z.enum(pluginServices),
     catalog: z.array(pluginIdentity),

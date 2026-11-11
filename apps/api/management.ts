@@ -21,11 +21,14 @@ import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 import { modelSettingsInput, modelSettingsView } from '../../packages/contracts/model-settings.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
+import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
+import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
   modelSettings?: ReturnType<typeof createModelSettingsStore>
+  deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   verifyConnector?: management.VerifyConnector
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
@@ -66,7 +69,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus,
-  modelSettings, verifyConnector }: Options) {
+  modelSettings, deploymentPlugins, verifyConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -122,6 +125,34 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     return modelSettings
   }
 
+  const modelProvider = async () => (await modelSettings?.status())?.provider ?? 'simulated'
+  async function requireNewbi(endpoint: string) {
+    if (deploymentPlugins && (await deploymentPlugins.readNewbi())?.endpoint !== endpoint) {
+      throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Newbi is disabled or its endpoint does not match')
+    }
+  }
+
+  app.openapi(createRoute({
+    method: 'put', path: '/deployment-plugins', security,
+    request: { headers: schema.versionHeader, body: body(deploymentPluginChange) },
+    responses: { ...errors, 200: success(deploymentPluginsView) },
+  }), async (c) => {
+    const actor = c.get('actor')
+    if (actor.issuer !== localIssuer || !actor.canCreate) management.denyPermission()
+    if (!deploymentPlugins) throw new management.ManagementError(404, 'PLUGINS_UNAVAILABLE', 'Plugin settings are unavailable')
+    const change = c.req.valid('json')
+    try {
+      const saved = await deploymentPlugins.save(change, version(c.req.valid('header')), modelProvider)
+      console.info(JSON.stringify({ service: 'api', event: 'deployment_plugin_changed', actorId: actor.id,
+        requestId: c.get('requestId'), action: change.action, plugin: 'id' in change ? change.id : 'newbi', version: saved.version }))
+      return c.json(saved, 200)
+    } catch (cause) {
+      if (!(cause instanceof DeploymentPluginError)) throw cause
+      const status = cause.code === 'VERSION_CONFLICT' ? 412 : cause.code === 'KEY_REQUIRED' ? 422 : 409
+      throw new management.ManagementError(status, cause.code, 'Check plugin state, version and credentials')
+    }
+  })
+
   app.openapi(createRoute({
     method: 'get', path: '/model-settings', security,
     responses: { ...errors, 200: success(modelSettingsView) },
@@ -137,8 +168,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => {
     const actor = c.get('actor')
     const store = deploymentModelSettings(actor)
+    const input = c.req.valid('json')
+    if (deploymentPlugins && input.provider !== 'simulated'
+      && (await deploymentPlugins.status(await modelProvider())).plugins[input.provider] !== 'ENABLED') {
+      throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable the model plugin first')
+    }
     try {
-      const saved = await store.save(c.req.valid('json'), version(c.req.valid('header')))
+      const saved = await store.save(input, version(c.req.valid('header')))
       console.info(JSON.stringify({ service: 'api', event: 'model_settings_updated', actorId: actor.id,
         requestId: c.get('requestId'), version: saved.version, provider: saved.provider }))
       return c.json(saved, 200)
@@ -245,7 +281,11 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
-    return c.json(await pluginStatus(), 200)
+    const current = await pluginStatus()
+    if (!deploymentPlugins) return c.json(current, 200)
+    const deployment = await deploymentPlugins.status(await modelProvider())
+    return c.json({ ...current, deployment,
+      newbiRegistrationAvailable: deployment.plugins.newbi === 'ENABLED' && deployment.newbi.hasCredential }, 200)
   })
 
   app.openapi(createRoute({
@@ -278,7 +318,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'account.register', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.registerAccount(tx, scope, account))
+    }, async (tx) => {
+      if ('endpoint' in input) await requireNewbi(input.endpoint)
+      return management.registerAccount(tx, scope, account)
+    })
     return c.json({ ...result, requestId }, 201)
   })
 
@@ -923,7 +966,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => bindNewbiAccount(tx, scope, input))
+    }, async (tx) => {
+      await requireNewbi(input.endpoint)
+      return bindNewbiAccount(tx, scope, input)
+    })
     return c.json({ ...result, requestId }, 201)
   })
 

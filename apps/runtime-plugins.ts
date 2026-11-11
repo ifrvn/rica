@@ -58,7 +58,7 @@ export async function startConfiguredModel(
     get metadata() { return selected.metadata },
     async read() {
       const record = await settings.read()
-      if (record.version !== version) {
+      if (record.version !== version || record.configuration.provider !== selected.metadata.id) {
         const next = await startModelPlugin(record.configuration, service)
         await selected.stop()
         selected = next

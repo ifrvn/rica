@@ -3,16 +3,39 @@ import { z } from '@hono/zod-openapi'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
-import { newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
+import { newbiExecutorIdentity, newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
+import { newbiEndpoint, newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
 import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
 import { observationError, reportPluginResult } from '../plugin-observation.js'
 import type { PluginDiagnostic } from '../../packages/contracts/plugin-status.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
 import { startNewbiReader } from './newbi-read-plugin.js'
 import { startNewbiExecutor } from './newbi-execution-plugin.js'
+import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
+import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
+
+async function connectorSettings() {
+  const databaseUrl = process.env.DATABASE_URL
+    ?? process.env.RICA_NEWBI_POLL_DATABASE_URL ?? process.env.RICA_NEWBI_EXECUTION_DATABASE_URL
+  const directory = process.env.RICA_MODEL_SETTINGS_DIR ?? (databaseUrl && modelSettingsDirectory(databaseUrl))
+  if (!directory) throw new Error('Newbi requires the deployment settings directory')
+  const store = createDeploymentPluginStore(directory)
+  const current = await store.openNewbi()
+  if (!current) {
+    const sending = process.argv[2] === 'send'
+    const identity = sending ? newbiExecutorIdentity : newbiReaderIdentity
+    const status = await store.status('simulated')
+    const missingKey = !status.newbi.hasCredential && !process.env.NEWBI_AGENT_KEY
+      && newbiEndpoint.safeParse(process.env.RICA_NEWBI_LOCAL_API_URL).success
+    throw new PluginHostError({ kind: sending ? 'platform-reply-executor' : 'platform-reader', id: identity.id,
+      version: identity.version, code: missingKey ? 'MISSING_SERVICE' : 'INVALID_CONFIG' })
+  }
+  return current
+}
 
 async function openReader(signal?: AbortSignal) {
-  const host = await startNewbiReader(process.env, signal)
+  const { env, beforeRequest } = await connectorSettings()
+  const host = await startNewbiReader(env, signal, beforeRequest)
   const { id, version, contractVersion } = host.plugin
   console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reader',
     id, version, contractVersion, code: 'READY' }))
@@ -77,7 +100,8 @@ async function main() {
   if (!url || !URL.canParse(url) || !['postgres:', 'postgresql:'].includes(new URL(url).protocol)) {
     throw new Error('Invalid executor database URL')
   }
-  const host = await startNewbiExecutor()
+  const { env, beforeRequest } = await connectorSettings()
+  const host = await startNewbiExecutor(env, beforeRequest)
   const { id: pluginId, version, contractVersion, implementation } = host.plugin
   console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reply-executor',
     id: pluginId, version, contractVersion, code: 'READY' }))

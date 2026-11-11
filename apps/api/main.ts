@@ -6,9 +6,10 @@ import { loadManagementConfig } from './admin-auth.js'
 import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
-import { canVerifyNewbiBinding, verifyNewbiBinding } from '../worker/newbi-read-plugin.js'
+import { verifyNewbiBinding } from '../worker/newbi-read-plugin.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
+import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
 const config = loadConfig()
@@ -30,12 +31,18 @@ redis.on('error', () => {})
 void redis.connect().catch(() => {})
 
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
+const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
+const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
-  pluginStatus: () => readPluginStatus(redis, canVerifyNewbiBinding()),
-  modelSettings: createModelSettingsStore(modelSettingsDirectory(config.databaseUrl)),
-  verifyConnector: verifyNewbiBinding,
+  pluginStatus: () => readPluginStatus(redis),
+  modelSettings: createModelSettingsStore(settingsDirectory),
+  deploymentPlugins,
+  verifyConnector: async (endpoint, agentId) => {
+    const current = await deploymentPlugins.openNewbi()
+    return !!current && verifyNewbiBinding(endpoint, agentId, current.env, current.beforeRequest)
+  },
 }) : undefined
 
 const app = createApp({

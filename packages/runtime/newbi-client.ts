@@ -1,5 +1,6 @@
 import { request as directRequest } from 'node:http'
 import { z } from '@hono/zod-openapi'
+import { newbiCredential } from '../contracts/deployment-plugins.js'
 import { newbiEndpoint } from '../contracts/newbi-pilot.js'
 import type { PlatformEventReader } from '../contracts/platform-reader.js'
 import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
@@ -32,15 +33,12 @@ class NewbiEventCursorExpired extends Error {
   constructor(readonly resetCursor: string) { super('Newbi event history was lost') }
 }
 
-export function isNewbiCredential(value: string) {
-  return /^nbi_agent_[A-Za-z0-9_-]{43}$/u.test(value)
-}
-
-function createTransport(endpoint: string, credential: string, stop?: AbortSignal) {
+function createTransport(endpoint: string, credential: string, stop?: AbortSignal, beforeRequest?: () => Promise<void>) {
   const base = newbiEndpoint.parse(endpoint)
-  if (!isNewbiCredential(credential)) throw new Error('Invalid Newbi credential format')
+  if (!newbiCredential.safeParse(credential).success) throw new Error('Invalid Newbi credential format')
 
   async function request(path: string, expected: number, options?: { id: string; content: string }) {
+    await beforeRequest?.()
     stop?.throwIfAborted()
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (path !== '/status') headers.Authorization = 'Bearer ' + credential
@@ -158,15 +156,16 @@ function createReads(get: (path: string) => Promise<unknown>) {
   }
 }
 
-export function createNewbiReadClient(endpoint: string, credential: string, stop?: AbortSignal) {
-  const transport = createTransport(endpoint, credential, stop)
+export function createNewbiReadClient(endpoint: string, credential: string, stop?: AbortSignal, beforeRequest?: () => Promise<void>) {
+  const transport = createTransport(endpoint, credential, stop, beforeRequest)
   const { verify, readEvents, readThread } = createReads(transport.get)
   const reader = { endpoint: transport.endpoint, verify: () => verify(false), readEvents, readThread }
   return reader satisfies PlatformEventReader
 }
 
-export function createNewbiReplyExecutor(endpoint: string, credential: string, stop?: AbortSignal): PlatformReplyExecutor {
-  const transport = createTransport(endpoint, credential, stop)
+export function createNewbiReplyExecutor(endpoint: string, credential: string, stop?: AbortSignal,
+  beforeRequest?: () => Promise<void>): PlatformReplyExecutor {
+  const transport = createTransport(endpoint, credential, stop, beforeRequest)
   const { verify, readThread } = createReads(transport.get)
   return {
     endpoint: transport.endpoint,

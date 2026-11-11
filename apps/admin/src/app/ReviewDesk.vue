@@ -37,8 +37,6 @@ const username = ref('')
 const passkeyPassword = ref('')
 const showPasskeyForm = ref(false)
 const accountMenuOpen = ref(false)
-const modelSettingsOpen = ref(false)
-const ModelSettings = defineAsyncComponent(() => import('../features/plugins/ModelSettings.vue'))
 const pageHeading = ref<HTMLElement>()
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
@@ -327,7 +325,6 @@ function resetSession() {
   passkeyPassword.value = ''
   accountMenuOpen.value = false
   showPasskeyForm.value = false
-  modelSettingsOpen.value = false
   canCreate.value = false
   tab.value = 'character'
   roles.value = []
@@ -448,7 +445,6 @@ async function decide(decision: Decision) {
       </Teleport>
       <Teleport to="#masthead-account">
         <div class="workspace-account">
-          <NButton v-if="canCreate && !canReadRuns" size="small" secondary :disabled="busy" @click="modelSettingsOpen = true">模型设置</NButton>
           <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
             @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
             <template #trigger>
@@ -471,7 +467,6 @@ async function decide(decision: Decision) {
           </NPopover>
         </div>
       </Teleport>
-      <ModelSettings v-if="canCreate && modelSettingsOpen" @close="modelSettingsOpen = false" @expired="resetSession" />
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
       <nav v-if="characters.length" class="console-navigation" aria-label="控制台导航">
@@ -552,7 +547,7 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :can-configure-model="canCreate" @expired="resetSession"
-        @accounts="changeTab('accounts')" @configure-model="modelSettingsOpen = true" />
+        @accounts="changeTab('accounts')" />
       <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
         :readiness="readiness" :checked-at="checkedAt" :checking="checkingReadiness" @check="emit('checkReadiness')"

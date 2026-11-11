@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from '../contracts/model-settings.js'
+import { writeSettings } from './write-settings.js'
 
 const recordSchema = z.strictObject({
   version: z.number().int().positive(),
@@ -50,20 +51,7 @@ export function createModelSettingsStore(directory: string) {
       const apiKey = input.apiKey ?? (sameEndpoint ? previous.apiKey : undefined)
       if (input.provider !== 'simulated' && !apiKey) throw new ModelSettingsError('KEY_REQUIRED')
       const record = recordSchema.parse({ version: version + 1, configuration: { ...input, apiKey } })
-      await mkdir(directory, { recursive: true, mode: 0o700 })
-      const temporary = join(directory, randomUUID() + '.tmp')
-      try {
-        const file = await open(temporary, 'wx', 0o600)
-        try {
-          await file.writeFile(JSON.stringify(record))
-          await file.sync()
-        } finally {
-          await file.close()
-        }
-        await rename(temporary, path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
+      await writeSettings(directory, path, record)
       return view(record)
     })
     writes = write.catch(() => {})
