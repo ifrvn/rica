@@ -13,18 +13,18 @@ type Backlog = z.infer<typeof simulationBacklogView>
 type Run = z.infer<typeof simulationRunSummary>
 type Account = z.infer<typeof accountView>
 type Identity = z.infer<typeof identityView>
-const props = defineProps<{ character: z.infer<typeof characterView>; simulationPlatforms: z.infer<typeof characterWorkspaceView>['simulationPlatforms'];
-  canReview: boolean; canStart: boolean }>()
-const emit = defineEmits<{ expired: []; navigate: [page: ConsolePage]; run: [id: string]; reconcile: []; start: [] }>()
+type Character = z.infer<typeof characterWorkspaceView>
+const props = defineProps<{ character: z.infer<typeof characterView>; canReview: boolean; canStart: boolean }>()
+const emit = defineEmits<{ expired: []; navigate: [page: ConsolePage]; run: [id: string]; reconcile: []; start: []; updated: [character: Character] }>()
 const { busy, error, active, run } = useConsoleTask(() => emit('expired'))
 const backlog = ref<Backlog>()
 const recent = ref<Run[]>([])
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
+const workspace = ref<Character>()
 const identityNames = computed(() => new Map(identities.value.map(({ id, profile, slug }) => [id, profile?.displayName || slug])))
 const accountNames = computed(() => new Map(accounts.value.map(({ id, platform, instanceKey }) => [id, platform + ' · ' + instanceKey])))
-const canSimulate = computed(() => simulationAccounts({ status: props.character.status, simulationPlatforms: props.simulationPlatforms },
-  identities.value, accounts.value).length > 0)
+const canSimulate = computed(() => simulationAccounts(workspace.value, identities.value, accounts.value).length > 0)
 const labels: Record<string, string> = {
   QUEUED: '排队中', CONTEXT_READY: '上下文已就绪', DRAFTED: '已生成草稿', WAITING_APPROVAL: '待审批',
   READY: '已批准', EXECUTING: '执行中', RECONCILING: '待对账', SIMULATED: '已获得模拟回执',
@@ -51,8 +51,8 @@ const priority = computed(() => {
     label: '发起模拟', action: () => emit('start'),
   }
   return {
-    title: props.character.status === 'ACTIVE' ? '还没有可用的模拟账号' : '当前角色未启用',
-    detail: props.character.status === 'ACTIVE' ? '为已启用的身份关联并启用模拟账号。' : '启用角色后可以发起模拟。',
+    title: workspace.value?.status === 'ACTIVE' ? '还没有可用的模拟账号' : '当前角色未启用',
+    detail: workspace.value?.status === 'ACTIVE' ? '为已启用的身份关联并启用模拟账号。' : '启用角色后可以发起模拟。',
     label: '查看角色与身份', action: () => emit('navigate', 'character'),
   }
 })
@@ -65,17 +65,20 @@ const tools = [
 function refresh() {
   return run(async () => {
     const path = characterPath(props.character.id)
-    const [summary, page, roleIdentities, roleAccounts] = await Promise.all([
+    const [summary, page, roleIdentities, roleAccounts, current] = await Promise.all([
       request<Backlog>(path + '/monitoring'),
       request<Page<Run>>(path + '/runs?limit=3'),
       readAll<Identity>(path + '/identities', active),
       readAll<Account>(path + '/accounts', active),
+      request<Character>(path),
     ])
     if (!active()) return
     backlog.value = summary
     recent.value = page.items
     identities.value = roleIdentities
     accounts.value = roleAccounts
+    workspace.value = current
+    emit('updated', current)
   })
 }
 

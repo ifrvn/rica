@@ -43,11 +43,13 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `PUT /c/plans/{planId}/state` | ADMIN 按版本暂停或恢复计划。暂停取消尚未执行的模拟运行，恢复前核对参与账号绑定。 |
 | `PUT /v1/deployment-plugins` | 具有创建角色权限的本地部署操作者提交 `INSTALL`、`ENABLE`、`DISABLE` 或 `CONFIGURE_NEWBI`。使用 `If-Match` 指定 `deployment.version`。返回更新后的版本与脱敏设置。 |
 | `GET /v1/model-settings`、`PUT /v1/model-settings` | 具有创建角色权限的本地部署操作者查看和保存已启用的模型配置。密钥可写，读取仅返回 `hasKey`。 |
+| `POST /v1/model-settings/check` | 部署操作者用已保存的 `version` 发送固定测试消息，查看脱敏回复或诊断。 |
 | `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |
 | `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。Newbi 账号提交已启用插件的 `endpoint` 与 `agentId`。 |
 | `POST /c/account-pool/associations` | ADMIN 提交 `registrationId` 和 `identityId`。两者须属于当前角色，关联后初始为暂停。身份已有未撤销账号时返回 `409 IDENTITY_ALREADY_BOUND`。撤销原账号后可关联另一个账号，历史记录保留原绑定。 |
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
+| `POST /c/newbi/accounts/{accountId}/check` | ADMIN 核验当前角色已绑定账号的 Newbi 读取连接。返回核验结果和时间，账号状态保持原值。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。可省略 `reason`。 |
 | `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 或 AUDITOR 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
 | `GET /c/memory-grants` | ADMIN 读取共享授权和接收绑定，可按 `memoryId` 筛选。 |
@@ -150,6 +152,8 @@ Worker 启动后定时清理模拟数据。入站正文从接收时刻起保留 
 
 ## 回放与积压
 
-运行回放返回固定的身份、账号与配置版本、时间、快照，以及存在时的计划和承诺引用。运行轨迹包括入站类型与接收时间、草稿创建时间与模型版本、提案与审批时间、执行许可发放时间和模拟回执状态。证据按快照保存时的用途和受众复核当前权限与修订。失效时只返回排名与不可用标记。回放响应采用元数据，证据正文、入站正文和草稿正文保留在各自的受控存储。观点引用字段 `beliefRefs` 只含 ID 和版本。
+运行回放返回固定的身份、账号与配置版本、时间、快照，以及存在时的计划和承诺引用。运行轨迹包括入站类型与接收时间、草稿创建时间与模型版本、提案与审批时间、执行许可发放时间和模拟回执状态。证据按快照保存时的用途和受众复核当前权限与修订。失效时只返回排名与不可用标记。观点引用字段 `beliefRefs` 只含 ID 和版本。
+
+当前角色的 ADMIN 可在 `transcript` 查看从控制台发起、回执已确认且绑定仍有效的公开模拟消息、草稿及审批理由。正文沿用 30 天保留期，草稿每次读取时复核摘要与证据授权。其他运行及只读审计仅返回轨迹元数据。
 
 监控返回 `observedAt` 和四类积压的数量及最早时间。出箱统计关联到当前角色的未消费事件，另给出其中已入队的数量。审批统计尚未过期的待审记录。对账统计未知尝试，最早时间取许可截止时间。计划统计已启用且到期的计划。没有积压时最早时间为空。两类查询均使用角色级授权，且保持运行状态。

@@ -39,6 +39,7 @@ export const newbiReplyView = z.object({
   retryNotBefore: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })
 export const newbiReviewView = newbiReplyView.extend({ connectorAvailable: z.boolean() })
+export const newbiAccountCheckView = z.object({ verified: z.boolean(), checkedAt: z.iso.datetime() })
 
 export const newbiReadError = z.enum(['AGENT_MISMATCH', 'CREDENTIAL_INVALID', 'ACCESS_DENIED', 'RATE_LIMITED',
   'SERVICE_UNAVAILABLE', 'COMMUNITY_CLOSED', 'READ_FAILED'])

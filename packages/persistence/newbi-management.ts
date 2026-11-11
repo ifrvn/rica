@@ -4,7 +4,7 @@ import { newbiExecutorIdentity, newbiExecutorKey } from '../contracts/newbi-exec
 import { coreProfile } from '../contracts/management.js'
 import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
-import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from './management.js'
+import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope, type VerifyConnector } from './management.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -157,4 +157,17 @@ export async function readNewbiConnections(db: PrismaClient, characterId: string
   }
   return { activeAccounts: active.length, readFailures, lastReadAt: lastReadAt?.toISOString() ?? null,
     hasReceipt: !!confirmed, hasUnknown: !!unknown }
+}
+
+export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: VerifyConnector) {
+  const account = await db.$transaction(async (tx) => {
+    await authorize(tx, scope, ['ADMIN'])
+    return tx.platformAccount.findFirst({
+      where: { id: accountId, characterId: scope.characterId, platform: 'newbi', status: { not: 'REVOKED' } },
+      select: { instanceKey: true, remoteAccountId: true },
+    })
+  }, { isolationLevel: 'RepeatableRead' })
+  if (!account) missing()
+  const verified = await verify(account.instanceKey, account.remoteAccountId)
+  return { verified, checkedAt: new Date().toISOString() }
 }

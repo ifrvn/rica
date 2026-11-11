@@ -41,9 +41,12 @@ export async function listSimulationRuns(db: PrismaClient, scope: Scope, { limit
 
 export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const roles = await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    const canReadTranscript = roles.some(({ role }) => role === 'ADMIN')
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
-      SELECT public.rica_replay_run_with_time(${scope.characterId}::uuid, ${runId}::uuid) AS view
+      SELECT public.rica_replay_run_with_time(${scope.characterId}::uuid, ${runId}::uuid) ||
+        jsonb_build_object('transcript', CASE WHEN ${canReadTranscript}
+          THEN public.rica_console_simulation_transcript(${scope.characterId}::uuid, ${runId}::uuid) END) AS view
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
     return runReplayView.parse(row.view)

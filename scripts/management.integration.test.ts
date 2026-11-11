@@ -2727,13 +2727,21 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const resume = (key: string, actor = 'admin-a') => request('POST', characterPath(a) + '/controls', { actor, key,
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
     connectorEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
+    const checkPath = prefix + '/accounts/' + accountId + '/check'
+    assert.equal((await request('POST', checkPath, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('POST', characterPath(b) + '/newbi/accounts/' + accountId + '/check', { actor: 'admin-b' })).status, 404)
     assert.equal((await resume('newbi-reviewer-resume', 'reviewer')).status, 403)
     currentAgent = randomUUID()
+    assert.equal((await request('POST', checkPath)).body.verified, false)
     const unverified = await resume('newbi-test-resume')
     assert.equal(unverified.status, 409, JSON.stringify(unverified.body))
     assert.equal(unverified.body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
     assert.equal((await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })).status, 'PAUSED')
     currentAgent = agentId
+    const checked = await request('POST', checkPath)
+    assert.equal(checked.status, 200, JSON.stringify(checked.body))
+    assert.equal(checked.body.verified, true)
+    assert.equal((await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })).status, 'PAUSED')
     const resumed = await resume('newbi-test-resume')
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
     connectorEnv = {}
@@ -3302,6 +3310,9 @@ test('console simulation runs use an isolated conversation, one approval and one
   assert.equal((await request('POST', character + '/memberships', {
     key: randomUUID(), data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Console fixture' },
   })).status, 200)
+  assert.equal((await request('POST', character + '/memberships', {
+    key: randomUUID(), data: { subject: 'auditor', role: 'AUDITOR', action: 'GRANT', reason: 'Console fixture' },
+  })).status, 200)
   const path = character + '/runs'
   const input = { accountId: accountA, message: 'Console simulation fixture for an isolated public discussion' }
   const denied = await request('POST', path, { actor: 'reviewer', key: randomUUID(), data: input })
@@ -3350,6 +3361,7 @@ test('console simulation runs use an isolated conversation, one approval and one
   assert.deepEqual(Object.keys(initial.body.inbound).sort(), ['kind', 'receivedAt'])
   assert.equal(initial.body.draft, null)
   assert.equal(initial.body.proposal, null)
+  assert.equal(initial.body.transcript, null)
   assert.equal(JSON.stringify(initial.body).includes(input.message), false)
 
   const runtime = createDatabase(scheduleRuntimeUrl())
@@ -3393,6 +3405,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.ok(approved.body.proposal.reviewedAt)
     assert.equal(approved.body.proposal.permittedAt, null)
     assert.equal(approved.body.proposal.receiptAt, null)
+    assert.equal(approved.body.transcript, null)
     assert.equal(JSON.stringify(approved.body).includes(preview.body.content), false)
 
     await executeSimulation(executor, action.id, simulationPlatforms.resolveAdapter)
@@ -3401,6 +3414,18 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(replay.body.state, 'SIMULATED')
     assert.ok(replay.body.proposal.permittedAt)
     assert.ok(replay.body.proposal.receiptAt)
+    assert.deepEqual(replay.body.transcript, {
+      message: input.message, draft: preview.body.content, reviewReason: 'Console fixture checked',
+    })
+    const auditReplay = await request('GET', replayPath, { actor: 'auditor' })
+    assert.equal(auditReplay.status, 200)
+    assert.equal(auditReplay.body.transcript, null)
+    assert.equal((await request('GET', replayPath, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', replayPath, { actor: 'admin-b' })).status, 404)
+    await owner.inboundEvent.update({ where: { id: run.inboundEventId }, data: {
+      receivedAt: new Date(await databaseNow() - 31 * 86_400_000),
+    } })
+    assert.equal((await request('GET', replayPath)).body.transcript, null)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 1)
     const second = await request('POST', path, { key: randomUUID(), data })
     assert.equal(second.status, 201)

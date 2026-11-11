@@ -4,6 +4,8 @@ import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountRegistrationView, accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
+import type { newbiAccountCheckView } from '../../../../../packages/contracts/newbi-pilot.js'
+import { formatTime } from '../../shared/console-data.js'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
@@ -32,6 +34,9 @@ const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
 const newbiRegistrationAvailable = ref(false)
 const newbiEndpoint = ref<string>()
+type AccountCheck = z.infer<typeof newbiAccountCheckView>
+const newbiChecks = reactive(new Map<string, AccountCheck & { version: number }>())
+const checkingAccount = ref<string>()
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
@@ -250,6 +255,26 @@ async function run(task: () => Promise<void>) {
   } finally {
     busy.value = false
   }
+}
+
+function checkNewbiConnection(account: Account) {
+  void run(async () => {
+    checkingAccount.value = account.id
+    newbiChecks.delete(account.id)
+    try {
+      const result = await request<AccountCheck>(base.value + '/newbi/accounts/' + account.id + '/check', { method: 'POST' })
+      if (active) newbiChecks.set(account.id, { ...result, version: account.version })
+    } finally {
+      checkingAccount.value = undefined
+    }
+  })
+}
+
+function accountCheckLabel(account: Account) {
+  const check = newbiChecks.get(account.id)
+  if (!check || check.version !== account.version) return ''
+  const result = check.verified ? '读取连接核验通过' : '读取连接核验失败，请核对 Agent ID、地址和读取凭据。'
+  return result + ' · ' + formatTime(check.checkedAt)
 }
 
 function open(kind: Editor, identity?: Identity, resource?: Control) {
@@ -564,8 +589,13 @@ onMounted(() => { if (props.characterId) void run(load) })
                 identities.find(item => item.id === account.identityId)?.profile?.displayName
                   || identities.find(item => item.id === account.identityId)?.slug || '身份不可用'
               }}</span>
+              <p v-if="accountCheckLabel(account)" class="workspace-muted account-check" role="status">{{ accountCheckLabel(account) }}</p>
             </div>
             <div class="workspace-actions">
+              <NButton v-if="admin && account.platform === 'newbi' && account.status !== 'REVOKED' &&
+                newbiRegistrationAvailable && account.instanceKey === newbiEndpoint"
+                size="small" secondary :disabled="busy" :loading="checkingAccount === account.id"
+                @click="checkNewbiConnection(account)">核验连接</NButton>
               <NButton v-if="inspectConnector && account.platform === 'newbi'" size="small"
                 @click="emit('account', account.id)">查看读取状态</NButton>
               <NButton v-if="admin && ['mock-a', 'mock-b', 'newbi'].includes(account.platform) && ['ACTIVE', 'PAUSED'].includes(account.status)"
@@ -590,6 +620,7 @@ onMounted(() => { if (props.characterId) void run(load) })
 
 <style scoped>
 .character-workspace { display: grid; gap: 1.25rem; min-width: 0; }
+.account-check { margin: 0; }
 .workspace-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }
 .character-columns { display: grid; grid-template-columns: minmax(12rem, 2fr) minmax(0, 3fr); align-items: start; }
 .character-list, .identity-list { min-width: 0; }

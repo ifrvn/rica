@@ -11,8 +11,8 @@ import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, read
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import { connectorAccountRegistration, newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from '../../packages/persistence/newbi-management.js'
+import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
+import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -1145,6 +1145,19 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       key: c.req.valid('header')['idempotency-key'],
     }, (tx) => closeNewbiReply(tx, scope, replyId, input))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/accounts/{accountId}/check`, security,
+    request: { params: z.object({ characterId: schema.resourceId, accountId: schema.resourceId }) },
+    responses: { ...errors, 200: success(newbiAccountCheckView) },
+  }), async (c) => {
+    const { characterId, accountId } = c.req.valid('param')
+    const result = await checkNewbiAccount(db, { characterId, actor: c.get('actor') }, accountId, async (endpoint, agentId) => {
+      await requireNewbi(endpoint)
+      return !!verifyConnector && verifyConnector(endpoint, agentId)
+    })
+    return c.json(result, 200)
   })
 
   app.openapi(createRoute({

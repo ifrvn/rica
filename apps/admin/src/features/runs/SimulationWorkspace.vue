@@ -34,7 +34,7 @@ function accountName(id: string, platform?: string) {
 }
 const timeline = computed(() => {
   if (!selected.value) return []
-  const { state, inbound, draft, proposal } = selected.value
+  const { state, inbound, draft, proposal, transcript } = selected.value
   const inboundKind = { POST: '发帖', REPLY: '回复', MENTION: '提及' }
   const model = [draft?.modelId, draft?.modelVersion].filter(Boolean).join(' · ')
   const review = proposal?.reviewDecision === 'APPROVE' ? '已批准'
@@ -44,9 +44,9 @@ const timeline = computed(() => {
     : proposal?.attemptStatus === 'UNKNOWN' || state === 'RECONCILING' ? '待核对'
       : proposal?.attemptStatus === 'NOT_SENT' ? '已确认未写入' : '无回执'
   return [
-    { label: '入站', status: inboundKind[inbound.kind], at: inbound.receivedAt },
-    { label: '草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt, detail: model },
-    { label: '审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt },
+    { label: '入站', status: inboundKind[inbound.kind], at: inbound.receivedAt, quote: transcript?.message },
+    { label: '草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt, detail: model, quote: transcript?.draft },
+    { label: '审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt, quote: transcript?.reviewReason },
     { label: '获准执行', status: proposal?.permittedAt ? '已发放' : '未发放', at: proposal?.permittedAt },
     { label: '模拟回执', status: result, at: proposal?.receiptAt },
   ]
@@ -354,6 +354,7 @@ onMounted(() => { void act(load) })
                 <span v-if="stage.detail">{{ stage.detail }}</span>
                 <time v-if="stage.at" :datetime="stage.at">{{ new Date(stage.at).toLocaleString() }}</time>
               </div>
+              <blockquote v-if="stage.quote" class="console-payload run-quote">{{ stage.quote }}</blockquote>
             </li>
           </ol>
           <SimulationReconciliation v-if="canStart && selected.state === 'RECONCILING' && selected.proposal"
@@ -380,6 +381,7 @@ onMounted(() => { void act(load) })
 .console-record-meta { justify-items: start; }
 .run-timeline { list-style: none; margin: 0; padding: 0; }
 .run-timeline li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); align-items: baseline; gap: .5rem; padding: .75rem 0; border-top: 1px solid var(--console-line); }
+.run-quote { grid-column: 2; margin: 0; }
 dl { display: grid; gap: .5rem; margin: 0; }
 dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }

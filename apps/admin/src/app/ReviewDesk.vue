@@ -74,7 +74,6 @@ const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
 const roles = ref<string[]>([])
-const simulationPlatforms = ref<z.infer<typeof characterWorkspaceView>['simulationPlatforms']>([])
 const newbiInstalled = ref(false)
 const canReadRuns = computed(() => roles.value.some((role) => role === 'ADMIN' || role === 'AUDITOR'))
 const canReviewSimulation = computed(() => roles.value.includes('REVIEWER'))
@@ -211,7 +210,6 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       const workspace = await request<z.infer<typeof characterWorkspaceView>>('/v1/characters/' + target)
       if (current !== revision) return
       roles.value = workspace.roles
-      simulationPlatforms.value = workspace.simulationPlatforms
       newbiInstalled.value = workspace.newbiInstalled
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
       else characterUpdated(workspace)
@@ -550,8 +548,8 @@ async function decide(decision: Decision) {
       </nav>
       <NSpin v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canReadRuns" :key="characterId" :character="currentCharacter"
-        :simulation-platforms="simulationPlatforms"
         :can-review="canReviewSimulation" :can-start="roles.includes('ADMIN')" @expired="resetSession" @navigate="changeTab"
+        @updated="characterUpdated"
         @run="openRun" @start="navigate({ characterId, page: 'runs', startSimulation: true })"
         @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
       <CharacterWorkspace v-else-if="tab === 'character' || tab === 'accounts'" :key="characterId + '/' + tab" :character-id="characterId"

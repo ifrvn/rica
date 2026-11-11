@@ -35,6 +35,7 @@ export const runReplayView = z.object({
   occurredAt: timestamp, createdAt: timestamp, contextTimezone: z.string().nullable(),
   inbound: z.object({ kind: z.enum(['POST', 'REPLY', 'MENTION']), receivedAt: timestamp }),
   draft: z.object({ createdAt: timestamp, modelId: z.string().nullable(), modelVersion: z.string().nullable() }).nullable(),
+  transcript: z.object({ message: z.string(), draft: z.string().nullable(), reviewReason: z.string() }).nullable(),
   goalRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })),
   referencesExpiredAt: timestamp.nullable(),
   beliefRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })).max(8),
