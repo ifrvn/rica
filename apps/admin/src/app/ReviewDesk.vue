@@ -72,6 +72,7 @@ watch(detailId, (id, previous) => {
 const runQuery = ref('')
 const startSimulation = ref(false)
 const connectorAccountId = ref<string>()
+const healthNode = ref<ConsoleLocation['healthNode']>()
 const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
@@ -226,10 +227,11 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
     startSimulation.value = tab.value === 'runs' && roles.value.includes('ADMIN') && !!location.startSimulation
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
+    healthNode.value = tab.value === 'health' ? location.healthNode : undefined
     if (denied) error.value = '当前账号无权打开此链接。'
     if (replace || tab.value !== location.page || (location.startSimulation && !startSimulation.value)) {
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value,
-        runQuery: runQuery.value, startSimulation: startSimulation.value }))
+        runQuery: runQuery.value, startSimulation: startSimulation.value, healthNode: healthNode.value }))
     }
     if (tab.value === 'review' && canReview.value) {
       if (!queueLoaded) await fetchQueue(current)
@@ -562,6 +564,7 @@ async function decide(decision: Decision) {
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReview"
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @review="navigate({ characterId, page: 'review', detail: $event })"
+          @executor-health="navigate({ characterId, page: 'health', healthNode: 'simulation-executor' })"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @form="navigate({ characterId, page: 'runs', runQuery, startSimulation: $event })"
           @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event, startSimulation })" />
@@ -578,8 +581,9 @@ async function decide(decision: Decision) {
         :character-id="characterId" :can-configure-model="canCreate" @expired="resetSession"
         @newbi="newbiInstalled = $event"
         @accounts="changeTab('accounts')" />
-      <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId"
+      <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId + '/' + (healthNode ?? '')"
         :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
+        :initial-node="healthNode"
         :readiness="readiness" :checked-at="checkedAt" :checking="checkingReadiness" @check="emit('checkReadiness')"
         @accounts="changeTab('accounts')" @runs="changeTab('runs')" />
       <MembershipWorkspace v-else-if="tab === 'members' && characterId && canReadRuns" :key="characterId"

@@ -1,5 +1,5 @@
 export type ConsolePage = 'home' | 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'health' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics'
-export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string }
+export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string; healthNode?: 'simulation-executor' }
 
 export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'through'] as const
 
@@ -25,13 +25,15 @@ export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
   return { characterId: characterId.toLowerCase(), page: page as ConsolePage, detail: detail?.toLowerCase(),
     ...(runQuery ? { runQuery } : {}),
     ...(page === 'runs' && !detail && query.get('start') === '1' ? { startSimulation: true } : {}),
-    ...(page === 'connector' && connectorAccountId && id.test(connectorAccountId) ? { connectorAccountId } : {}) }
+    ...(page === 'connector' && connectorAccountId && id.test(connectorAccountId) ? { connectorAccountId } : {}),
+    ...(page === 'health' && query.get('node') === 'simulation-executor' ? { healthNode: 'simulation-executor' as const } : {}) }
 }
 
-export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId }: ConsoleLocation) {
+export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId, healthNode }: ConsoleLocation) {
   const filters = new URLSearchParams(runQuery)
   if (page === 'runs' && !detail && startSimulation) filters.set('start', '1')
   return '#/characters/' + characterId + '/' + page + (detail ? '/' + detail : '')
     + (page === 'runs' && filters.size ? '?' + filters.toString() : '')
     + (page === 'connector' && connectorAccountId ? '?accountId=' + encodeURIComponent(connectorAccountId) : '')
+    + (page === 'health' && healthNode ? '?node=' + healthNode : '')
 }

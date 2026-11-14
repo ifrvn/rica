@@ -9,10 +9,10 @@ import { modelCheckLabels, pluginNames, usePluginStatus } from '../plugins/plugi
 
 type Tone = 'default' | 'success' | 'warning' | 'error'
 type Node = { id: string; label: string; description: string; state: string; tone: Tone; at?: string; diagnostic?: string }
-const props = defineProps<{ characterId: string; readiness?: Readiness; checkedAt?: string; checking: boolean }>()
+const props = defineProps<{ characterId: string; readiness?: Readiness; checkedAt?: string; checking: boolean; initialNode?: string }>()
 const emit = defineEmits<{ expired: []; plugins: []; accounts: []; runs: []; check: [] }>()
 const { status, busy, error, refresh: refreshPlugins } = usePluginStatus(props.characterId, () => emit('expired'))
-const selected = ref('api')
+const selected = ref(props.initialNode ?? 'api')
 let timer: ReturnType<typeof setInterval>
 
 function refresh() {
@@ -110,7 +110,7 @@ const layers = computed(() => {
     { label: '生成草稿', edge: '模拟事件入队', nodes: [worker, ...models] },
     { label: '审核动作', edge: '提案送审', nodes: [approval] },
     { label: '执行动作', edge: '按运行模式及许可分流', nodes: [
-      processNode('simulation-executor', '写入模拟回执', '执行已获许可的模拟动作，并把回执写入模拟账本。'),
+      processNode('simulation-executor', '写入模拟回执', '模拟执行器为已批准的提案申请许可，并把结果写入模拟账本。'),
       ...(hasNewbi ? [executor] : []),
     ] },
     { label: '外部连接', nodes: dependencies },
@@ -154,6 +154,12 @@ const detail = computed(() => {
       <p>{{ detail.description }}</p>
       <p v-if="detail.at">最近检查或报告 <time :datetime="detail.at">{{ formatTime(detail.at) }}</time></p>
       <p v-if="detail.diagnostic">错误码 <code>{{ detail.diagnostic }}</code></p>
+      <template v-if="detail.id === 'simulation-executor' && status">
+        <p v-if="detail.diagnostic === 'INVALID_CONFIG'">请核对执行器的数据库连接配置，并确认它与管理 API 使用同一个数据库。</p>
+        <p v-else-if="detail.state === '最近任务失败'">请查看模拟执行器日志，核对数据库连接和执行权限。</p>
+        <p v-else-if="detail.state === '无近期报告'">请确认模拟执行器已启动并连接到本部署的 Redis，再刷新状态。</p>
+        <p v-else-if="detail.state === '已就绪'">仍在等待的提案可能受角色当地 22:00 至次日 08:00 的静默时段、账号额度或其他尚未结束的执行影响。</p>
+      </template>
       <NButton v-if="detail.id === 'connector-reader' || detail.id === 'newbi-read'" size="small" secondary
         @click="emit('accounts')">查看平台账号池</NButton>
       <NButton v-if="detail.id.startsWith('model-api-')" size="small" secondary

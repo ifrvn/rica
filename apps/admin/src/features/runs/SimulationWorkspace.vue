@@ -20,7 +20,7 @@ type Page<T> = { items: T[]; nextCursor: string | null }
 
 const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string; showForm: boolean }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string]; audit: [id: string]; commitment: [id: string];
-  filter: [query: string]; form: [open: boolean] }>()
+  filter: [query: string]; form: [open: boolean]; executorHealth: [] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -47,7 +47,7 @@ const timeline = computed(() => {
     { label: '入站', status: inboundKind[inbound.kind], at: inbound.receivedAt, quote: transcript?.message },
     { label: '草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt, detail: model, quote: transcript?.draft },
     { label: '审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt, quote: transcript?.reviewReason },
-    { label: '获准执行', status: proposal?.permittedAt ? '已发放' : '未发放', at: proposal?.permittedAt },
+    { label: '执行许可', status: proposal?.permittedAt ? '已发放' : state === 'READY' ? '等待发放' : '未发放', at: proposal?.permittedAt },
     { label: '模拟回执', status: result, at: proposal?.receiptAt },
   ]
 })
@@ -359,6 +359,13 @@ onMounted(() => { void act(load) })
           </div>
           <NAlert v-if="selected.state === 'WAITING_APPROVAL' && !canReview" type="info" title="此提案需要审批权限">
             请联系当前角色的管理员或审批员处理这次模拟提案。
+          </NAlert>
+          <NAlert v-if="selected.state === 'READY'" type="info" title="已批准，等待模拟执行器">
+            <p>执行器会自动领取许可并写入模拟回执。长时间等待时，先查看执行器状态。</p>
+            <NButton size="small" secondary @click="emit('executorHealth')">查看模拟执行器</NButton>
+          </NAlert>
+          <NAlert v-else-if="selected.state === 'EXECUTING'" type="info" title="已领取许可，正在等待模拟回执">
+            回执写入后，这条运行会显示「模拟完成」。
           </NAlert>
           <dl>
             <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
