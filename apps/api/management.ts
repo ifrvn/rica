@@ -26,7 +26,7 @@ import { checkModel } from './model-check.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
 import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
-import { newbiPollView, newbiSendInput, newbiSendView } from '../../packages/contracts/newbi-pilot.js'
+import { newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from '../../packages/contracts/newbi-pilot.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
@@ -37,6 +37,8 @@ type Options = {
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
   pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
   sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
+  readConnectorThread?: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>) =>
+    Promise<z.infer<typeof newbiThreadView> | undefined>
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -76,7 +78,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  modelSettings, deploymentPlugins, identifyConnector, pollConnector, sendConnector }: Options) {
+  modelSettings, deploymentPlugins, identifyConnector, pollConnector, sendConnector, readConnectorThread }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -1165,6 +1167,19 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const { characterId, replyId } = c.req.valid('param')
     const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
     return c.json({ ...reply, connectorAvailable: await newbiAvailable(reply.endpoint) }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${newbi}/replies/{replyId}/thread`, security,
+    request: { params: newbiReplyParams },
+    responses: { ...errors, 200: success(newbiThreadView), 503: failure },
+  }), async (c) => {
+    const { characterId, replyId } = c.req.valid('param')
+    const { accountId, agentId, endpoint, postId } = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
+    await requireNewbi(endpoint)
+    const thread = await readConnectorThread?.({ accountId, agentId, endpoint, postId }).catch(() => undefined)
+    if (!thread) return c.json(error(c.get('requestId'), 'CONNECTOR_THREAD_UNAVAILABLE', 'Newbi discussion is unavailable'), 503)
+    return c.json(newbiThreadView.parse(thread), 200)
   })
 
   app.openapi(createRoute({

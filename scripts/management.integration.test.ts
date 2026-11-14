@@ -10,7 +10,7 @@ import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
 import { identifyNewbiAccount, startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
-import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from '../apps/worker/newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from '../apps/worker/newbi-database.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -43,11 +43,12 @@ const owner = createDatabase(config.databaseUrl)
 const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
-const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
+const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'thread-auditor'])
 let connectorEndpoint: string | undefined
 const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>,
   pollConnector?: Parameters<typeof createManagementApp>[0]['pollConnector'],
-  sendConnector?: Parameters<typeof createManagementApp>[0]['sendConnector']) =>
+  sendConnector?: Parameters<typeof createManagementApp>[0]['sendConnector'],
+  readConnectorThread?: Parameters<typeof createManagementApp>[0]['readConnectorThread']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
@@ -56,6 +57,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
     deploymentPlugins,
     pollConnector,
     sendConnector,
+    readConnectorThread,
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
       return subject && subjects.has(subject) ? {
@@ -2691,6 +2693,8 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   const agentId = randomUUID()
   let currentAgent = agentId
   const postId = randomUUID()
+  const discussionComment = { id: randomUUID(), author: { id: 123, username: 'fixture-user' },
+    content: 'Public context', isHidden: false, replyToCommentId: null }
   const secret = 'nbi_agent_' + 'x'.repeat(43)
   const sent = new Map<string, { id: string; content: string }>()
   let writes = 0
@@ -2718,7 +2722,8 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     if (path === '/agent-api/v1/posts/' + postId + '/comments') {
       if (req.method === 'GET') {
         reads++
-        return reply({ items: [], nextCursor: null, hasMore: false })
+        return reply({ items: [discussionComment, { ...discussionComment, id: randomUUID(), isHidden: true, content: 'Hidden context' }],
+          nextCursor: null, hasMore: false })
       }
       writes++
       if (writeFailure === 'LIMIT') return res.writeHead(429, { 'Retry-After': '30' }).end()
@@ -2752,12 +2757,13 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   const executor = createDatabase(executorUrl.toString())
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executorDb = scopedNewbiDatabase(runtime, 'executor')
+  const readerDb = scopedNewbiDatabase(runtime, 'reader')
   const sendApp = testApp(settings, undefined, async (id, retry) => {
     const host = await openSavedNewbiExecutor(executorDb, settings, id)
     if (!host) return { status: 'UNAVAILABLE' }
     try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
     finally { await host.stop() }
-  })
+  }, (target) => readSavedNewbiThread(readerDb, settings, target))
   t.after(() => runtime.$disconnect())
   try {
     const identityId = await reflectionIdentity()
@@ -2830,6 +2836,24 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     await assert.rejects(executor.newbiReply.count(), /permission denied/i)
 
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
+    const auditAccess = await request('POST', characterPath(a) + '/memberships', {
+      key: 'newbi-thread-auditor', data: { subject: 'thread-auditor', role: 'AUDITOR', action: 'GRANT', reason: 'Thread visibility fixture' },
+    })
+    assert.equal(auditAccess.status, 200)
+    const threadPath = approved.path + '/thread'
+    const readsBeforeThread = reads
+    assert.equal((await request('GET', threadPath, { target: sendApp, actor: 'thread-auditor' })).status, 403)
+    assert.equal((await request('GET', characterPath(b) + '/newbi/replies/' + approved.id + '/thread', { target: sendApp, actor: 'admin-b' })).status, 404)
+    assert.equal(reads, readsBeforeThread)
+    currentAgent = randomUUID()
+    assert.equal((await request('GET', threadPath, { target: sendApp, actor: 'reviewer' })).status, 503)
+    assert.equal(reads, readsBeforeThread)
+    currentAgent = agentId
+    const context = await request('GET', threadPath + '?postId=' + randomUUID(), { target: sendApp, actor: 'reviewer' })
+    assert.equal(context.status, 200, JSON.stringify(context.body))
+    assert.deepEqual(context.body, { post: { title: 'Fixture discussion', content: 'Original context', isLocked: false },
+      comments: [{ id: discussionComment.id, author: { username: 'fixture-user' }, content: discussionComment.content }] })
+    assert.equal(writes, 0)
     const sendFromConsole = (path: string, actor = 'admin-a', retry = false) =>
       request('POST', path + '/send', { actor, target: sendApp, data: { retry } })
     assert.equal((await sendFromConsole(approved.path)).status, 409)

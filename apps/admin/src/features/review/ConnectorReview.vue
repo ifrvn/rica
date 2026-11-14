@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { newbiReviewView, newbiReplySummary, newbiSendView } from '../../../../../packages/contracts/newbi-pilot.js'
+import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../../../../../packages/contracts/newbi-pilot.js'
 import { focusRecord, formatTime } from '../../shared/console-data.js'
 import { request, RequestError } from '../../shared/request.js'
 
@@ -22,6 +22,9 @@ const filter = ref('WAITING')
 const rows = ref<Summary[]>([])
 const cursor = ref<string | null>(null)
 const reply = ref<Reply>()
+const thread = ref<z.infer<typeof newbiThreadView>>()
+const loadingThread = ref(false)
+const threadError = ref('')
 const reason = ref('')
 const detailHeading = ref<HTMLElement>()
 const listHeading = ref<HTMLElement>()
@@ -97,6 +100,9 @@ function changeFilter(value: string) {
 async function detail(id?: string) {
   const current = ++selection
   reply.value = undefined
+  thread.value = undefined
+  threadError.value = ''
+  loadingThread.value = false
   detailError.value = ''
   loadingDetail.value = !!id
   if (!id) return
@@ -110,6 +116,29 @@ async function detail(id?: string) {
   } catch (cause) {
     if (active && current === selection) detailError.value = message(cause)
   } finally { if (current === selection) loadingDetail.value = false }
+}
+
+async function loadThread() {
+  const item = reply.value
+  if (!item?.connectorAvailable || loadingThread.value) return
+  const current = selection
+  loadingThread.value = true
+  threadError.value = ''
+  try {
+    const result = await request<z.infer<typeof newbiThreadView>>(base + '/' + encodeURIComponent(item.id) + '/thread')
+    if (active && current === selection) thread.value = result
+  } catch (cause) {
+    if (!active || current !== selection) return
+    if (cause instanceof RequestError && cause.status === 401) emit('expired')
+    else {
+      thread.value = undefined
+      threadError.value = cause instanceof RequestError && cause.status === 409
+        ? 'Newbi 配置已变更，请刷新提案详情后重试。'
+        : '无法读取帖子上下文。请重试，或到 Newbi 核对目标帖子。'
+    }
+  } finally {
+    if (active && current === selection) loadingThread.value = false
+  }
 }
 
 watch([() => props.detailId, () => props.accountId], ([id], previous) => {
@@ -261,6 +290,34 @@ onMounted(() => { void list() })
           <div v-if="reply.remoteCommentId"><dt>评论回执</dt><dd>{{ reply.remoteCommentId }}</dd></div>
           <div v-if="reply.closureReason"><dt>结案理由</dt><dd>{{ reply.closureReason }}</dd></div>
         </dl>
+        <section class="thread-preview" aria-labelledby="newbi-thread-heading">
+          <div class="console-section-heading">
+            <h4 id="newbi-thread-heading">帖子上下文</h4>
+            <NButton v-if="reply.connectorAvailable" size="small" secondary :loading="loadingThread"
+              :disabled="loadingThread || submitting" @click="loadThread">
+              {{ thread ? '刷新上下文' : '读取帖子和评论' }}
+            </NButton>
+          </div>
+          <NAlert v-if="threadError" type="warning" role="alert">{{ threadError }}</NAlert>
+          <p v-if="!reply.connectorAvailable">请在插件中心核对 Newbi 的启用状态和 Agent API 地址。</p>
+          <template v-if="thread">
+            <div class="console-actions">
+              <strong>{{ thread.post.title }}</strong>
+              <NTag v-if="thread.post.isLocked" size="small" type="warning">帖子已锁定</NTag>
+            </div>
+            <p class="console-payload thread-content">{{ thread.post.content }}</p>
+            <details v-if="thread.comments.length">
+              <summary>查看 {{ thread.comments.length }} 条可见评论</summary>
+              <ul class="thread-comments">
+                <li v-for="comment in thread.comments" :key="comment.id">
+                  <strong>{{ comment.author.username }}</strong>
+                  <p class="console-payload">{{ comment.content }}</p>
+                </li>
+              </ul>
+            </details>
+            <p v-else>暂无可见评论。</p>
+          </template>
+        </section>
         <template v-if="reply.content">
           <h4>拟发送内容</h4>
           <p class="console-payload">{{ reply.content }}</p>
@@ -323,6 +380,12 @@ onMounted(() => { void list() })
 .connector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .send-actions { margin-block: 1rem; }
 .send-preview { max-height: min(55dvh, 32rem); overflow: auto; }
+.thread-preview { margin-block: 1rem; overflow-wrap: anywhere; }
+.thread-preview h4 { margin: 0; }
+.thread-content { margin-block-start: .5rem; }
+.thread-preview summary { cursor: pointer; }
+.thread-comments { list-style: none; padding: 0; }
+.thread-comments .console-payload { margin-block-start: .375rem; }
 .filter { width: min(10rem, 100%); }
 dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .5rem; }

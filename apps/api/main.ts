@@ -12,7 +12,7 @@ import { createModelSettingsStore, modelSettingsDirectory } from '../../packages
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
-import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from '../worker/newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from '../worker/newbi-database.js'
 import { pollNewbiEvents } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
 import { newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
@@ -47,6 +47,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   modelSettings: createModelSettingsStore(settingsDirectory),
   deploymentPlugins,
+  readConnectorThread: (target) => readSavedNewbiThread(newbiReaderDb, deploymentPlugins, target),
   sendConnector: async (id, retry) => {
     const host = await openSavedNewbiExecutor(newbiExecutorDb, deploymentPlugins, id, AbortSignal.timeout(7000))
     if (!host) return { status: 'UNAVAILABLE' }

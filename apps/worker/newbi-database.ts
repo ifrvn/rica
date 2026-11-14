@@ -23,6 +23,19 @@ export async function openSavedNewbiReader(db: RawQueryClient, store: ReturnType
   if (current) return startNewbiReader(current.connection, signal, current.beforeRequest)
 }
 
+export async function readSavedNewbiThread(db: RawQueryClient, store: ReturnType<typeof createDeploymentPluginStore>,
+  target: { accountId: string; agentId: string; endpoint: string; postId: string }) {
+  const host = await openSavedNewbiReader(db, store, target.accountId, AbortSignal.timeout(7000))
+  if (!host) return
+  try {
+    const reader = host.plugin.implementation
+    if (reader.endpoint !== target.endpoint || (await reader.verify()).id !== target.agentId) return
+    return await reader.readThread(target.postId)
+  } finally {
+    await host.stop()
+  }
+}
+
 export async function openSavedNewbiExecutor(db: RawQueryClient, store: ReturnType<typeof createDeploymentPluginStore>,
   replyId: string, signal?: AbortSignal) {
   const [saved] = await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_send_connection(${replyId}::uuid)`
