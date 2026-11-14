@@ -396,7 +396,7 @@ async function proposeReview(accountId = accountA, contactId?: string, model = s
 
 function actionPath(id: string) { return characterPath(a) + '/actions/' + id }
 
-test('only a reviewer can see the draft and concurrent approval has one effect', async () => {
+test('role administrators and reviewers can see the draft and concurrent approval has one effect', async () => {
   await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
   await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
   await owner.platformAccount.update({ where: { id: accountA }, data: { status: 'ACTIVE' } })
@@ -406,13 +406,19 @@ test('only a reviewer can see the draft and concurrent approval has one effect',
   assert.equal(role.status, 200)
   const { action, proposalText } = await proposeReview()
   const path = actionPath(action.id)
-  assert.equal((await request('GET', path)).status, 403)
+  const adminQueue = await request('GET', characterPath(a) + '/actions')
+  assert.equal(adminQueue.status, 200, JSON.stringify(adminQueue.body))
+  assert.ok(adminQueue.body.items.some((item: { id: string }) => item.id === action.id))
+  assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
   const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
   assert.equal(queue.body.items[0].content, null)
   const preview = await request('GET', path, { actor: 'reviewer' })
   assert.equal(preview.status, 200, JSON.stringify(preview.body))
   assert.equal(preview.body.target.accountId, accountA)
   assert.equal(preview.body.content, '供您参考：' + proposalText + '\n\nAI 披露：AI role, version two')
+  const adminPreview = await request('GET', path)
+  assert.equal(adminPreview.status, 200, JSON.stringify(adminPreview.body))
+  assert.equal(adminPreview.body.content, preview.body.content)
   const ifMatch = preview.headers.get('etag') ?? ''
   const data = { reviewDigest: action.reviewDigest, decision: 'APPROVE', reason: 'Check target and content' }
   const submit = (key: string, body = data, version = ifMatch) =>
@@ -1061,7 +1067,7 @@ for (const kind of ['PLAN', 'COMMITMENT'] as const) {
     }
     const { action } = await proposeReview(accountId, undefined, model)
     const path = actionPath(action.id)
-    assert.equal((await request('GET', path)).status, 403)
+    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
     const preview = await request('GET', path, { actor: 'reviewer' })
     assert.equal(preview.body.followUp.title, followUp.title)
     assert.equal(preview.body.followUp.task, followUp.task)
@@ -2610,6 +2616,9 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   assert.equal((await request('POST', base + '/memberships', {
     key: 'newbi-lifecycle-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Review fixture' },
   })).status, 200)
+  assert.equal((await request('POST', base + '/memberships', {
+    key: 'newbi-lifecycle-admin', data: { subject: 'admin-b', role: 'ADMIN', action: 'GRANT', reason: 'Admin review fixture' },
+  })).status, 200)
   const { id: accountId } = await owner.platformAccount.create({ data: {
     characterId, identityId: await reflectionIdentity({}, characterId), status: 'ACTIVE',
     platform: 'newbi', instanceKey: endpoint, remoteAccountId: randomUUID(),
@@ -2643,8 +2652,8 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   const preview = () => request('GET', path, { target, actor: 'reviewer' })
   const initial = await preview()
   assert.equal(initial.body.connectorAvailable, true)
-  const decide = (decision: 'APPROVE' | 'REJECT') => request('POST', path + '/decision', {
-    target, actor: 'reviewer', key: 'newbi-lifecycle-' + decision,
+  const decide = (decision: 'APPROVE' | 'REJECT', actor = 'reviewer') => request('POST', path + '/decision', {
+    target, actor, key: 'newbi-lifecycle-' + decision,
     data: { decision, reviewDigest: initial.body.reviewDigest, reason: 'Verified lifecycle fixture' },
   })
   await change({ action: 'CONFIGURE_NEWBI', endpoint: 'http://127.0.0.1:5001/agent-api/v1', credential }, 3)
@@ -2657,7 +2666,7 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   assert.equal(disabled.body.status, 'WAITING')
   assert.equal(disabled.body.connectorAvailable, false)
   assert.equal((await decide('APPROVE')).body.error.code, 'PLUGIN_STATE_CONFLICT')
-  assert.equal((await decide('REJECT')).body.status, 'REJECTED')
+  assert.equal((await decide('REJECT', 'admin-b')).body.status, 'REJECTED')
 })
 
 test('Newbi pilot binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async () => {
@@ -3387,11 +3396,16 @@ test('console simulation runs use an isolated conversation, one approval and one
     const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: id } })
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
     const actionPath = character + '/actions/' + action.id
-    const preview = await request('GET', actionPath, { actor: 'reviewer' })
+    const preview = await request('GET', actionPath)
     assert.equal(preview.status, 200)
     assert.ok(preview.body.content.startsWith(generatedReply + '\n\nAI 披露：'))
+    const denyAuditor = await request('POST', actionPath + '/decisions', {
+      actor: 'auditor', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
+      data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Audit fixture cannot approve' },
+    })
+    assert.equal(denyAuditor.status, 403)
     const decision = await request('POST', actionPath + '/decisions', {
-      actor: 'reviewer', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
+      key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
       data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Console fixture checked' },
     })
     assert.equal(decision.status, 200, JSON.stringify(decision.body))

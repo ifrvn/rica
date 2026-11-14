@@ -83,6 +83,7 @@ onMounted(() => { void run(load) })
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
     <NForm v-if="action" class="console-panel" aria-labelledby="member-editor-heading" @submit.prevent="save">
       <h4 id="member-editor-heading" ref="editorHeading" tabindex="-1">{{ action === 'GRANT' ? '授予角色权限' : '撤销角色权限' }}</h4>
+      <p v-if="action === 'GRANT' && role === 'ADMIN'">管理员同时拥有此角色的审批、审计和操作权限。</p>
       <div class="console-form-grid">
         <NFormItem label="本地用户名" :label-props="{ for: 'member-subject' }">
           <NInput placeholder="例如：alice" v-model:value="subject" :disabled="busy || action === 'REVOKE'" maxlength="64" :input-props="{ id: 'member-subject' }" />

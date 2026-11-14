@@ -348,12 +348,18 @@ onMounted(() => { void act(load) })
           <div class="run-actions">
             <NTag size="small" :bordered="false">{{ stateName(selected.state) }}</NTag>
             <span v-if="trackingRun" class="run-muted">自动更新中</span>
-            <NButton v-if="canReview && selected.proposal" size="small" secondary
-              @click="emit('review', selected.proposal.id)">查看模拟提案</NButton>
+            <NButton v-if="canReview && selected.proposal" size="small"
+              :type="selected.state === 'WAITING_APPROVAL' ? 'primary' : 'default'"
+              :secondary="selected.state !== 'WAITING_APPROVAL'" @click="emit('review', selected.proposal.id)">
+              {{ selected.state === 'WAITING_APPROVAL' ? '前往审批' : '查看模拟提案' }}
+            </NButton>
             <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
             <NButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
               size="small" quaternary @click="emit('commitment', selected.id)">登记模拟承诺</NButton>
           </div>
+          <NAlert v-if="selected.state === 'WAITING_APPROVAL' && !canReview" type="info" title="此提案需要审批权限">
+            请联系当前角色的管理员或审批员处理这次模拟提案。
+          </NAlert>
           <dl>
             <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
             <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>

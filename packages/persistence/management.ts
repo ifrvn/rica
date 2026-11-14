@@ -3,6 +3,7 @@ import type { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitme
 import type { z } from '@hono/zod-openapi'
 import { accountRegistrationView, contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
+import { hasManagementRole } from '../contracts/management-permissions.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
 import type { ManagementRole, Prisma, PrismaClient } from './generated/client.js'
@@ -42,7 +43,7 @@ export async function authorize(tx: Tx, scope: Scope, roles: readonly Management
     select: { role: true },
   })
   if (members.length === 0) unavailable()
-  if (roles.length && !members.some(({ role }) => roles.includes(role))) denyPermission()
+  if (roles.length && !hasManagementRole(members.map(({ role }) => role), roles)) denyPermission()
   return members
 }
 

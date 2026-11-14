@@ -10,6 +10,7 @@ import { focusRecord } from '../shared/console-data.js'
 import { request, RequestError } from '../shared/request.js'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView, characterWorkspaceView } from '../../../../packages/contracts/management.js'
+import { hasManagementRole } from '../../../../packages/contracts/management-permissions.js'
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../../../packages/contracts/action-review.js'
 import type { Readiness } from '../../../../packages/contracts/health.js'
@@ -28,6 +29,7 @@ const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/P
 const SystemHealth = defineAsyncComponent(() => import('../features/health/SystemHealth.vue'))
 
 type Character = z.infer<typeof characterView>
+type CharacterAccess = z.infer<typeof characterWorkspaceView>['roles']
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Decision = 'APPROVE' | 'REJECT'
 
@@ -73,12 +75,10 @@ const connectorAccountId = ref<string>()
 const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
-const roles = ref<string[]>([])
+const roles = ref<CharacterAccess>([])
 const newbiInstalled = ref(false)
-const canReadRuns = computed(() => roles.value.some((role) => role === 'ADMIN' || role === 'AUDITOR'))
-const canReviewSimulation = computed(() => roles.value.includes('REVIEWER'))
-const canReadConnector = computed(() => canReviewSimulation.value || roles.value.includes('ADMIN'))
-const canReview = computed(() => canReviewSimulation.value || (canReadConnector.value && newbiInstalled.value))
+const canReadRuns = computed(() => hasManagementRole(roles.value, ['AUDITOR']))
+const canReview = computed(() => hasManagementRole(roles.value, ['REVIEWER']))
 const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const currentCharacter = computed(() => characters.value.find(({ id }) => id === characterId.value))
@@ -216,13 +216,12 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     }
     characterId.value = target
     const page = landing && !roles.value.includes('ADMIN')
-      ? canReviewSimulation.value ? 'review' : canReadRuns.value ? 'audit' : 'character'
+      ? canReview.value ? 'review' : canReadRuns.value ? 'audit' : 'character'
       : location.page
     const denied = (['home', 'runs', 'outbox', 'audit', 'plugins', 'health', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
       || (page === 'planning' && !roles.value.includes('ADMIN'))
-      || (page === 'connector' && !canReadConnector.value)
-      || (page === 'review' && (!canReview.value || (!!location.detail && !canReviewSimulation.value)))
-    tab.value = denied ? 'character' : page === 'review' && !canReviewSimulation.value ? 'connector' : page
+      || ((page === 'connector' || page === 'review') && !canReview.value)
+    tab.value = denied ? 'character' : page
     detailId.value = denied ? undefined : location.detail
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
     startSimulation.value = tab.value === 'runs' && roles.value.includes('ADMIN') && !!location.startSimulation
@@ -232,7 +231,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value,
         runQuery: runQuery.value, startSimulation: startSimulation.value }))
     }
-    if (tab.value === 'review' && canReviewSimulation.value) {
+    if (tab.value === 'review' && canReview.value) {
       if (!queueLoaded) await fetchQueue(current)
       if (current === revision && location.detail) await fetchAction(location.detail, current)
     }
@@ -486,7 +485,7 @@ async function decide(decision: Decision) {
         <button v-if="canReadRuns" type="button" :aria-current="mainPage === 'home' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('home')"><span class="i-lucide-layout-dashboard" aria-hidden="true" />工作台</button>
         <button v-if="canReview" type="button" :aria-current="mainPage === 'review' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab(canReviewSimulation ? 'review' : 'connector')"><span class="i-lucide-clipboard-check" aria-hidden="true" />审批</button>
+          @click="changeTab('review')"><span class="i-lucide-clipboard-check" aria-hidden="true" />审批</button>
         <button v-if="canReadRuns" type="button" :aria-current="mainPage === 'runs' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('runs')"><span class="i-lucide-activity" aria-hidden="true" />运行记录</button>
         <span class="console-nav-label">角色管理</span>
@@ -539,7 +538,7 @@ async function decide(decision: Decision) {
         </NButton>
       </nav>
 
-      <nav v-if="canReviewSimulation && (tab === 'connector' || (tab === 'review' && newbiInstalled))" class="account-actions" aria-label="审批类型">
+      <nav v-if="canReview && (tab === 'connector' || (tab === 'review' && newbiInstalled))" class="account-actions" aria-label="审批类型">
         <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('review')">模拟提案</NButton>
         <NButton v-if="newbiInstalled || tab === 'connector'" size="small" :type="tab === 'connector' ? 'primary' : 'default'"
@@ -548,7 +547,7 @@ async function decide(decision: Decision) {
       </nav>
       <NSpin v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canReadRuns" :key="characterId" :character="currentCharacter"
-        :can-review="canReviewSimulation" :can-start="roles.includes('ADMIN')" @expired="resetSession" @navigate="changeTab"
+        :can-review="canReview" :can-start="roles.includes('ADMIN')" @expired="resetSession" @navigate="changeTab"
         @updated="characterUpdated"
         @run="openRun" @start="navigate({ characterId, page: 'runs', startSimulation: true })"
         @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
@@ -560,7 +559,7 @@ async function decide(decision: Decision) {
         @account="navigate({ characterId, page: 'accounts', detail: $event })"
         @proposals="navigate({ characterId, page: 'connector', connectorAccountId: $event })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
-        <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReviewSimulation"
+        <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReview"
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @review="navigate({ characterId, page: 'review', detail: $event })"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
@@ -596,11 +595,11 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="closePlanning" @run="openRun" />
       <MetricsWorkspace v-else-if="tab === 'metrics' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" />
-      <ConnectorReview v-else-if="tab === 'connector' && characterId && canReadConnector" :key="characterId"
-        :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReviewSimulation" :can-close="roles.includes('ADMIN')"
+      <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
+        :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReview" :can-close="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
         @all="changeTab('connector')" />
-      <div v-else-if="tab === 'review' && characterId && canReviewSimulation" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
+      <div v-else-if="tab === 'review' && characterId && canReview" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
         <section class="console-split-list" aria-labelledby="review-list-heading">
           <div class="console-section-heading">
             <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">待审批的模拟提案</h3>

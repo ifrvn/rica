@@ -30,6 +30,8 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 ## 已开放的入口
 
+角色权限按虚拟角色分别授予。ADMIN 自动拥有该角色的 REVIEWER、AUDITOR 和 OPERATOR 权限，成员列表只显示实际授予的权限。人工提案的提交人不能审批自己的提案。部署级权限仍由本地账号配置授予。
+
 以下 `/c` 表示 `/v1/characters/{characterId}`。
 
 | 入口 | 权限与操作 |
