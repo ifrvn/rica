@@ -36,17 +36,7 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
 
 ## 2. 启用管理 API 并创建本地账号
 
-1. 应用迁移后，为管理 API 创建一个专用 PostgreSQL 登录，授予 `rica_admin_api`，并把连接串填入 `RICA_MANAGEMENT_DATABASE_URL`。本地 Compose 可用下面的命令进入 psql。`\password` 会交互式设置密码。把连接串中的用户名和密码替换为实际值，对密码中的 URL 特殊字符进行百分号编码。
-
-   ```powershell
-   docker compose exec postgres psql -U character -d character
-   ```
-
-   ```sql
-   CREATE ROLE rica_management_login LOGIN;
-   \password rica_management_login
-   GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
-   ```
+1. 应用迁移并设置 `RICA_ADMIN_ORIGIN=http://localhost:5173`。管理 API 复用 `DATABASE_URL`。
 
 2. 使用 PowerShell 7 初始化本地管理员。密码通过标准输入传递，长度为 12–128 个字符。命令使用迁移数据库登录，`--creator` 允许该账号创建角色。
 
@@ -106,7 +96,7 @@ $ricaCharacter.id
 | 查看服务状态和审批提案 | 登录控制台，选择角色，核对身份、账号、目标与正文，再填写理由并批准或拒绝。 |
 | 配置角色、身份、账号、成员与记忆共享 | `ADMIN` 使用「角色与身份」「角色成员」和「记忆与授权」。 |
 | 查看运行轨迹、审计、额度与队列 | `ADMIN` 或 `AUDITOR` 使用「运行」和「审计」。模拟指标和隔离出箱从「运行」打开。 |
-| 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm run dev:simulation` 执行并生成本地回执。先配置专用数据库登录和 `RICA_SIMULATION_EXECUTION_DATABASE_URL`。 |
+| 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm run dev:simulation` 执行并生成本地回执。执行器复用 `DATABASE_URL`。 |
 
 控制台可配置角色、身份和平台账号，管理角色成员、记忆授权和模拟计划，并查询运行、审计与评测。本地登录账号通过 CLI 创建。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟调度](docs/simulation-scheduling.md) · [模拟执行与对账](docs/simulation-execution.md) · [控制台功能规划](docs/console-roadmap.md)
 

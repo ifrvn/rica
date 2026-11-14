@@ -1,21 +1,24 @@
 import 'dotenv/config'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createDatabase } from '../../packages/persistence/client.js'
+import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
 import { runSimulationBatch } from '../../packages/persistence/simulation-execution.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
 const redisUrl = process.env.REDIS_URL
-const url = process.env.RICA_SIMULATION_EXECUTION_DATABASE_URL
-if (!url || !URL.canParse(url) || !['postgres:', 'postgresql:'].includes(new URL(url).protocol)) {
+let url: string
+try {
+  url = runtimeDatabaseUrl()
+} catch (error) {
   await reportPluginResult(redisUrl, 'simulation-executor', 'INVALID_CONFIG')
-  throw new Error('Invalid or missing RICA_SIMULATION_EXECUTION_DATABASE_URL')
+  throw error
 }
 const platforms = await startSimulationPlatforms(process.env, 'simulation-executor').catch(async (error: unknown) => {
   await reportPluginResult(redisUrl, 'simulation-executor', observationError(error, 'START_FAILED'))
   throw error
 })
-const db = createDatabase(url)
+const db = createDatabase(url, 'rica_simulation_executor')
 const stop = new AbortController()
 process.once('SIGINT', () => stop.abort())
 process.once('SIGTERM', () => stop.abort())

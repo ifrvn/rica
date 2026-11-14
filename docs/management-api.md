@@ -1,16 +1,12 @@
 # 管理 API 启用与使用
 
-管理 API 提供角色配置、人工审批和受保护的 OpenAPI。启用管理数据库连接后，可使用本地用户名密码或 Passkey 登录。
+管理 API 提供角色配置、人工审批和受保护的 OpenAPI。设置 `RICA_ADMIN_ORIGIN` 后，可使用本地用户名密码或 Passkey 登录。
 
 ## 启用
 
-1. 使用迁移账号执行 `pnpm run db:migrate`。为管理 API 创建专用 PostgreSQL 登录并授予 `rica_admin_api`，将连接串设置为 `RICA_MANAGEMENT_DATABASE_URL`。
-2. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址完全相同。默认值为 `http://localhost:5173`。部署使用固定的 HTTPS 地址，Passkey 的 RP ID 使用该地址的主机名。
+1. 使用迁移账号执行 `pnpm run db:migrate`。管理 API 复用 `DATABASE_URL`，连接时切换到 `rica_admin_api`。
+2. 将 `RICA_ADMIN_ORIGIN` 设置为与浏览器地址完全相同的源。本地使用 `http://localhost:5173`。部署使用固定的 HTTPS 地址，Passkey 的 RP ID 使用该地址的主机名。
 3. 使用迁移数据库登录初始化本地账号。`--creator` 授予创建新角色的权限。新角色创建者自动成为该角色的 ADMIN。启动 API 后访问控制台登录。
-
-```sql
-GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
-```
 
 ## 本地账号与会话
 

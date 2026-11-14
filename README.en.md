@@ -36,17 +36,7 @@ Open the [local console](http://localhost:5173/) and check [API readiness](http:
 
 ## 2. Enable the management API and create a local account
 
-1. After applying migrations, create a dedicated PostgreSQL login, grant it `rica_admin_api`, and set its connection URL in `RICA_MANAGEMENT_DATABASE_URL`. Use the following command to open psql in the local Compose database. `\password` prompts for a password. Use the resulting username and password in the connection URL, with percent encoding for special characters in the password.
-
-   ```powershell
-   docker compose exec postgres psql -U character -d character
-   ```
-
-   ```sql
-   CREATE ROLE rica_management_login LOGIN;
-   \password rica_management_login
-   GRANT rica_admin_api TO rica_management_login WITH INHERIT TRUE, SET TRUE;
-   ```
+1. Apply migrations and set `RICA_ADMIN_ORIGIN=http://localhost:5173`. The management API uses `DATABASE_URL`.
 
 2. Use PowerShell 7 to create the initial local administrator. The command reads a 12–128 character password from stdin and uses the migration database login. `--creator` allows this account to create characters.
 
@@ -96,7 +86,7 @@ To set an identity's writing prompt, open that identity in **Character and ident
 | Check service status and review proposals | Sign in to the console and select a character, check the identity, account, destination, and content, then enter a reason and approve or reject. |
 | Manage characters, identities, accounts, members, and memory sharing | An `ADMIN` can configure resources, pause or resume bindings, and grant or revoke member permissions in the console. |
 | Inspect runs, audit records, budgets, and queue health | Open Runs or Audit as an `ADMIN` or `AUDITOR`. Runs links to simulation metrics and quarantined outbox events. |
-| Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process records local receipts for `READY` proposals. Configure its dedicated database login and `RICA_SIMULATION_EXECUTION_DATABASE_URL` first. |
+| Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process uses `DATABASE_URL` to record local receipts for `READY` proposals. |
 
 The console supports character, identity, and account setup, role membership, memory grants, simulation schedules, run history, audit records, and evaluation metrics. Create local sign-in accounts with the CLI. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation scheduling](docs/simulation-scheduling.md) · [Simulation execution and reconciliation](docs/simulation-execution.md) (Chinese)
 

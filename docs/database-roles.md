@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | 迁移 | 在迁移任务设置 `MIGRATION_DATABASE_URL`。本地可使用 `DATABASE_URL` 作为回退。 | 拥有应用表和迁移函数。执行角色迁移的账号需要创建角色及管理本项目角色成员关系的权限。 |
 | API／Worker | `DATABASE_URL` 使用继承 `rica_runtime` 的应用登录。 | 读写运行与出箱所需字段。记忆读取时在事务内切换到 `rica_memory_reader`，由 RLS 判定可见内容。 |
-| 管理 API | 将专用登录配置到 `RICA_MANAGEMENT_DATABASE_URL`，仅授予 `rica_admin_api`。 | 管理配置、成员权限、幂等及追加审计。管理登录可读取本地账号的密码哈希与 Passkey 公钥，并登记 Passkey。只读记忆元数据，无法读取记忆、入站或草稿正文。 |
-| 模拟执行 | 将专用登录配置到 `RICA_SIMULATION_EXECUTION_DATABASE_URL`，仅授予 `rica_simulation_executor`。 | 只处理模拟许可、预算预留和本地回执。复核函数只返回授权结果。 |
+| 管理 API | 复用 `DATABASE_URL`，连接时切换到 `rica_admin_api`。 | 管理配置、成员权限、幂等及追加审计。可读取本地账号的密码哈希与 Passkey 公钥，并登记 Passkey。只读记忆元数据。 |
+| 模拟执行 | 复用 `DATABASE_URL`，连接时切换到 `rica_simulation_executor`。 | 只处理模拟许可、预算预留和本地回执。复核函数只返回授权结果。 |
 | Newbi 读取及发送 | 复用 `DATABASE_URL`。迁移允许 `rica_runtime` 切换到 `rica_newbi_poller` 和 `rica_newbi_executor`。 | 宿主按操作在事务内切换权限，事务结束即复原。运行账号默认不继承这两个角色的权限。 |
 | 记忆管理 | 管理服务单独使用继承 `rica_memory_admin` 的登录。 | 管理记忆、授权和来源，能推进角色授权版本。业务层负责验证管理员身份和操作范围。 |
 
@@ -19,6 +19,8 @@ GRANT rica_memory_admin TO rica_memory_operator WITH INHERIT TRUE, SET TRUE;
 ```
 
 应用登录应为普通非所有者角色，保持 `NOBYPASSRLS`。迁移凭据只注入迁移任务。应用通过已校验的 Run 生成事务作用域，连接池复用时不带入上次读取的身份或用途。作用域参数由受信任的服务端设置，数据库服务凭据不得暴露给终端用户或插件。
+
+共用登录可以切换到管理、模拟执行和 Newbi 角色。运行连接默认没有这些角色的权限。这个边界用于约束正常查询，持有共用登录凭据的进程可以主动切换角色。
 
 RLS 覆盖记忆、来源登记、来源关联、记忆授权、上下文快照和模拟草稿。读角色仅能读取策略所需的来源和授权字段。会话、账号和运行入口仍由应用的绑定检查管理。管理端认证和管理连接参见[管理 API 启用说明](management-api.md)。
 

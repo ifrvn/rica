@@ -1,18 +1,13 @@
 # 模拟执行进程
 
-批准后的模拟提案进入 `READY`。独立执行进程从 PostgreSQL 读取这些提案，认知 Worker 继续使用原有 BullMQ 队列。执行进程使用自己的数据库凭据，只调用本地模拟回执函数。
+批准后的模拟提案进入 `READY`。独立执行进程从 PostgreSQL 读取这些提案，认知 Worker 继续使用原有 BullMQ 队列。执行进程复用 `DATABASE_URL`，连接时切换到 `rica_simulation_executor`。
 
 ## 启动
 
 1. 使用迁移账号执行 `pnpm run db:migrate`。
-2. 创建独立数据库登录并授予 `rica_simulation_executor`。将该登录的连接配置到 `RICA_SIMULATION_EXECUTION_DATABASE_URL`。
-3. 在项目目录运行 `pnpm run dev:simulation`。
+2. 在项目目录运行 `pnpm run dev:simulation`。
 
-```sql
-GRANT rica_simulation_executor TO rica_simulation_login WITH INHERIT TRUE, SET TRUE;
-```
-
-示例中的登录名称按部署替换。此进程只处理 SIMULATION，数据库角色不能读取草稿正文、记忆或入站载荷，也没有平台客户端及写凭据。
+此进程只处理 SIMULATION。执行角色不能读取草稿正文、记忆或入站载荷。执行进程没有平台客户端及写凭据。
 
 ## 许可与恢复
 

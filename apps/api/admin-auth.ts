@@ -14,18 +14,15 @@ export type Principal = Readonly<{ issuer: string; subject: string; id: string; 
 export type Authenticate = (request: Request) => Promise<Principal | null>
 
 export function loadManagementConfig(env = process.env) {
-  if (!env.RICA_MANAGEMENT_DATABASE_URL && !env.RICA_ADMIN_ORIGIN) return null
-  const db = env.RICA_MANAGEMENT_DATABASE_URL
-  const value = env.RICA_ADMIN_ORIGIN ?? 'http://localhost:5173'
-  if (!db || !URL.canParse(db) || !['postgres:', 'postgresql:'].includes(new URL(db).protocol) || !URL.canParse(value)) {
-    throw new Error('Invalid Rica management configuration')
-  }
+  const value = env.RICA_ADMIN_ORIGIN
+  if (!value) return null
+  if (!URL.canParse(value)) throw new Error('Invalid Rica admin origin')
   const url = new URL(value)
   if (value !== url.origin || (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === 'localhost'))) {
     throw new Error('Rica admin origin must be HTTPS or HTTP on localhost')
   }
   const secure = url.protocol === 'https:'
-  return { databaseUrl: db, origin: url.origin, rpID: url.hostname, secure, cookie: secure ? '__Host-rica_session' : 'rica_session' }
+  return { origin: url.origin, rpID: url.hostname, secure, cookie: secure ? '__Host-rica_session' : 'rica_session' }
 }
 
 export type ManagementConfig = NonNullable<ReturnType<typeof loadManagementConfig>>

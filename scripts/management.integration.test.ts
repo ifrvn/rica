@@ -39,9 +39,7 @@ import { createDeploymentPluginStore } from '../packages/runtime/deployment-plug
 const config = loadConfig()
 const simulationPlatforms = await startSimulationPlatforms({})
 const owner = createDatabase(config.databaseUrl)
-const adminUrl = new URL(config.databaseUrl)
-adminUrl.searchParams.set('options', '-c role=rica_admin_api')
-const management = createDatabase(adminUrl.toString())
+const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
@@ -174,9 +172,7 @@ after(async () => {
 })
 
 test('local authentication enforces origin, membership and session revocation', { timeout: 30_000 }, async () => {
-  const authConfig = loadManagementConfig({
-    RICA_MANAGEMENT_DATABASE_URL: adminUrl.toString(), RICA_ADMIN_ORIGIN: fixtureOrigin,
-  })!
+  const authConfig = loadManagementConfig({ RICA_ADMIN_ORIGIN: fixtureOrigin })!
   const redis = new Redis(config.redisUrl)
   const auth = createAdminAuth(management, redis, authConfig)
   const local = createApp({ postgres: async () => true, redis: async () => true },
@@ -499,7 +495,7 @@ function simulationConnectionString() {
 }
 
 function simulationDatabase() {
-  return createDatabase(simulationConnectionString())
+  return createDatabase(config.databaseUrl, 'rica_simulation_executor')
 }
 
 async function approveSimulation(accountId = accountA, contactId?: string, identityId = identityA) {

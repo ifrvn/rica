@@ -19,7 +19,7 @@ const platforms = managementConfig ? await startSimulationPlatforms(process.env,
   await reportPluginResult(config.redisUrl, 'api', observationError(error, 'START_FAILED'))
   throw error
 }) : undefined
-const managementDb = managementConfig ? createDatabase(managementConfig.databaseUrl) : null
+const managementDb = managementConfig ? createDatabase(config.databaseUrl, 'rica_admin_api') : null
 const db = createDatabase(config.databaseUrl)
 const redis = new Redis(config.redisUrl, {
   lazyConnect: true,
