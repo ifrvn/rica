@@ -178,6 +178,9 @@ importers:
       '@prisma/client':
         specifier: ^7.10.1
         version: 7.10.1(@typescript/typescript6@6.0.2)(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
+      '@rica/console-shared':
+        specifier: workspace:*
+        version: link:packages/console-shared
       '@rica/contracts':
         specifier: workspace:*
         version: link:packages/contracts
@@ -267,6 +270,16 @@ importers:
         specifier: ^3.3.14
         version: 3.3.14(@typescript/typescript6@6.0.2)
 
+  packages/console-shared:
+    dependencies:
+      vue:
+        specifier: ^3.5.45
+        version: 3.5.45(@typescript/typescript6@6.0.2)
+    devDependencies:
+      typescript:
+        specifier: npm:@typescript/typescript6@^6.0.2
+        version: '@typescript/typescript6@6.0.2'
+
   packages/contracts:
     dependencies:
       '@hono/zod-openapi':
@@ -280,6 +293,9 @@ importers:
 
   plugins/hosted-models:
     dependencies:
+      '@rica/console-shared':
+        specifier: workspace:*
+        version: link:../../packages/console-shared
       '@rica/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -289,21 +305,44 @@ importers:
       '@rica/plugin-simulated-model':
         specifier: workspace:*
         version: link:../simulated-model
+      naive-ui:
+        specifier: ^2.45.3
+        version: 2.45.3(vue@3.5.45(@typescript/typescript6@6.0.2))
+      vue:
+        specifier: ^3.5.45
+        version: 3.5.45(@typescript/typescript6@6.0.2)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
+    devDependencies:
+      typescript:
+        specifier: npm:@typescript/typescript6@^6.0.2
+        version: '@typescript/typescript6@6.0.2'
 
   plugins/newbi:
     dependencies:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@rica/console-shared':
+        specifier: workspace:*
+        version: link:../../packages/console-shared
       '@rica/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@rica/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
+      naive-ui:
+        specifier: ^2.45.3
+        version: 2.45.3(vue@3.5.45(@typescript/typescript6@6.0.2))
+      vue:
+        specifier: ^3.5.45
+        version: 3.5.45(@typescript/typescript6@6.0.2)
+    devDependencies:
+      typescript:
+        specifier: npm:@typescript/typescript6@^6.0.2
+        version: '@typescript/typescript6@6.0.2'
 
   plugins/simulated-model:
     dependencies:

@@ -4,13 +4,16 @@ import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountRegistrationView, accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
-import type { newbiAccountCheckView } from '../../../../../packages/contracts/newbi-pilot.js'
-import { formatTime } from '../../shared/console-data.js'
+import type { newbiAccountCheckView } from '@rica/contracts/newbi-pilot'
+import { formatTime } from '@rica/console-shared/console-data'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
-import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
-import NewbiAccountLabel from './NewbiAccountLabel.vue'
-import { request, RequestError } from '../../shared/request.js'
+import ConnectorAccountStatus from '@rica/plugin-newbi/console/ConnectorAccountStatus.vue'
+import { newbiConsole } from '@rica/plugin-newbi/console/labels'
+import AccountConnectionForm from '@rica/plugin-newbi/console/AccountConnectionForm.vue'
+import { checkAccount, testAccount, type AccountPreview } from '@rica/plugin-newbi/console/accounts'
+import NewbiAccountLabel from '@rica/plugin-newbi/console/NewbiAccountLabel.vue'
+import { request, RequestError } from '@rica/console-shared/request'
 
 type Workspace = z.infer<typeof characterWorkspaceView>
 type Character = z.infer<typeof characterView>
@@ -37,11 +40,11 @@ const removingAccount = ref<Registration>()
 const newbiRegistrationAvailable = ref(false)
 const newbiEndpoint = ref<string>()
 const newbiCredential = ref('')
-const newbiPreview = ref<{ agentId: string; username: string; avatarUrl: string | null }>()
+const newbiPreview = ref<AccountPreview>()
 const platformChoices = computed(() => [
   ...(workspace.value?.simulationPlatforms ?? []).map(value => ({ label: value, value })),
   ...(workspace.value?.newbiInstalled || newbiRegistrationAvailable.value
-    ? [{ label: newbiRegistrationAvailable.value ? 'Newbi' : 'Newbi（请先启用并配置接入点）', value: 'newbi', disabled: !newbiRegistrationAvailable.value }] : []),
+    ? [{ label: newbiRegistrationAvailable.value ? newbiConsole.name : newbiConsole.disabledAccountLabel, value: newbiConsole.id, disabled: !newbiRegistrationAvailable.value }] : []),
 ])
 type AccountCheck = z.infer<typeof newbiAccountCheckView>
 const newbiChecks = reactive(new Map<string, AccountCheck & { version?: number }>())
@@ -101,13 +104,13 @@ function accountControl(account: Account, revoke = false) {
 }
 const schemas = shallowRef<{
   management: typeof import('../../../../../packages/contracts/management.js')
-  connector: typeof import('../../../../../packages/contracts/newbi-pilot.js')
+  connector: typeof import('@rica/contracts/newbi-pilot')
 }>()
 
 async function loadSchemas() {
   if (schemas.value) return
   const [management, connector] = await Promise.all([
-    import('../../../../../packages/contracts/management.js'), import('../../../../../packages/contracts/newbi-pilot.js'),
+    import('../../../../../packages/contracts/management.js'), import('@rica/contracts/newbi-pilot'),
   ])
   if (active) schemas.value = { management, connector }
 }
@@ -294,7 +297,7 @@ function checkNewbiConnection(account: Pick<Account, 'id'> & { version?: number 
     checkingAccount.value = account.id
     newbiChecks.delete(account.id)
     try {
-      const result = await request<AccountCheck>(base.value + '/newbi/accounts/' + account.id + '/check', { method: 'POST' })
+      const result = await checkAccount(base.value, account.id)
       if (active) {
         newbiChecks.set(account.id, { ...result, version: account.version })
         if (result.verified) await load()
@@ -390,9 +393,7 @@ function testNewbiAccount() {
       error.value = '请输入有效的 Newbi Agent Key。'
       return
     }
-    const preview = await request<NonNullable<typeof newbiPreview.value>>(base.value + '/account-pool/newbi/test', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input.data),
-    })
+    const preview = await testAccount(base.value, input.data)
     if (active) newbiPreview.value = preview
   })
 }
@@ -531,17 +532,8 @@ onMounted(() => { if (props.characterId) void run(load) })
             </template>
           </NFormItem>
           <template v-if="form.platform === 'newbi'">
-            <NFormItem label="Agent Key" :label-props="{ for: 'workspace-newbi-key' }">
-              <NInput v-model:value="newbiCredential" type="password" :disabled="busy"
-                :input-props="{ id: 'workspace-newbi-key', autocomplete: 'new-password' }"
-                @update:value="clearNewbiPreview" />
-            </NFormItem>
-            <NButton attr-type="button" secondary :disabled="busy || !newbiCredential.trim()" @click="testNewbiAccount">测试连接</NButton>
-            <div v-if="newbiPreview" class="workspace-actions newbi-preview" role="status">
-              <img v-if="newbiPreview.avatarUrl" :src="newbiPreview.avatarUrl" alt="" referrerpolicy="no-referrer" />
-              <strong>{{ newbiPreview.username }}</strong>
-              <NTag size="small" type="success">核验通过</NTag>
-            </div>
+            <AccountConnectionForm v-model:credential="newbiCredential" :preview="newbiPreview" :busy="busy"
+              @changed="clearNewbiPreview" @test="testNewbiAccount" />
           </template>
           <template v-else-if="form.platform">
           <NFormItem label="实例标识" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
@@ -735,8 +727,6 @@ onMounted(() => { if (props.characterId) void run(load) })
 </template>
 
 <style scoped>
-.newbi-preview { margin-block: .75rem; }
-.newbi-preview img { flex: none; width: 2.25rem; height: 2.25rem; border-radius: 50%; object-fit: cover; object-position: center; }
 .character-workspace { display: grid; gap: 1.25rem; min-width: 0; }
 .account-check { margin: 0; }
 .workspace-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }

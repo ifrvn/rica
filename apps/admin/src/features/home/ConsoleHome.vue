@@ -4,10 +4,10 @@ import { NAlert, NButton, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import type { simulationBacklogView, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
-import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '../../shared/console-data.js'
+import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '@rica/console-shared/console-data'
 import type { ConsolePage } from '../../app/console-location.js'
 import { simulationAccounts } from '../runs/simulation-accounts.js'
-import { request } from '../../shared/request.js'
+import { request } from '@rica/console-shared/request'
 
 type Backlog = z.infer<typeof simulationBacklogView>
 type Run = z.infer<typeof simulationRunSummary>

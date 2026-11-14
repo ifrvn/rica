@@ -20,13 +20,14 @@
 
 | 工作区包 | 职责 |
 | --- | --- |
-| `@rica/plugin-newbi` | Newbi 协议客户端、读取与发送组件。组件随同一个包部署，分别注册和报告。 |
-| `@rica/plugin-hosted-models` | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的请求和响应适配。 |
+| `@rica/plugin-newbi` | Newbi 协议、读取与发送、管理路由、命令实现和控制台组件。读取与发送分别注册和报告。 |
+| `@rica/plugin-hosted-models` | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的协议适配及控制台设置表单。 |
 | `@rica/plugin-simulated-model` | 模拟决策与本地模板回复。外部模型复用这里的本地决策。 |
 | `@rica/plugin-simulated-platforms` | mock-a 与 mock-b 的模拟事件适配器。 |
 | `@rica/contracts`、`@rica/plugin-host` | 共用输入输出、插件定义、注册校验和生命周期。 |
+| `@rica/console-shared` | 宿主页面和插件组件共用的浏览器请求、错误处理和任务状态。 |
 
-数据库连接、凭据保存和提取、角色授权、审批、发送许可及回执留在宿主。Newbi 包收到当前账号的连接信息和请求前校验，宿主负责决定读取或执行的范围。包为仓库内的私有工作区成员，继续通过根目录的命令启动和构建。
+数据库连接池由宿主创建。Newbi 的管理路由复用宿主的会话中间件和持久化权限规则，插件内的数据库适配按操作切换到对应的受限角色。控制台在账号池、审批、插件中心和系统运行状况挂载插件提供的界面。包为仓库内的私有工作区成员，继续通过根目录的命令启动和构建。
 
 ```mermaid
 flowchart LR

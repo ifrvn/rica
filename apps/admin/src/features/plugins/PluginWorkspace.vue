@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
+import { computed, nextTick, ref } from 'vue'
+import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
 import { deploymentPluginChange, deploymentPluginIds, type DeploymentPluginId, type DeploymentPluginsView } from '../../../../../packages/contracts/deployment-plugins.js'
-import { useConsoleTask } from '../../shared/console-data.js'
-import { request } from '../../shared/request.js'
+import { useConsoleTask } from '@rica/console-shared/console-data'
+import { request } from '@rica/console-shared/request'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
-import ModelSettings from './ModelSettings.vue'
+import NewbiSettings from '@rica/plugin-newbi/console/NewbiSettings.vue'
+import { newbiConsole } from '@rica/plugin-newbi/console/labels'
+import ModelSettings from '@rica/plugin-hosted-models/console/ModelSettings.vue'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean }>()
 const emit = defineEmits<{ expired: []; accounts: []; health: []; simulate: []; newbi: [installed: boolean] }>()
@@ -20,7 +22,6 @@ const modelEditor = computed(() => {
 })
 const changedPlugin = ref<DeploymentPluginId>()
 const releasePreview = ref<DeploymentPluginId>()
-const form = reactive({ endpoint: '' })
 const stages = { NOT_INSTALLED: '未安装', INSTALLED: '已安装 · 未启用', ENABLED: '已启用' } as const
 const operations = { NOT_INSTALLED: 'INSTALL', INSTALLED: 'ENABLE', ENABLED: 'DISABLE' } as const
 const newbiComponents = computed(() => status.value?.services.flatMap(({ catalog }) =>
@@ -39,7 +40,7 @@ const upgradeProblems = {
 }
 const serviceNames = {
   api: '管理 API', worker: '认知 Worker', 'simulation-executor': '模拟执行器',
-  'connector-reader': 'Newbi 读取', 'connector-executor': 'Newbi 发送',
+  ...newbiConsole.serviceNames,
 }
 
 function toggleRelease(id: DeploymentPluginId) {
@@ -56,8 +57,7 @@ function toggleEditor(id: DeploymentPluginId) {
   }
   editing.value = id
   error.value = ''
-  if (id === 'newbi') Object.assign(form, { endpoint: deployment.value?.newbi.endpoint ?? '' })
-  void nextTick(() => document.getElementById(id === 'newbi' ? 'newbi-settings-heading' : 'model-settings-heading')?.focus())
+  if (id !== 'newbi') void nextTick(() => document.getElementById('model-settings-heading')?.focus())
 }
 
 function update(id: DeploymentPluginId, data: unknown) {
@@ -91,9 +91,6 @@ function changeStage(id: DeploymentPluginId) {
   if (stage) update(id, { action: operations[stage], id })
 }
 
-function saveNewbi() {
-  update('newbi', { action: 'CONFIGURE_NEWBI', endpoint: form.endpoint.trim() })
-}
 </script>
 
 <template>
@@ -114,7 +111,7 @@ function saveNewbi() {
         <div class="console-section-heading plugin-title">
           <div>
             <h3 :id="'plugin-heading-' + id" tabindex="-1">{{ labels[id] }}</h3>
-            <p>{{ id === 'newbi' ? '平台连接器 · 读取与发送分别运行' : '模型提供方 · 用于公开模拟草稿' }}</p>
+            <p>{{ id === newbiConsole.id ? newbiConsole.description : '模型提供方 · 用于公开模拟草稿' }}</p>
           </div>
           <NTag size="small" :bordered="false" :type="deployment.plugins[id] === 'ENABLED' ? 'success' : 'default'">
             {{ stages[deployment.plugins[id]] }}
@@ -123,7 +120,8 @@ function saveNewbi() {
 
         <ul v-if="id === 'newbi'" class="plugin-components">
           <li v-for="component in newbiComponents" :key="component.id">
-            <strong>{{ component.kind === 'platform-reader' ? '读取平台消息' : '发送已获许可的回复' }}</strong>
+            <strong>{{ component.kind === 'platform-reader' ? newbiConsole.capabilityNames['platform-reader']
+              : newbiConsole.capabilityNames['platform-reply-executor'] }}</strong>
             <code>{{ component.id }}<template v-if="deployment.plugins[id] !== 'NOT_INSTALLED'"> · v{{ component.version }}</template></code>
           </li>
         </ul>
@@ -188,7 +186,7 @@ function saveNewbi() {
           <template v-else>
             <h4>升级步骤</h4>
             <ol class="plugin-release-steps">
-              <li v-if="id === 'newbi'">先核对受影响账号的在途发送。待核对的结果须用原执行版本和幂等键恢复，或按现有流程结案。</li>
+              <li v-if="id === newbiConsole.id">{{ newbiConsole.upgradeStep }}</li>
               <li>请部署维护者按发布说明更新 Rica 至 {{ release.ricaVersion }}，并重启相关进程。</li>
               <li>部署完成后刷新插件，核对组件版本，并到系统运行状况确认相关进程的最新报告。</li>
             </ol>
@@ -205,20 +203,9 @@ function saveNewbi() {
         </section>
 
         <NAlert v-if="error && changedPlugin === id" type="error" role="alert">{{ error }}</NAlert>
-        <section v-if="editing === 'newbi' && id === 'newbi' && deployment.plugins[id] === 'ENABLED'"
-          class="plugin-config" aria-labelledby="newbi-settings-heading">
-          <div class="console-section-heading">
-            <h3 id="newbi-settings-heading" tabindex="-1">Newbi · Agent API 设置</h3>
-            <NButton size="small" quaternary :disabled="busy" @click="toggleEditor(id)">收起设置</NButton>
-          </div>
-          <NForm class="newbi-form" @submit.prevent="saveNewbi">
-            <NFormItem label="本机 API 地址" :label-props="{ for: 'newbi-endpoint' }">
-              <NInput v-model:value="form.endpoint" placeholder="http://127.0.0.1:5000/agent-api/v1" :disabled="busy"
-                :input-props="{ id: 'newbi-endpoint', required: true }" />
-            </NFormItem>
-            <NButton type="primary" attr-type="submit" :loading="busy">保存 Newbi 设置</NButton>
-          </NForm>
-        </section>
+        <NewbiSettings v-if="editing === 'newbi' && id === 'newbi' && deployment.plugins[id] === 'ENABLED'"
+          class="plugin-config" :value="deployment.newbi.endpoint ?? ''" :busy="busy" @close="toggleEditor(id)"
+          @save="update(id, { action: 'CONFIGURE_NEWBI', endpoint: $event })" />
       </article>
       <ModelSettings v-if="modelEditor" :key="modelEditor"
         class="console-record-workspace" :provider="modelEditor" :name="labels[modelEditor]"
@@ -242,5 +229,4 @@ function saveNewbi() {
 .plugin-config { border-top: 1px solid var(--console-line); padding-block-start: 1rem; }
 .plugin-release-steps { display: grid; gap: .5rem; padding-inline-start: 1.25rem; }
 .plugin-release-actions { margin-block-start: .75rem; }
-.newbi-form { max-width: 35rem; }
 </style>

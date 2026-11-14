@@ -1,6 +1,5 @@
 import { Redis } from 'ioredis'
-import { newbiReaderIdentity } from '../packages/contracts/newbi-pilot.js'
-import { newbiExecutorIdentity } from '../packages/contracts/newbi-executor-identity.js'
+import { newbiCatalog } from '@rica/plugin-newbi/catalog'
 import { pluginDiagnostic, pluginReport, pluginServices, type PluginDiagnostic, type PluginMetadata,
   type PluginReport, type PluginService } from '../packages/contracts/plugin-status.js'
 import { PluginHostError } from '@rica/plugin-host'
@@ -10,8 +9,7 @@ const catalog: Record<PluginService, PluginMetadata[]> = {
   api: simulationPlatformCatalog,
   worker: cognitionCatalog,
   'simulation-executor': simulationPlatformCatalog,
-  'connector-reader': [{ ...newbiReaderIdentity, kind: 'platform-reader' }],
-  'connector-executor': [{ ...newbiExecutorIdentity, kind: 'platform-reply-executor' }],
+  ...newbiCatalog,
 }
 const heartbeatSeconds = 20
 const recentCommandSeconds = 3600

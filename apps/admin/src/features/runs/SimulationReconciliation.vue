@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput } from 'naive-ui'
 import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
-import { request, RequestError } from '../../shared/request.js'
+import { request, RequestError } from '@rica/console-shared/request'
 
 const props = defineProps<{ characterId: string; actionId: string }>()
 const emit = defineEmits<{ expired: []; resolved: [outcome: NonNullable<ReconciliationView['outcome']>] }>()

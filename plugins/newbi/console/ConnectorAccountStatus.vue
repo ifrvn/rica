@@ -3,9 +3,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '../../../../../packages/contracts/newbi-pilot.js'
-import { characterPath, useConsoleTask } from '../../shared/console-data.js'
-import { request, RequestError } from '../../shared/request.js'
+import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '@rica/contracts/newbi-pilot'
+import { characterPath, useConsoleTask } from '@rica/console-shared/console-data'
+import { request, RequestError } from '@rica/console-shared/request'
 
 type Inbox = z.infer<typeof newbiInboxView>
 const props = defineProps<{ characterId: string; accountId: string; accountStatus: string; accountLabel: string; identityLabel: string;

@@ -2,6 +2,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import type { Redis } from 'ioredis'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
+import type { ManagementPrincipal } from '../../packages/runtime/management-http.js'
 
 export const localIssuer = 'rica:local'
 export const usernameInput = z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9._-]{2,63}$/u)
@@ -10,7 +11,7 @@ export const sessionSeconds = 8 * 60 * 60
 export const sessionToken = /^[A-Za-z0-9_-]{43}$/u
 const dummyHash = '0'.repeat(32) + ':' + '0'.repeat(64)
 
-export type Principal = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
+export type Principal = ManagementPrincipal
 export type Authenticate = (request: Request) => Promise<Principal | null>
 
 export function loadManagementConfig(env = process.env) {

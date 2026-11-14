@@ -2,12 +2,13 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
-import ConnectorReview from '../features/review/ConnectorReview.vue'
+import { newbiConsole } from '@rica/plugin-newbi/console/labels'
+import ConnectorReview from '@rica/plugin-newbi/console/ConnectorReview.vue'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
-import { focusRecord } from '../shared/console-data.js'
-import { request, RequestError } from '../shared/request.js'
+import { focusRecord } from '@rica/console-shared/console-data'
+import { request, RequestError } from '@rica/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView, characterWorkspaceView } from '../../../../packages/contracts/management.js'
 import { hasManagementRole } from '../../../../packages/contracts/management-permissions.js'
@@ -545,7 +546,7 @@ async function decide(decision: Decision) {
           @click="changeTab('review')">模拟提案</NButton>
         <NButton v-if="newbiInstalled || tab === 'connector'" size="small" :type="tab === 'connector' ? 'primary' : 'default'"
           :aria-current="tab === 'connector' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('connector')">Newbi 平台提案</NButton>
+          @click="changeTab('connector')">{{ newbiConsole.reviewTitle }}</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canReadRuns" :key="characterId" :character="currentCharacter"

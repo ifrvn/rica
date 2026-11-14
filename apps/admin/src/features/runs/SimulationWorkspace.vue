@@ -6,10 +6,10 @@ import type { accountView, characterWorkspaceView, identityView } from '../../..
 import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
 import SimulationReconciliation from './SimulationReconciliation.vue'
 import { simulationAccounts } from './simulation-accounts.js'
-import { readAll } from '../../shared/console-data.js'
+import { readAll } from '@rica/console-shared/console-data'
 import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
 import { runFilterKeys } from '../../app/console-location.js'
-import { request, RequestError } from '../../shared/request.js'
+import { request, RequestError } from '@rica/console-shared/request'
 
 type Run = z.infer<typeof simulationRunSummary>
 type Replay = z.infer<typeof runReplayView>

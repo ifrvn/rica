@@ -6,11 +6,30 @@
   "exports": {
     "./reader": "./reader.ts",
     "./executor": "./executor.ts",
-    "./client": "./client.ts"
+    "./client": "./client.ts",
+    "./management": "./management.ts",
+    "./operations": "./operations.ts",
+    "./database": "./database.ts",
+    "./pilot": "./pilot.ts",
+    "./console/ConnectorReview.vue": "./console/ConnectorReview.vue",
+    "./console/ConnectorAccountStatus.vue": "./console/ConnectorAccountStatus.vue",
+    "./console/NewbiAccountLabel.vue": "./console/NewbiAccountLabel.vue",
+    "./console/AccountConnectionForm.vue": "./console/AccountConnectionForm.vue",
+    "./console/NewbiSettings.vue": "./console/NewbiSettings.vue",
+    "./console/accounts": "./console/accounts.ts",
+    "./catalog": "./catalog.ts",
+    "./console/health": "./console/health.ts",
+    "./console/labels": "./console/labels.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
+    "@rica/console-shared": "workspace:*",
     "@rica/contracts": "workspace:*",
-    "@rica/plugin-host": "workspace:*"
+    "@rica/plugin-host": "workspace:*",
+    "naive-ui": "^2.45.3",
+    "vue": "^3.5.45"
+  },
+  "devDependencies": {
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }

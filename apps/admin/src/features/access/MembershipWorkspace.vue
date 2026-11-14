@@ -3,8 +3,8 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import { membershipInput, type memberPage } from '../../../../../packages/contracts/management.js'
-import { characterPath, queryPath, useConsoleTask } from '../../shared/console-data.js'
-import { request } from '../../shared/request.js'
+import { characterPath, queryPath, useConsoleTask } from '@rica/console-shared/console-data'
+import { request } from '@rica/console-shared/request'
 
 type Members = z.infer<typeof memberPage>
 type Role = Members['items'][number]['roles'][number]

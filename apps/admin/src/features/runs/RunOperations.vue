@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '../../../../../packages/contracts/simulation-observability.js'
-import { request, RequestError } from '../../shared/request.js'
+import { request, RequestError } from '@rica/console-shared/request'
 
 type Backlog = z.infer<typeof simulationBacklogView>
 type Event = z.infer<typeof quarantinedOutboxEvent>

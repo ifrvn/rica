@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NSpin } from 'naive-ui'
-import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '../../../../../packages/contracts/model-settings.js'
-import { useConsoleTask } from '../../shared/console-data.js'
-import { request } from '../../shared/request.js'
-import { modelCheckLabels } from './plugin-status.js'
+import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '@rica/contracts/model-settings'
+import { useConsoleTask } from '@rica/console-shared/console-data'
+import { request } from '@rica/console-shared/request'
+import { modelCheckLabels } from './labels.js'
 
 const props = defineProps<{ provider: Exclude<ModelSettingsInput['provider'], 'simulated'>; name: string; canStartSimulation: boolean }>()
 const emit = defineEmits<{ close: []; expired: []; saved: []; simulate: [] }>()

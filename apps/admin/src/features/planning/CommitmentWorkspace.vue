@@ -4,8 +4,8 @@ import { NAlert, NButton, NCheckbox, NEmpty, NForm, NFormItem, NInput, NModal, N
 import type { z } from '@hono/zod-openapi'
 import { commitmentInput, commitmentUpdate, type commitmentReceiptView, type commitmentView } from '../../../../../packages/contracts/commitments.js'
 import type { accountView, identityView } from '../../../../../packages/contracts/management.js'
-import { characterPath, formatTime, queryPath, readAll, useConsoleTask, type Page } from '../../shared/console-data.js'
-import { request } from '../../shared/request.js'
+import { characterPath, formatTime, queryPath, readAll, useConsoleTask, type Page } from '@rica/console-shared/console-data'
+import { request } from '@rica/console-shared/request'
 
 type Commitment = z.infer<typeof commitmentView>
 type Receipt = z.infer<typeof commitmentReceiptView>

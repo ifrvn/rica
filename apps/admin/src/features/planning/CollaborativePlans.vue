@@ -4,7 +4,7 @@ import { NAlert, NButton, NCheckbox, NEmpty, NForm, NFormItem, NInput, NModal, N
 import type { z } from '@hono/zod-openapi'
 import type { accountView, identityView } from '../../../../../packages/contracts/management.js'
 import { planInput, type planView } from '../../../../../packages/contracts/plans.js'
-import { characterPath, formatTime, readAll, useConsoleTask } from '../../shared/console-data.js'
+import { characterPath, formatTime, readAll, useConsoleTask } from '@rica/console-shared/console-data'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 
 type Plan = z.infer<typeof planView>

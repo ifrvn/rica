@@ -16,6 +16,7 @@
     "apps/**/*.vue",
     "packages/**/*.ts",
     "plugins/**/*.ts",
+    "plugins/**/*.vue",
     "scripts/**/*.ts",
     "prisma.config.ts"
   ]

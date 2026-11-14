@@ -1,4 +1,3 @@
-import 'dotenv/config'
 import { z } from '@hono/zod-openapi'
 import { createDatabase, type RawQueryClient } from '../../packages/persistence/client.js'
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
@@ -6,13 +5,11 @@ import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js
 import { newbiExecutorIdentity, newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
 import { newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
 import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
-import { observationError, reportPluginResult } from '../plugin-observation.js'
-import type { PluginDiagnostic } from '../../packages/contracts/plugin-status.js'
 import { PluginHostError } from '@rica/plugin-host'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
-import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from './newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from './database.js'
 
 function connectorStore() {
   return createDeploymentPluginStore(modelSettingsDirectory(runtimeDatabaseUrl()))
@@ -97,25 +94,26 @@ async function main() {
   } finally { await db.$disconnect() }
 }
 
-const command = process.argv[2]
-let diagnostic: PluginDiagnostic | undefined
-try {
-  await main()
-} catch (error) {
-  diagnostic = observationError(error, 'OPERATION_FAILED')
-  if (error instanceof PluginHostError) {
-    console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', ...error.diagnostic }))
-  } else if (error instanceof PlatformReplyError) {
-    console.error(JSON.stringify({ reason: error.reason, retryAfterSeconds: error.retrySeconds || undefined }))
-  } else {
-    console.error(process.argv[2] === 'events'
-      ? 'Newbi event polling stopped. Check the account and poller configuration before retrying.'
-      : 'Newbi pilot could not confirm the operation. Inspect the reply status before retrying.')
-  }
-  process.exitCode = 1
-} finally {
-  if (command === 'events' || command === 'inspect' || command === 'send') {
-    await reportPluginResult(process.env.REDIS_URL, command === 'send' ? 'connector-executor' : 'connector-reader',
-      diagnostic ?? (process.exitCode ? 'OPERATION_FAILED' : undefined))
+export async function runNewbiPilot(report: (service: 'connector-executor' | 'connector-reader', error?: unknown) => Promise<void>) {
+  const command = process.argv[2]
+  let failure: unknown
+  try {
+    await main()
+  } catch (error) {
+    failure = error
+    if (error instanceof PluginHostError) {
+      console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', ...error.diagnostic }))
+    } else if (error instanceof PlatformReplyError) {
+      console.error(JSON.stringify({ reason: error.reason, retryAfterSeconds: error.retrySeconds || undefined }))
+    } else {
+      console.error(process.argv[2] === 'events'
+        ? 'Newbi event polling stopped. Check the account and poller configuration before retrying.'
+        : 'Newbi pilot could not confirm the operation. Inspect the reply status before retrying.')
+    }
+    process.exitCode = 1
+  } finally {
+    if (command === 'events' || command === 'inspect' || command === 'send') {
+      await report(command === 'send' ? 'connector-executor' : 'connector-reader', failure)
+    }
   }
 }

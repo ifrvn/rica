@@ -10,7 +10,7 @@ import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '@rica/plugin-newbi/client'
 import { identifyNewbiAccount, startNewbiReader } from '@rica/plugin-newbi/reader'
-import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from '../apps/worker/newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from '@rica/plugin-newbi/database'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -2797,7 +2797,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(writes, 0)
     const client = createNewbiReplyExecutor(endpoint, secret)
     const executorKey = newbiExecutorKey(newbiExecutorIdentity)
-    const inspector = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'inspect', accountId, postId], {
+    const inspector = spawn(process.execPath, ['--import', 'tsx', 'scripts/newbi-pilot.ts', 'inspect', accountId, postId], {
       env: { ...process.env, RICA_MODEL_SETTINGS_DIR: settingsDir },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })
@@ -2894,7 +2894,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(writes, 0)
     currentAgent = agentId
     const send = async (id: string, ...args: string[]) => {
-      const processResult = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'send', id, ...args], {
+      const processResult = spawn(process.execPath, ['--import', 'tsx', 'scripts/newbi-pilot.ts', 'send', id, ...args], {
         env: { ...process.env, RICA_MODEL_SETTINGS_DIR: settingsDir, DATABASE_URL: scheduleRuntimeUrl() },
         stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       })
@@ -3194,7 +3194,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal((await account()).cursor, opaque)
     assert.deepEqual(cursors, [null])
 
-    worker = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'events', accountId, '--for-seconds', '5'], {
+    worker = spawn(process.execPath, ['--import', 'tsx', 'scripts/newbi-pilot.ts', 'events', accountId, '--for-seconds', '5'], {
       env: { ...process.env, RICA_MODEL_SETTINGS_DIR: settingsDir, DATABASE_URL: scheduleRuntimeUrl() },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })

@@ -11,8 +11,6 @@ import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, read
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
 import * as management from '../../packages/persistence/management.js'
@@ -22,11 +20,14 @@ import { pluginStatusView, type PluginReleaseView } from '../../packages/contrac
 import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 import { modelCheckInput, modelCheckResult, modelSettingsInput, modelSettingsView, type ModelCheckStatus } from '../../packages/contracts/model-settings.js'
-import { checkModel } from './model-check.js'
+import { checkModel } from '@rica/plugin-hosted-models/check'
+import { startModelPlugin } from '../runtime-plugins.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
 import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
-import { newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from '../../packages/contracts/newbi-pilot.js'
+
+import { body, character, characterParams, error, errors, failure, security, success, type ManagementEnvironment } from '../../packages/runtime/management-http.js'
+import { createNewbiManagement, type NewbiManagementOptions } from '@rica/plugin-newbi/management'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
@@ -34,31 +35,11 @@ type Options = {
   pluginRelease?: (services: Awaited<ReturnType<typeof readPluginStatus>>['services']) => Promise<PluginReleaseView>
   modelSettings?: ReturnType<typeof createModelSettingsStore>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
-  identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
-  pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
-  sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
-  readConnectorThread?: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>) =>
-    Promise<z.infer<typeof newbiThreadView> | undefined>
-}
-type Environment = { Variables: { actor: Principal; requestId: string } }
+} & NewbiManagementOptions
 
-const json = <S extends z.ZodType>(schema: S) => ({ 'application/json': { schema } })
-const success = <S extends z.ZodType>(schema: S) => ({ description: 'Success', content: json(schema) })
-const body = <S extends z.ZodType>(schema: S) => ({ required: true, content: json(schema) })
-const failure = { description: 'Management error', content: json(schema.errorResponse) }
-const errors = { 400: failure, 401: failure, 403: failure, 404: failure, 409: failure, 412: failure,
-  413: failure, 422: failure, 428: failure, 500: failure, 503: failure } as const
-const security = [{ SessionCookie: [] }]
-const character = '/characters/{characterId}' as const
-const characterParams = z.object({ characterId: schema.resourceId })
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
 const grantParams = characterParams.extend({ grantId: schema.resourceId })
 const actionParams = characterParams.extend({ actionId: schema.resourceId })
-
-function error(requestId: string, code: string, message: string) {
-  return { error: { requestId, code, message } }
-}
-
 
 function version(headers: z.infer<typeof schema.versionHeader>) {
   const header = headers['if-match']
@@ -79,7 +60,7 @@ function runVersion(header: string) {
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
   modelSettings, deploymentPlugins, identifyConnector, pollConnector, sendConnector, readConnectorThread }: Options) {
-  const app = new OpenAPIHono<Environment>({
+  const app = new OpenAPIHono<ManagementEnvironment>({
     defaultHook: (result, c) => {
       if (!result.success) {
         const requestId = c.get('requestId')
@@ -137,34 +118,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   const modelProvider = async () => (await modelSettings?.status())?.provider ?? 'simulated'
   let checkingModel = false
   let latestModelCheck: { version: number; result: ModelCheckStatus } | undefined
-  async function newbiAvailable(endpoint: string) {
-    return !deploymentPlugins || (await deploymentPlugins.readNewbi())?.endpoint === endpoint
-  }
-  async function requireNewbi(endpoint: string) {
-    if (!await newbiAvailable(endpoint)) {
-      throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Newbi is disabled or its endpoint does not match')
-    }
-  }
-  async function identifyNewbi(credential: string, expectedAgent?: string) {
-    const account = await identifyConnector?.(credential)
-    if (!account || (expectedAgent && account.agentId !== expectedAgent)) {
-      throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Could not verify the Newbi account')
-    }
-    await requireNewbi(account.endpoint)
-    return account
-  }
-
-  const verifySavedConnector: management.VerifyConnector = async (endpoint, agentId, tx = db) => {
-    const where = { endpoint, agentId }
-    const saved = await tx.newbiCredential.findUnique({ where: { endpoint_agentId: where }, select: { credential: true } })
-    const profile = saved && await identifyConnector?.(saved.credential, endpoint)
-    if (!profile || profile.agentId !== agentId || profile.endpoint !== endpoint) return false
-    await tx.newbiCredential.updateMany({
-      where: { ...where, credential: saved.credential },
-      data: { username: profile.username, avatarUrl: profile.avatarUrl },
-    })
-    return true
-  }
+  const newbi = createNewbiManagement(db, deploymentPlugins, { identifyConnector, pollConnector, sendConnector, readConnectorThread })
 
   app.openapi(createRoute({
     method: 'put', path: '/deployment-plugins', security,
@@ -239,7 +193,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
         || (deploymentPlugins && (await deploymentPlugins.status(provider)).plugins[provider] !== 'ENABLED')) {
         throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable and configure the model plugin first')
       }
-      const result = await checkModel({ ...configuration, provider })
+      const result = await checkModel({ ...configuration, provider }, startModelPlugin)
       const { reply: _reply, ...status } = result
       latestModelCheck = { version: expected, result: status }
       return c.json(result, 200)
@@ -279,7 +233,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const platforms = schema.accountInput.shape.platform.options
     const simulationPlatforms = result.roles.includes('ADMIN') ? platforms.filter((id) => resolveAdapter(id)) : []
     const deployment = await deploymentPlugins?.status('simulated')
-    return c.json({ ...result, simulationPlatforms, newbiInstalled: deployment?.plugins.newbi !== 'NOT_INSTALLED' }, 200)
+    return c.json({ ...result, simulationPlatforms, newbiInstalled: newbi.isInstalled(deployment) }, 200)
   })
 
   app.openapi(createRoute({
@@ -353,10 +307,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const modelCheck = latestModelCheck && latestModelCheck.version === settings?.version
       && latestModelCheck.result.provider === deployment.configuredModel
       && deployment.plugins[latestModelCheck.result.provider] === 'ENABLED' ? latestModelCheck.result : undefined
-    const newbiRegistrationAvailable = deployment.plugins.newbi === 'ENABLED' && !!deployment.newbi.endpoint
-    const newbiConnections = newbiRegistrationAvailable && deployment.newbi.endpoint
-      ? await readNewbiConnections(db, scope.characterId, deployment.newbi.endpoint) : undefined
-    return c.json({ ...current, deployment, release, modelCheck, newbiConnections, newbiRegistrationAvailable }, 200)
+    return c.json({ ...current, deployment, release, modelCheck, ...await newbi.status(scope.characterId, deployment) }, 200)
   })
 
   app.openapi(createRoute({
@@ -376,20 +327,9 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   ), 200))
 
   app.openapi(createRoute({
-    method: 'post', path: `${character}/account-pool/newbi/test`, security,
-    request: { params: characterParams, body: body(newbiAccountTest) },
-    responses: { ...errors, 200: success(newbiAccountPreview) },
-  }), async (c) => {
-    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN']))
-    c.header('Cache-Control', 'no-store')
-    return c.json(newbiAccountPreview.parse(await identifyNewbi(c.req.valid('json').credential)), 200)
-  })
-
-  app.openapi(createRoute({
     method: 'post', path: `${character}/account-pool`, security,
     request: { params: characterParams, headers: schema.idempotencyHeader,
-      body: body(z.union([schema.simulationAccountRegistration, connectorAccountRegistration])) },
+      body: body(z.union([schema.simulationAccountRegistration, newbi.registrationSchema])) },
     responses: { ...errors, 201: success(schema.commandResponse) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
@@ -399,11 +339,8 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'account.register', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
-      if (input.platform !== 'newbi') return management.registerAccount(tx, scope, input)
-      const account = await identifyNewbi(input.credential, input.agentId)
-      const result = await management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: account.endpoint, remoteAccountId: account.agentId })
-      await management.saveNewbiCredential(tx, account, input.credential)
-      return result
+      return input.platform === newbi.registrationSchema.shape.platform.value
+        ? newbi.registerAccount(tx, scope, input) : management.registerAccount(tx, scope, input)
     })
     return c.json({ ...result, requestId }, 201)
   })
@@ -474,7 +411,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'control.apply', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.control(tx, scope, input, verifySavedConnector))
+    }, (tx) => management.control(tx, scope, input, newbi.verifySavedConnector))
     return c.json({ ...result, requestId }, 200)
   })
 
@@ -1113,166 +1050,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     db, { ...c.req.valid('param'), actor: c.get('actor') },
   ), 200))
 
-  const newbi = `${character}/newbi` as const
-  const newbiReplyParams = characterParams.extend({ replyId: schema.resourceId })
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/accounts`, security,
-    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(newbiAccountInput) },
-    responses: { ...errors, 201: success(schema.commandResponse) },
-  }), async (c) => {
-    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    const input = c.req.valid('json')
-    const requestId = c.get('requestId')
-    const result = await management.executeManagementCommand(db, {
-      ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
-      key: c.req.valid('header')['idempotency-key'],
-    }, async (tx) => {
-      const account = await identifyNewbi(input.credential, input.agentId)
-      const result = await bindNewbiAccount(tx, scope, { ...input, ...account })
-      await management.saveNewbiCredential(tx, account, input.credential)
-      return result
-    })
-    return c.json({ ...result, requestId }, 201)
-  })
-
-  app.openapi(createRoute({
-    method: 'get', path: `${newbi}/replies`, security,
-    request: { params: characterParams, query: newbiReplyQuery },
-    responses: { ...errors, 200: success(schema.pageView(newbiReplySummary)) },
-  }), async (c) => {
-    const query = c.req.valid('query')
-    return c.json(await listNewbiReplies(db, { ...c.req.valid('param'), actor: c.get('actor') },
-      management.parsePage(query), query), 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/replies`, security,
-    request: { params: characterParams, headers: schema.idempotencyHeader, body: body(newbiReplyInput) },
-    responses: { ...errors, 201: success(schema.commandResponse) },
-  }), async (c) => {
-    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    const input = c.req.valid('json')
-    const requestId = c.get('requestId')
-    const result = await management.executeManagementCommand(db, {
-      ...scope, operation: 'newbi.reply.create', targetScope: scope.characterId, input, requestId,
-      key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => createNewbiReply(tx, scope, input, requireNewbi))
-    return c.json({ ...result, requestId }, 201)
-  })
-
-  app.openapi(createRoute({
-    method: 'get', path: `${newbi}/replies/{replyId}`, security,
-    request: { params: newbiReplyParams }, responses: { ...errors, 200: success(newbiReviewView) },
-  }), async (c) => {
-    const { characterId, replyId } = c.req.valid('param')
-    const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
-    return c.json({ ...reply, connectorAvailable: await newbiAvailable(reply.endpoint) }, 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'get', path: `${newbi}/replies/{replyId}/thread`, security,
-    request: { params: newbiReplyParams },
-    responses: { ...errors, 200: success(newbiThreadView), 503: failure },
-  }), async (c) => {
-    const { characterId, replyId } = c.req.valid('param')
-    const { accountId, agentId, endpoint, postId } = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
-    await requireNewbi(endpoint)
-    const thread = await readConnectorThread?.({ accountId, agentId, endpoint, postId }).catch(() => undefined)
-    if (!thread) return c.json(error(c.get('requestId'), 'CONNECTOR_THREAD_UNAVAILABLE', 'Newbi discussion is unavailable'), 503)
-    return c.json(newbiThreadView.parse(thread), 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/replies/{replyId}/decision`, security,
-    request: { params: newbiReplyParams, headers: schema.idempotencyHeader, body: body(newbiDecisionInput) },
-    responses: { ...errors, 200: success(schema.commandResponse) },
-  }), async (c) => {
-    const { characterId, replyId } = c.req.valid('param')
-    const scope = { characterId, actor: c.get('actor') }
-    const input = c.req.valid('json')
-    const requestId = c.get('requestId')
-    const result = await management.executeManagementCommand(db, {
-      ...scope, operation: 'newbi.reply.review', targetScope: characterId + '/' + replyId, input, requestId,
-      key: c.req.valid('header')['idempotency-key'], roles: ['REVIEWER'],
-    }, (tx) => decideNewbiReply(tx, scope, replyId, input, requireNewbi))
-    return c.json({ ...result, requestId }, 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/replies/{replyId}/send`, security,
-    request: { params: newbiReplyParams, body: body(newbiSendInput) },
-    responses: { ...errors, 200: success(newbiSendView) },
-  }), async (c) => {
-    const { characterId, replyId } = c.req.valid('param')
-    const { retry } = c.req.valid('json')
-    const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId, ['ADMIN'])
-    const eligible = retry ? ['UNKNOWN', 'IN_FLIGHT'].includes(reply.status) : reply.status === 'READY'
-    if (!eligible) throw new management.ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is not eligible to send')
-    await requireNewbi(reply.endpoint)
-    const result = await sendConnector?.(reply.id, retry)
-    return c.json(newbiSendView.parse(result ?? { status: 'UNAVAILABLE' }), 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/replies/{replyId}/close`, security,
-    request: { params: newbiReplyParams, headers: schema.idempotencyHeader, body: body(newbiClosureInput) },
-    responses: { ...errors, 200: success(schema.commandResponse) },
-  }), async (c) => {
-    const { characterId, replyId } = c.req.valid('param')
-    const scope = { characterId, actor: c.get('actor') }
-    const input = c.req.valid('json')
-    const requestId = c.get('requestId')
-    const result = await management.executeManagementCommand(db, {
-      ...scope, operation: 'newbi.reply.close', targetScope: characterId + '/' + replyId, input, requestId,
-      key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => closeNewbiReply(tx, scope, replyId, input))
-    return c.json({ ...result, requestId }, 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/accounts/{accountId}/check`, security,
-    request: { params: z.object({ characterId: schema.resourceId, accountId: schema.resourceId }) },
-    responses: { ...errors, 200: success(newbiAccountCheckView) },
-  }), async (c) => {
-    const { characterId, accountId } = c.req.valid('param')
-    const result = await checkNewbiAccount(db, { characterId, actor: c.get('actor') }, accountId, async (endpoint, agentId) => {
-      await requireNewbi(endpoint)
-      return verifySavedConnector(endpoint, agentId)
-    })
-    return c.json(result, 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'get', path: `${newbi}/accounts/{accountId}/events`, security,
-    request: { params: z.object({ characterId: schema.resourceId, accountId: schema.resourceId }) },
-    responses: { ...errors, 200: success(newbiInboxView) },
-  }), async (c) => {
-    const { characterId, accountId } = c.req.valid('param')
-    return c.json(await getNewbiInbox(db, { characterId, actor: c.get('actor') }, accountId), 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: `${newbi}/accounts/{accountId}/events/poll`, security,
-    request: { params: characterParams.extend({ accountId: schema.resourceId }) },
-    responses: { ...errors, 200: success(newbiPollView) },
-  }), async (c) => {
-    const { characterId, accountId } = c.req.valid('param')
-    await db.$transaction(async (tx) => {
-      await management.authorize(tx, { characterId, actor: c.get('actor') }, ['ADMIN'])
-      const account = await tx.platformAccount.findFirst({
-        where: { id: accountId, characterId, platform: 'newbi' },
-        select: { status: true, instanceKey: true, identity: { select: { status: true, character: { select: { status: true } } } } },
-      })
-      if (!account) throw new management.ManagementError(404, 'NOT_FOUND', 'Newbi account not found')
-      if ([account.status, account.identity.status, account.identity.character.status].some((status) => status !== 'ACTIVE')) {
-        throw new management.ManagementError(409, 'STATE_CONFLICT', 'Newbi account is inactive')
-      }
-      await requireNewbi(account.instanceKey)
-    })
-    const result = await pollConnector?.(accountId)
-    if (!result) throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Newbi reading is unavailable')
-    return c.json(newbiPollView.parse(result), 200)
-  })
+  newbi.registerRoutes(app)
 
   app.doc31('/openapi.json', {
     openapi: '3.1.0', info: { title: 'Rica Management API', version: '1.0.0' }, servers: [{ url: '/v1' }],

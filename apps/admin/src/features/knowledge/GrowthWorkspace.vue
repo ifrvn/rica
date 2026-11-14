@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { NAlert, NEmpty, NFormItem, NSelect, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { identityView } from '../../../../../packages/contracts/management.js'
-import { characterPath, readAll, useConsoleTask } from '../../shared/console-data.js'
+import { characterPath, readAll, useConsoleTask } from '@rica/console-shared/console-data'
 import IdentityGrowth from './IdentityGrowth.vue'
 
 type Identity = z.infer<typeof identityView>

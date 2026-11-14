@@ -3,8 +3,8 @@ import { onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NInputNumber, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { beliefSummary, beliefView, contactBoundaryView, contactSummary, dailyEnergyView, identityReflectionView, manualGoalView } from '../../../../../packages/contracts/management.js'
-import { characterPath, formatTime, queryPath, useConsoleTask, utcToday, type Page } from '../../shared/console-data.js'
-import { request, RequestError } from '../../shared/request.js'
+import { characterPath, formatTime, queryPath, useConsoleTask, utcToday, type Page } from '@rica/console-shared/console-data'
+import { request, RequestError } from '@rica/console-shared/request'
 
 type Goal = z.infer<typeof manualGoalView>
 type Belief = z.infer<typeof beliefView>

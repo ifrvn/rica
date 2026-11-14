@@ -1,8 +1,8 @@
 import type { RawQueryClient } from '../../packages/persistence/client.js'
 import type { Prisma, PrismaClient } from '../../packages/persistence/generated/client.js'
 import type { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
-import { startNewbiReader, type NewbiConnection } from '@rica/plugin-newbi/reader'
-import { startNewbiExecutor } from '@rica/plugin-newbi/executor'
+import { startNewbiReader, type NewbiConnection } from './reader.js'
+import { startNewbiExecutor } from './executor.js'
 
 export function scopedNewbiDatabase(db: PrismaClient, role: 'reader' | 'executor'): RawQueryClient {
   return {

@@ -4,8 +4,8 @@ import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag
 import type { z } from '@hono/zod-openapi'
 import type { accountView, identityView, memoryProvenanceView, memoryView } from '../../../../../packages/contracts/management.js'
 import MemoryGrantWorkspace from './MemoryGrantWorkspace.vue'
-import { characterPath, focusRecord, formatTime, queryPath, readAll, useConsoleTask, type Page } from '../../shared/console-data.js'
-import { request, RequestError } from '../../shared/request.js'
+import { characterPath, focusRecord, formatTime, queryPath, readAll, useConsoleTask, type Page } from '@rica/console-shared/console-data'
+import { request, RequestError } from '@rica/console-shared/request'
 
 type Memory = z.infer<typeof memoryView>
 type Provenance = z.infer<typeof memoryProvenanceView>

@@ -1,6 +1,7 @@
-import { startModelPlugin } from '../runtime-plugins.js'
-import type { ModelCheckResult, ModelSettingsInput } from '../../packages/contracts/model-settings.js'
-import { HostedModelError } from '@rica/plugin-hosted-models'
+import type { ModelProvider } from '@rica/contracts/model-provider'
+import type { Plugin } from '@rica/plugin-host'
+import type { ModelCheckResult, ModelSettingsInput } from '@rica/contracts/model-settings'
+import { HostedModelError } from './index.js'
 
 function failureStatus(cause: unknown): ModelCheckResult['status'] {
   if (!(cause instanceof HostedModelError)) return 'PROVIDER_ERROR'
@@ -12,7 +13,9 @@ function failureStatus(cause: unknown): ModelCheckResult['status'] {
   return 'PROVIDER_ERROR'
 }
 
-export async function checkModel(configuration: ModelSettingsInput & { provider: ModelCheckResult['provider'] }): Promise<ModelCheckResult> {
+export async function checkModel(configuration: ModelSettingsInput & { provider: ModelCheckResult['provider'] },
+  startModelPlugin: (configuration: ModelSettingsInput) => Promise<{ model: Plugin<ModelProvider>; stop: () => Promise<void> }>,
+): Promise<ModelCheckResult> {
   const { provider, apiKey } = configuration
   let reply: string | null = null
   let status: ModelCheckResult['status'] = 'OK'

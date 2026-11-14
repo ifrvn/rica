@@ -13,7 +13,7 @@
     "db:migrate": "prisma migrate deploy",
     "dev:api": "tsx watch apps/api/main.ts",
     "dev:worker": "tsx watch apps/worker/main.ts",
-    "pilot:newbi": "tsx apps/worker/newbi-pilot.ts",
+    "pilot:newbi": "tsx scripts/newbi-pilot.ts",
     "maintenance:retention": "tsx apps/worker/retention.ts",
     "dev:simulation": "tsx apps/worker/simulation.ts",
     "admin:user": "tsx scripts/admin-user.ts",
@@ -24,6 +24,7 @@
     "build": "vite build --config apps/admin/vite.config.ts"
   },
   "dependencies": {
+    "@rica/console-shared": "workspace:*",
     "@rica/contracts": "workspace:*",
     "@rica/plugin-host": "workspace:*",
     "@rica/plugin-hosted-models": "workspace:*",

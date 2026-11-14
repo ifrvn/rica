@@ -4,11 +4,12 @@ import { NAlert, NButton, NTag } from 'naive-ui'
 import type { PluginService } from '../../../../../packages/contracts/plugin-status.js'
 import type { Readiness } from '../../../../../packages/contracts/health.js'
 import { deploymentPluginIds } from '../../../../../packages/contracts/deployment-plugins.js'
-import { formatTime } from '../../shared/console-data.js'
-import { modelCheckLabels, pluginNames, usePluginStatus } from '../plugins/plugin-status.js'
+import { newbiHealth, isNewbiReadNode, type HealthNode } from '@rica/plugin-newbi/console/health'
+import { formatTime } from '@rica/console-shared/console-data'
+import { modelCheckLabels } from '@rica/plugin-hosted-models/console/labels'
+import { pluginNames, usePluginStatus } from '../plugins/plugin-status.js'
 
-type Tone = 'default' | 'success' | 'warning' | 'error'
-type Node = { id: string; label: string; description: string; state: string; tone: Tone; at?: string; diagnostic?: string }
+type Node = HealthNode
 const props = defineProps<{ characterId: string; readiness?: Readiness; checkedAt?: string; checking: boolean; initialNode?: string }>()
 const emit = defineEmits<{ expired: []; plugins: []; accounts: []; runs: []; check: [] }>()
 const { status, busy, error, refresh: refreshPlugins } = usePluginStatus(props.characterId, () => emit('expired'))
@@ -55,9 +56,6 @@ const layers = computed(() => {
   const adapters: Node = { id: 'platforms', label: '模拟事件入口', description: '模拟适配器向运行流程提供测试事件。',
     state: adapterCount === undefined ? '载入状态未知' : '已载入 ' + adapterCount + ' 个',
     tone: adapterCount ? 'success' : 'default' }
-  const reader = processNode('connector-reader', '读取 Newbi 消息', '独立读取平台事件到账号收件箱。账号接入及读取记录可在平台账号池查看。')
-  const executor = processNode('connector-executor', '发送 Newbi 回复', '单次发送命令的最近报告。每条回复都须取得对应的发送许可。')
-  const hasNewbi = deployment?.plugins.newbi === 'ENABLED'
   const worker = processNode('worker', '生成草稿', '认知 Worker 消费模拟任务并生成草稿。')
   const loadedModel = services?.find(({ service }) => service === 'worker')?.report?.plugins.find(({ kind }) => kind === 'model')?.id
   const enabledModels = deploymentPluginIds.filter((id) => id !== 'newbi' && deployment?.plugins[id] === 'ENABLED')
@@ -76,21 +74,8 @@ const layers = computed(() => {
   ]
   const external = (id: string, label: string, description: string, configured: boolean): Node =>
     ({ id, label, description, state: configured ? '暂无独立探测' : '待配置', tone: 'default' })
-  if (hasNewbi) {
-    const configured = !!deployment?.newbi.endpoint
-    const read = external('newbi-read', 'Newbi 读取 API', '按当前角色已启用的账号汇总。可在平台账号池查看每个账号的读取结果。', configured)
-    const write = external('newbi-write', 'Newbi 发送 API', '依据当前角色的发送结果。可在审批页查看对应的 Newbi 回执。', configured)
-    const observed = status.value?.newbiConnections
-    if (observed) {
-      read.state = observed.readFailures ? observed.readFailures + ' 个账号读取失败'
-        : observed.lastReadAt ? '有成功读取记录' : observed.activeAccounts ? '待首次读取' : '等待启用账号'
-      read.tone = observed.readFailures ? 'warning' : observed.lastReadAt ? 'success' : 'default'
-      read.at = observed.lastReadAt ?? undefined
-      write.state = observed.hasUnknown ? '有发送结果待核对' : observed.hasReceipt ? '有确认回执' : '待首次确认回执'
-      write.tone = observed.hasUnknown ? 'warning' : observed.hasReceipt ? 'success' : 'default'
-    }
-    dependencies.push(read, write)
-  }
+  const connector = newbiHealth(status.value, processNode, external)
+  dependencies.push(...connector.dependencies)
   for (const id of enabledModels) {
     const configured = deployment?.configuredModel === id
     const check = status.value?.modelCheck
@@ -106,12 +91,12 @@ const layers = computed(() => {
   }
   return [
     { label: '控制面', nodes: [api] },
-    { label: '接收事件', nodes: [adapters, ...(hasNewbi ? [reader] : [])] },
+    { label: '接收事件', nodes: [adapters, ...connector.readers] },
     { label: '生成草稿', edge: '模拟事件入队', nodes: [worker, ...models] },
     { label: '审核动作', edge: '提案送审', nodes: [approval] },
     { label: '执行动作', edge: '按运行模式及许可分流', nodes: [
       processNode('simulation-executor', '写入模拟回执', '模拟执行器为已批准的提案申请许可，并把结果写入模拟账本。'),
-      ...(hasNewbi ? [executor] : []),
+      ...connector.executors,
     ] },
     { label: '外部连接', nodes: dependencies },
   ]
@@ -160,7 +145,7 @@ const detail = computed(() => {
         <p v-else-if="detail.state === '无近期报告'">请确认模拟执行器已启动并连接到本部署的 Redis，再刷新状态。</p>
         <p v-else-if="detail.state === '已就绪'">仍在等待的提案可能受角色当地 22:00 至次日 08:00 的静默时段、账号额度或其他尚未结束的执行影响。</p>
       </template>
-      <NButton v-if="detail.id === 'connector-reader' || detail.id === 'newbi-read'" size="small" secondary
+      <NButton v-if="isNewbiReadNode(detail.id)" size="small" secondary
         @click="emit('accounts')">查看平台账号池</NButton>
       <NButton v-if="detail.id.startsWith('model-api-')" size="small" secondary
         @click="detail.state === '待配置' ? emit('plugins') : emit('runs')">
