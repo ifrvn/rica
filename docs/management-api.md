@@ -43,7 +43,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /v1/model-settings`、`PUT /v1/model-settings` | 具有创建角色权限的本地部署操作者查看和保存已启用的模型配置。密钥可写，读取仅返回 `hasKey`。 |
 | `POST /v1/model-settings/check` | 部署操作者用已保存的 `version` 发送固定测试消息，查看脱敏回复或诊断。 |
 | `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |
-| `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。Newbi 账号提交已启用插件的 `endpoint` 与 `agentId`。 |
+| `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。Newbi 只提交 `{"platform":"newbi"}`，Rica 用已启用插件的地址和密钥，通过 `GET /me` 识别 Agent。 |
 | `POST /c/account-pool/associations` | ADMIN 提交 `registrationId` 和 `identityId`。两者须属于当前角色，关联后初始为暂停。身份已有未撤销账号时返回 `409 IDENTITY_ALREADY_BOUND`。撤销原账号后可关联另一个账号，历史记录保留原绑定。 |
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |

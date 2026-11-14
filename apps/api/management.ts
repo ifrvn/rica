@@ -34,6 +34,7 @@ type Options = {
   modelSettings?: ReturnType<typeof createModelSettingsStore>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   verifyConnector?: management.VerifyConnector
+  identifyConnector?: () => Promise<{ endpoint: string; agentId: string } | undefined>
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -73,7 +74,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  modelSettings, deploymentPlugins, verifyConnector }: Options) {
+  modelSettings, deploymentPlugins, verifyConnector, identifyConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -139,6 +140,12 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     if (!await newbiAvailable(endpoint)) {
       throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Newbi is disabled or its endpoint does not match')
     }
+  }
+  async function identifyNewbi() {
+    const account = await identifyConnector?.()
+    if (!account) throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Could not identify the configured Newbi account')
+    await requireNewbi(account.endpoint)
+    return account
   }
 
   app.openapi(createRoute({
@@ -359,14 +366,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     const input = c.req.valid('json')
     const requestId = c.get('requestId')
-    const account = 'platform' in input ? input
-      : { platform: 'newbi', instanceKey: input.endpoint, remoteAccountId: input.agentId }
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'account.register', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
-      if ('endpoint' in input) await requireNewbi(input.endpoint)
-      return management.registerAccount(tx, scope, account)
+      if (input.platform !== 'newbi') return management.registerAccount(tx, scope, input)
+      const { endpoint, agentId } = await identifyNewbi()
+      return management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: endpoint, remoteAccountId: agentId })
     })
     return c.json({ ...result, requestId }, 201)
   })
@@ -1075,8 +1081,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
-      await requireNewbi(input.endpoint)
-      return bindNewbiAccount(tx, scope, input)
+      return bindNewbiAccount(tx, scope, { ...input, ...await identifyNewbi() })
     })
     return c.json({ ...result, requestId }, 201)
   })

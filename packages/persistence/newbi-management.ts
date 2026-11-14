@@ -11,7 +11,7 @@ const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 function missing(): never { throw new ManagementError(404, 'NOT_FOUND', 'Newbi pilot resource not found') }
 function conflict(): never { throw new ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is no longer eligible') }
 
-export async function bindNewbiAccount(tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof newbiAccountInput>) {
+export async function bindNewbiAccount(tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof newbiAccountInput> & { endpoint: string; agentId: string }) {
   const { id } = await registerAccount(tx, scope, { platform: 'newbi', instanceKey: input.endpoint, remoteAccountId: input.agentId })
   return associateAccount(tx, scope, { registrationId: id, identityId: input.identityId })
 }

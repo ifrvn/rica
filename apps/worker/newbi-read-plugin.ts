@@ -7,15 +7,23 @@ const credentialService = 'local-agent-credential'
 export async function verifyNewbiBinding(endpoint: string, agentId: string, env = process.env, beforeRequest?: () => Promise<void>) {
   // Only the deployment-configured endpoint may receive the deployment credential.
   if (newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).data !== endpoint) return false
+  return (await identifyNewbiAccount(env, beforeRequest))?.agentId === agentId
+}
+
+export async function identifyNewbiAccount(env: NodeJS.ProcessEnv, beforeRequest?: () => Promise<void>) {
+  const endpoint = newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).data
+  if (!endpoint) return
   try {
     const host = await startNewbiReader(env, AbortSignal.timeout(2000), beforeRequest)
     try {
-      return (await host.plugin.implementation.verify()).id === agentId
+      const { id: agentId } = await host.plugin.implementation.verify()
+      await beforeRequest?.()
+      return { endpoint, agentId }
     } finally {
       await host.stop()
     }
   } catch {
-    return false
+    return undefined
   }
 }
 

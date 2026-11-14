@@ -116,9 +116,7 @@ const parsed = computed(() => {
     case 'account': return simulationAccountRegistration.safeParse({
       platform: form.platform, instanceKey: form.instance.trim(), remoteAccountId: form.remoteId.trim(),
     })
-    case 'connector-account': return connectorAccountRegistration.safeParse({
-      endpoint: form.instance.trim(), agentId: form.remoteId.trim(),
-    })
+    case 'connector-account': return connectorAccountRegistration.safeParse({ platform: 'newbi' })
     case 'associate': return accountBindingInput.safeParse({
       registrationId: form.registrationId, identityId: editingIdentity.value?.id,
     })
@@ -138,13 +136,13 @@ const validationMessages: Record<string, string> = {
   writingPrompt: '提示词最多 4000 个字符，可分行填写。',
   registrationId: '请选择要关联的平台账号。',
   platform: '请选择模拟平台。',
-  instance: '请检查实例名称或本机接口地址。',
-  remote: '请检查账号标识或 Agent ID。',
+  instance: '请检查实例名称。',
+  remote: '请检查账号标识。',
   reason: '变更原因最多 240 个字符。',
 }
 const fieldByPath: Record<string, string> = {
   displayName: 'name', aiDisclosure: 'disclosure', writingStyle: 'style',
-  instanceKey: 'instance', endpoint: 'instance', remoteAccountId: 'remote', agentId: 'remote',
+  instanceKey: 'instance', remoteAccountId: 'remote',
 }
 const invalidFields = computed(() => new Set(parsed.value?.error?.issues.map(({ path }) => {
   const field = String(path.at(-1))
@@ -244,6 +242,16 @@ async function run(task: () => Promise<void>) {
       error.value = '该身份已有平台账号。撤销原账号后可重新关联。'
       return
     }
+    if (editor.value === 'connector-account' && cause instanceof RequestError) {
+      if (cause.code === 'CONNECTOR_VERIFICATION_FAILED' || cause.code === 'PLUGIN_STATE_CONFLICT') {
+        error.value = '无法识别 Newbi 账号。请到插件中心核对启用状态、Agent API 地址和密钥。'
+        return
+      }
+      if (cause.code === 'ACCOUNT_REGISTERED' || cause.code === 'CONFLICT') {
+        error.value = '此 Newbi 账号已登记。'
+        return
+      }
+    }
     if (code === 409 && target.value?.connector && target.value.status === 'PAUSED' && !target.value.revoke) {
       error.value = '恢复未完成。请核对部署中的读取凭据、服务地址和 Agent ID，再重试。'
       return
@@ -294,7 +302,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
     registrationId: null, platform: workspace.value?.simulationPlatforms[0] ?? '',
-    instance: kind === 'connector-account' ? newbiEndpoint.value ?? '' : 'local', remoteId: '', reason: '' })
+    instance: 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
   void loadSchemas().catch(() => {})
 }
@@ -433,29 +441,29 @@ onMounted(() => { if (props.characterId) void run(load) })
             <span v-else>模拟模型仍按模板生成回复。</span>
           </template>
         </NFormItem>
-        <template v-if="editor === 'account' || editor === 'connector-account'">
-          <NFormItem v-if="editor === 'account'" label="模拟平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
+        <template v-if="editor === 'account'">
+          <NFormItem label="模拟平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
             <NSelect placeholder="选择模拟平台" filterable v-model:value="form.platform" :to="false" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
               :options="workspace?.simulationPlatforms.map(value => ({ label: value, value }))" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
             </template>
           </NFormItem>
-          <NFormItem :label="editor === 'account' ? '实例标识' : '本机 API 地址'" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
-            <NInput :placeholder="editor === 'account' ? '例如：sandbox' : '例如：http://127.0.0.1:5000/agent-api/v1'" v-model:value="form.instance"
-              :readonly="editor === 'connector-account' && !!newbiEndpoint" :input-props="fieldInput('instance')"
-              @blur="touched.add('instance')" :maxlength="editor === 'account' ? 120 : 160" />
+          <NFormItem label="实例标识" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
+            <NInput placeholder="例如：sandbox" v-model:value="form.instance" :input-props="fieldInput('instance')"
+              @blur="touched.add('instance')" :maxlength="120" />
             <template v-if="fieldError('instance')" #feedback>
               <span id="workspace-instance-error">{{ fieldError('instance') }}</span>
             </template>
           </NFormItem>
-          <NFormItem :label="editor === 'account' ? '模拟平台账号标识' : 'Agent ID'" :label-props="{ for: 'workspace-remote' }" :validation-status="fieldError('remote') ? 'error' : undefined">
-            <NInput :placeholder="editor === 'account' ? '例如：demo-account' : '输入连接器分配的 Agent ID'" v-model:value="form.remoteId" :input-props="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
+          <NFormItem label="模拟平台账号标识" :label-props="{ for: 'workspace-remote' }" :validation-status="fieldError('remote') ? 'error' : undefined">
+            <NInput placeholder="例如：demo-account" v-model:value="form.remoteId" :input-props="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
             <template v-if="fieldError('remote')" #feedback>
               <span id="workspace-remote-error">{{ fieldError('remote') }}</span>
             </template>
           </NFormItem>
         </template>
+        <p v-if="editor === 'connector-account'">Rica 会用插件中心配置的密钥识别 Newbi 账号，并将它加入当前角色的账号池。</p>
         <template v-if="editor === 'associate'">
           <p>关联到 {{ editingIdentity && identityName(editingIdentity) }}</p>
           <p v-if="!accountPool.length" class="workspace-muted">账号池暂无可关联账号，请先登记账号。</p>

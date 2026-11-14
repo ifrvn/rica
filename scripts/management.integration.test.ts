@@ -9,7 +9,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
-import { startNewbiReader, verifyNewbiBinding } from '../apps/worker/newbi-read-plugin.js'
+import { identifyNewbiAccount, startNewbiReader, verifyNewbiBinding } from '../apps/worker/newbi-read-plugin.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -49,6 +49,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
     verifyConnector: (endpoint, agentId) => verifyNewbiBinding(endpoint, agentId, connectorEnv),
+    identifyConnector: () => identifyNewbiAccount(connectorEnv),
     deploymentPlugins,
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
@@ -2742,13 +2743,13 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   try {
     const identityId = await reflectionIdentity()
     const prefix = characterPath(a) + '/newbi'
-    const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId, agentId, endpoint } })
+    connectorEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
+    const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId } })
     assert.equal(binding.status, 201, JSON.stringify(binding.body))
     const accountId = binding.body.id
     assert.equal(binding.body.status, 'PAUSED')
     const resume = (key: string, actor = 'admin-a') => request('POST', characterPath(a) + '/controls', { actor, key,
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
-    connectorEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
     const checkPath = prefix + '/accounts/' + accountId + '/check'
     assert.equal((await request('POST', checkPath, { actor: 'reviewer' })).status, 403)
     assert.equal((await request('POST', characterPath(b) + '/newbi/accounts/' + accountId + '/check', { actor: 'admin-b' })).status, 404)
@@ -3040,7 +3041,21 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
   try {
     const identityId = await reflectionIdentity()
     const character = characterPath(a)
-    const bind = await request('POST', character + '/newbi/accounts', { key: 'newbi-events-bind', data: { identityId, agentId, endpoint } })
+    const pool = character + '/account-pool'
+    const data = { platform: 'newbi' }
+    connectorEnv = { ...readerEnv, NEWBI_AGENT_KEY: 'nbi_agent_' + 'x'.repeat(43) }
+    assert.equal((await request('POST', pool, { key: 'newbi-events-register', data })).body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
+    connectorEnv = readerEnv
+    assert.equal((await request('POST', pool, { actor: 'reviewer', key: 'newbi-events-forbidden', data })).status, 403)
+    assert.equal((await request('POST', pool, { key: 'newbi-events-spoof', data: { ...data, agentId, endpoint } })).status, 422)
+    const registered = await request('POST', pool, { key: 'newbi-events-register', data })
+    assert.equal(registered.status, 201, JSON.stringify(registered.body))
+    const row = (await request('GET', pool)).body.items.find(({ id }: { id: string }) => id === registered.body.id)
+    assert.equal(row.remoteAccountId, agentId)
+    assert.equal(row.instanceKey, endpoint)
+    const bind = await request('POST', pool + '/associations', {
+      key: 'newbi-events-bind', data: { identityId, registrationId: registered.body.id },
+    })
     assert.equal(bind.status, 201, JSON.stringify(bind.body))
     const accountId: string = bind.body.id
     const reader = host.plugin.implementation
@@ -3052,8 +3067,9 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
       data: { scope: 'ACCOUNT', scopeId: accountId, operation, reason: 'Event polling fixture' } })
     const inbox = '/newbi/accounts/' + accountId + '/events'
 
+    const callsAfterRegistration = calls
     assert.deepEqual(await poll(), { status: 'STOPPED' })
-    assert.equal(calls, 0)
+    assert.equal(calls, callsAfterRegistration)
     connectorEnv = readerEnv
     assert.equal((await control('RESUME')).status, 200)
     connectorEnv = {}
