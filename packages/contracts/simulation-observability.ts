@@ -1,7 +1,7 @@
 import { z } from '@hono/zod-openapi'
 
 import { listQuery, resourceId } from './management.js'
-import { maxSimulatedTextLength } from '../runtime/model-provider.js'
+import { maxSimulatedTextLength } from './model-provider.js'
 
 const timestamp = z.iso.datetime({ offset: true })
 export const consoleSimulationInput = z.strictObject({

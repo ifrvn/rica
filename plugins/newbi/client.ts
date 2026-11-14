@@ -1,9 +1,8 @@
 import { request as directRequest } from 'node:http'
 import { z } from '@hono/zod-openapi'
-import { newbiCredential } from '../contracts/deployment-plugins.js'
-import { newbiEndpoint } from '../contracts/newbi-pilot.js'
-import type { PlatformEventReader } from '../contracts/platform-reader.js'
-import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
+import { newbiCredential, newbiEndpoint } from '@rica/contracts/newbi-pilot'
+import type { PlatformEventReader } from '@rica/contracts/platform-reader'
+import { PlatformReplyError, type PlatformReplyExecutor } from '@rica/contracts/platform-reply-executor'
 
 const uuid = z.uuid().transform((value) => value.toLowerCase())
 const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string(), avatarUrl: z.string().nullish() })

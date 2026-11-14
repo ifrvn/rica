@@ -12,7 +12,7 @@ import { Prisma, type MemoryPurpose, type MemoryScope, type MemoryVisibility } f
 import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '../packages/persistence/inbound.js'
 import { loadConfig } from '../packages/runtime/config.js'
-import { simulatedModel, simulatedModelPlugin } from '../packages/runtime/simulated-model.js'
+import { simulatedModel, simulatedModelPlugin } from '@rica/plugin-simulated-model'
 import { generateSimulatedDraft, processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '../packages/persistence/memory-snapshot.js'

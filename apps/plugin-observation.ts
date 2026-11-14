@@ -3,7 +3,7 @@ import { newbiReaderIdentity } from '../packages/contracts/newbi-pilot.js'
 import { newbiExecutorIdentity } from '../packages/contracts/newbi-executor-identity.js'
 import { pluginDiagnostic, pluginReport, pluginServices, type PluginDiagnostic, type PluginMetadata,
   type PluginReport, type PluginService } from '../packages/contracts/plugin-status.js'
-import { PluginHostError } from '../packages/runtime/plugin-registry.js'
+import { PluginHostError } from '@rica/plugin-host'
 import { cognitionCatalog, simulationPlatformCatalog } from './runtime-plugins.js'
 
 const catalog: Record<PluginService, PluginMetadata[]> = {

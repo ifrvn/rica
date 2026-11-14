@@ -1,4 +1,4 @@
-import { maxSimulatedTextLength } from '../runtime/model-provider.js'
+import { maxSimulatedTextLength } from '@rica/contracts/model-provider'
 import type { NormalizedPlatformEvent, ResolveSimulationPlatform } from '../contracts/simulation-platform.js'
 import type { InboundKind, PrismaClient } from './generated/client.js'
 import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'

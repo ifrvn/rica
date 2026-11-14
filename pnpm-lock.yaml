@@ -178,6 +178,24 @@ importers:
       '@prisma/client':
         specifier: ^7.10.1
         version: 7.10.1(@typescript/typescript6@6.0.2)(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
+      '@rica/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@rica/plugin-host':
+        specifier: workspace:*
+        version: link:packages/plugin-host
+      '@rica/plugin-hosted-models':
+        specifier: workspace:*
+        version: link:plugins/hosted-models
+      '@rica/plugin-newbi':
+        specifier: workspace:*
+        version: link:plugins/newbi
+      '@rica/plugin-simulated-model':
+        specifier: workspace:*
+        version: link:plugins/simulated-model
+      '@rica/plugin-simulated-platforms':
+        specifier: workspace:*
+        version: link:plugins/simulated-platforms
       '@simplewebauthn/browser':
         specifier: ^14.0.0
         version: 14.0.0
@@ -248,6 +266,62 @@ importers:
       vue-tsc:
         specifier: ^3.3.14
         version: 3.3.14(@typescript/typescript6@6.0.2)
+
+  packages/contracts:
+    dependencies:
+      '@hono/zod-openapi':
+        specifier: ^1.6.3
+        version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@rica/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+
+  packages/plugin-host: {}
+
+  plugins/hosted-models:
+    dependencies:
+      '@rica/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@rica/plugin-host':
+        specifier: workspace:*
+        version: link:../../packages/plugin-host
+      '@rica/plugin-simulated-model':
+        specifier: workspace:*
+        version: link:../simulated-model
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  plugins/newbi:
+    dependencies:
+      '@hono/zod-openapi':
+        specifier: ^1.6.3
+        version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@rica/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@rica/plugin-host':
+        specifier: workspace:*
+        version: link:../../packages/plugin-host
+
+  plugins/simulated-model:
+    dependencies:
+      '@rica/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@rica/plugin-host':
+        specifier: workspace:*
+        version: link:../../packages/plugin-host
+
+  plugins/simulated-platforms:
+    dependencies:
+      '@rica/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@rica/plugin-host':
+        specifier: workspace:*
+        version: link:../../packages/plugin-host
 
 packages:
 

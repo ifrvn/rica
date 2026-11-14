@@ -1,0 +1,11 @@
+{
+  "name": "@rica/plugin-simulated-platforms",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "dependencies": {
+    "@rica/contracts": "workspace:*",
+    "@rica/plugin-host": "workspace:*"
+  }
+}

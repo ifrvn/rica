@@ -1,11 +1,10 @@
 import { z } from '@hono/zod-openapi'
-import { newbiAccountTest, newbiEndpoint } from './newbi-pilot.js'
+import { newbiEndpoint } from './newbi-pilot.js'
 
 export const deploymentPluginIds = ['newbi', 'openai', 'anthropic', 'gemini', 'openai-compatible'] as const
 export const deploymentPluginId = z.enum(deploymentPluginIds)
 export type DeploymentPluginId = z.infer<typeof deploymentPluginId>
 export const pluginStage = z.enum(['NOT_INSTALLED', 'INSTALLED', 'ENABLED'])
-export const newbiCredential = newbiAccountTest.shape.credential
 export const deploymentPluginChange = z.discriminatedUnion('action', [
   z.strictObject({ action: z.enum(['INSTALL', 'ENABLE', 'DISABLE']), id: deploymentPluginId }),
   z.strictObject({ action: z.literal('CONFIGURE_NEWBI'), endpoint: newbiEndpoint }),

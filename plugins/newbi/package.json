@@ -1,0 +1,16 @@
+{
+  "name": "@rica/plugin-newbi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./reader": "./reader.ts",
+    "./executor": "./executor.ts",
+    "./client": "./client.ts"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "^1.6.3",
+    "@rica/contracts": "workspace:*",
+    "@rica/plugin-host": "workspace:*"
+  }
+}

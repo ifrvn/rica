@@ -1,6 +1,6 @@
-import { newbiEndpoint, newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
-import { createNewbiReadClient } from '../../packages/runtime/newbi-client.js'
-import { startPluginHost, type PluginDefinition } from '../../packages/runtime/plugin-registry.js'
+import { newbiEndpoint, newbiReaderIdentity } from '@rica/contracts/newbi-pilot'
+import { createNewbiReadClient } from './client.js'
+import { startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 
 const credentialService = 'local-agent-credential'
 

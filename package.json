@@ -24,6 +24,12 @@
     "build": "vite build --config apps/admin/vite.config.ts"
   },
   "dependencies": {
+    "@rica/contracts": "workspace:*",
+    "@rica/plugin-host": "workspace:*",
+    "@rica/plugin-hosted-models": "workspace:*",
+    "@rica/plugin-newbi": "workspace:*",
+    "@rica/plugin-simulated-model": "workspace:*",
+    "@rica/plugin-simulated-platforms": "workspace:*",
     "@hono/node-server": "^2.1.6",
     "@hono/zod-openapi": "^1.6.3",
     "@prisma/adapter-pg": "^7.10.1",

@@ -1,5 +1,5 @@
-import type { ModelProvider } from './model-provider.js'
-import type { Plugin, PluginDefinition } from './plugin-registry.js'
+import type { ModelProvider } from '@rica/contracts/model-provider'
+import type { Plugin, PluginDefinition } from '@rica/plugin-host'
 
 const replies = {
   neutral: { noEvidence: '收到，我会考虑这条消息。', prefix: '' },

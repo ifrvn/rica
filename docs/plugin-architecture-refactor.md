@@ -12,11 +12,21 @@
 | 本机试点已有独立的只读事件接收、单次发送及结果恢复。 | 先把只读协议接入平台能力，随后单独装配写入与对账，保留已有账本和进程权限。 |
 | 已有授权候选排序和长期评测。 | 排序保留原算法，评测保留原输入和指标。出现第二种实现时，再抽取对应扩展点。 |
 
-代码基线见[注册表](../packages/runtime/plugin-registry.ts)、[模型提供方](../packages/runtime/model-provider.ts)、[模拟适配器](../packages/runtime/simulated-platforms.ts)、[审批](../packages/persistence/action-review.ts)和[模拟执行](../packages/persistence/simulation-execution.ts)。
+当前代码入口见[注册表](../packages/plugin-host/plugin-registry.ts)、[模型契约](../packages/contracts/model-provider.ts)、[模拟适配器](../plugins/simulated-platforms/index.ts)、[审批](../packages/persistence/action-review.ts)和[模拟执行](../packages/persistence/simulation-execution.ts)。
 
 ## 2. 目标架构
 
-采用随 Rica 一起发布的 TypeScript 实现。Hono API 和各 Worker 在各自入口使用工厂显式注册，部署配置按 ID 启用。进程装配按当前职责分配能力，替换通过部署重启完成。首轮沿用现有单包与 pnpm 锁文件。
+插件采用随 Rica 一起部署的 TypeScript 实现。pnpm workspace 共用根锁文件。各插件通过 `package.json` 声明入口和依赖，宿主以 `workspace:*` 引用。Hono API 和各 Worker 在各自入口使用工厂显式注册，部署配置按 ID 启用，版本替换通过部署重启完成。
+
+| 工作区包 | 职责 |
+| --- | --- |
+| `@rica/plugin-newbi` | Newbi 协议客户端、读取与发送组件。组件随同一个包部署，分别注册和报告。 |
+| `@rica/plugin-hosted-models` | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的请求和响应适配。 |
+| `@rica/plugin-simulated-model` | 模拟决策与本地模板回复。外部模型复用这里的本地决策。 |
+| `@rica/plugin-simulated-platforms` | mock-a 与 mock-b 的模拟事件适配器。 |
+| `@rica/contracts`、`@rica/plugin-host` | 共用输入输出、插件定义、注册校验和生命周期。 |
+
+数据库连接、凭据保存和提取、角色授权、审批、发送许可及回执留在宿主。Newbi 包收到当前账号的连接信息和请求前校验，宿主负责决定读取或执行的范围。包为仓库内的私有工作区成员，继续通过根目录的命令启动和构建。
 
 ```mermaid
 flowchart LR

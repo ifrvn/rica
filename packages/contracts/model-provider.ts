@@ -1,4 +1,4 @@
-import type { RunContinuity, RunTime } from '../persistence/run-continuity.js'
+import type { RunContinuity, RunTime } from './run-continuity.js'
 
 export const maxSimulatedTextLength = 4_000
 

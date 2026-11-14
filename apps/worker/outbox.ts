@@ -8,10 +8,10 @@ import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEve
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
 import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
-import type { ModelProvider } from '../../packages/runtime/model-provider.js'
-import { HostedModelError } from '../../packages/runtime/hosted-models.js'
+import type { ModelProvider } from '@rica/contracts/model-provider'
+import { HostedModelError } from '@rica/plugin-hosted-models'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import type { Plugin } from '../../packages/runtime/plugin-registry.js'
+import type { Plugin } from '@rica/plugin-host'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 export const outboxQueueName = 'character-bootstrap'

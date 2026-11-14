@@ -1,6 +1,6 @@
 import { startModelPlugin } from '../runtime-plugins.js'
 import type { ModelCheckResult, ModelSettingsInput } from '../../packages/contracts/model-settings.js'
-import { HostedModelError } from '../../packages/runtime/hosted-models.js'
+import { HostedModelError } from '@rica/plugin-hosted-models'
 
 function failureStatus(cause: unknown): ModelCheckResult['status'] {
   if (!(cause instanceof HostedModelError)) return 'PROVIDER_ERROR'

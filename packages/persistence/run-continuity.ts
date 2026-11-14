@@ -1,61 +1,7 @@
+import type { Continuity, IdentityState, RunContinuity, RunTime, SubjectiveBelief } from '@rica/contracts/run-continuity'
 import type { Prisma } from './generated/client.js'
 
-export type RunTime = Readonly<{
-  occurredAt: string
-  now: string
-  timezone: string
-  localDate: string
-  eventLocalDate: string
-  localHour: number
-}>
-
-type IdentityState = Readonly<{
-  revision: number | null
-  ruleVersion: number
-  configurationVersion: number | null
-  sharedEnergy: 'LOW' | 'NORMAL' | 'HIGH'
-  motivation: { exploration: number; expression: number; social: number; rest: number }
-  affect: { pleasure: number; arousal: number; energy: number }
-}>
-
-type SubjectiveBelief = Readonly<{
-  id: string
-  version: number
-  kind: 'OPINION' | 'PREFERENCE'
-  statement: string
-  confidence: number
-  subjective: true
-}>
-
-type Continuity = {
-  runId: string
-  characterId: string
-  identityId: string
-  accountId: string
-  triggerId: string
-  bindingVersion: number
-  mode: 'SIMULATION'
-  platform: string
-  instanceKey: string
-  conversationId: string | null
-  contactId: string | null
-  occurredAt: string
-  now: string
-  timezone: string
-  recent: readonly { kind: string; occurredAt: string }[]
-  nextCommitmentAt: string | null
-  nextScheduleAt: string | null
-  relationship: { confirmedInteractions: number; lastConfirmedAt: string | null } | null
-  goals: readonly { id: string; version: number; origin: 'ADMIN' | 'SELF'; title: string; budget: number; priority: number; dueAt: string; nextStep: string | null }[]
-  self: {
-    coreVersion: number
-    name: string | null
-    fictionalBackground: string | null
-    facts: readonly { id: string; revision: number; content: string }[]
-  }
-}
-
-export async function loadRunContinuity(tx: Prisma.TransactionClient, runId: string) {
+export async function loadRunContinuity(tx: Prisma.TransactionClient, runId: string): Promise<RunContinuity | null> {
   const [row] = await tx.$queryRaw<{
     context: Continuity | null; identityState: IdentityState | null; beliefs: readonly SubjectiveBelief[]
   }[]>`
@@ -82,5 +28,3 @@ export async function loadRunContinuity(tx: Prisma.TransactionClient, runId: str
   const time: RunTime = { occurredAt, now, timezone: zone, localDate: current.date, eventLocalDate: local(occurredAt).date, localHour: current.hour }
   return { ...context, time, identityState: row.identityState, beliefs: row.beliefs }
 }
-
-export type RunContinuity = NonNullable<Awaited<ReturnType<typeof loadRunContinuity>>>

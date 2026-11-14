@@ -1,8 +1,8 @@
-import type { NewbiConnection } from './newbi-read-plugin.js'
-import { newbiExecutorIdentity } from '../../packages/contracts/newbi-executor-identity.js'
-import { newbiEndpoint } from '../../packages/contracts/newbi-pilot.js'
-import { createNewbiReplyExecutor } from '../../packages/runtime/newbi-client.js'
-import { startPluginHost, type PluginDefinition } from '../../packages/runtime/plugin-registry.js'
+import type { NewbiConnection } from './reader.js'
+import { newbiExecutorIdentity } from '@rica/contracts/newbi-executor-identity'
+import { newbiEndpoint } from '@rica/contracts/newbi-pilot'
+import { createNewbiReplyExecutor } from './client.js'
+import { startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 
 const credentialService = 'local-agent-credential'
 

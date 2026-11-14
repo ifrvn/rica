@@ -1,8 +1,8 @@
 import { z } from 'zod'
-import type { ModelSettingsInput } from '../contracts/model-settings.js'
-import type { ModelProvider } from './model-provider.js'
-import type { PluginDefinition } from './plugin-registry.js'
-import { simulatedModel } from './simulated-model.js'
+import type { ModelSettingsInput } from '@rica/contracts/model-settings'
+import type { ModelProvider } from '@rica/contracts/model-provider'
+import type { PluginDefinition } from '@rica/plugin-host'
+import { simulatedModel } from '@rica/plugin-simulated-model'
 
 const providers = {
   openai: 'https://api.openai.com/v1/chat/completions',

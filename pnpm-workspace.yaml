@@ -1,3 +1,7 @@
+packages:
+  - 'packages/*'
+  - 'plugins/*'
+
 allowBuilds:
   '@prisma/engines': false
   esbuild: false

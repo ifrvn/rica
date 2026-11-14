@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { startCognitionPlugins } from '../../apps/runtime-plugins.js'
-import { HostedModelError } from './hosted-models.js'
-import type { ModelProvider } from './model-provider.js'
+import { HostedModelError } from '@rica/plugin-hosted-models'
+import type { ModelProvider } from '@rica/contracts/model-provider'
 
 const input = {
   text: '活动几点开始？',

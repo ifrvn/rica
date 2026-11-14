@@ -1,4 +1,4 @@
-import type { Plugin } from '../runtime/plugin-registry.js'
+import type { Plugin } from '@rica/plugin-host'
 
 export type NormalizedPlatformEvent = Readonly<{
   remoteAccountId: string

@@ -4,6 +4,7 @@
     "apps/api/**/*.ts",
     "apps/worker/**/*.ts",
     "packages/**/*.ts",
+    "plugins/**/*.ts",
     "scripts/**/*.ts",
     "prisma.config.ts"
   ]
