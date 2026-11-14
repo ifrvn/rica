@@ -872,6 +872,23 @@ function scheduleRuntimeUrl() {
   return url.toString()
 }
 
+test('Newbi database permissions are scoped to each host operation', async () => {
+  await owner.$transaction(async (tx) => {
+    await tx.$executeRaw`SET LOCAL SESSION AUTHORIZATION rica_runtime`
+    const grants = () => tx.$queryRaw<{ reader: boolean; sender: boolean }[]>`
+      SELECT has_function_privilege('public.rica_claim_newbi_event_page(uuid,text)', 'EXECUTE') AS reader,
+        has_function_privilege('public.rica_claim_newbi_reply(uuid,boolean,uuid,text,text)', 'EXECUTE') AS sender
+    `
+    assert.deepEqual(await grants(), [{ reader: false, sender: false }])
+    await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
+    assert.deepEqual(await grants(), [{ reader: true, sender: false }])
+    await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
+    assert.deepEqual(await grants(), [{ reader: false, sender: true }])
+    await tx.$executeRaw`RESET ROLE`
+    assert.deepEqual(await grants(), [{ reader: false, sender: false }])
+  })
+})
+
 async function scheduleConversation() {
   return owner.conversation.create({
     data: {
@@ -2833,7 +2850,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const send = async (id: string, key: string, ...args: string[]) => {
       const processResult = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'send', id, ...args], {
         env: { ...process.env, RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: key,
-          RICA_NEWBI_EXECUTION_DATABASE_URL: executorUrl.toString() },
+          DATABASE_URL: scheduleRuntimeUrl() },
         stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       })
       let stdout = ''
@@ -3066,7 +3083,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.deepEqual(cursors, [null])
 
     worker = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'events', accountId, '--for-seconds', '5'], {
-      env: { ...process.env, ...readerEnv, RICA_NEWBI_POLL_DATABASE_URL: url.toString() },
+      env: { ...process.env, ...readerEnv, DATABASE_URL: scheduleRuntimeUrl() },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })
     let output = ''

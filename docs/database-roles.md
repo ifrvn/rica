@@ -8,6 +8,7 @@
 | API／Worker | `DATABASE_URL` 使用继承 `rica_runtime` 的应用登录。 | 读写运行与出箱所需字段。记忆读取时在事务内切换到 `rica_memory_reader`，由 RLS 判定可见内容。 |
 | 管理 API | 将专用登录配置到 `RICA_MANAGEMENT_DATABASE_URL`，仅授予 `rica_admin_api`。 | 管理配置、成员权限、幂等及追加审计。管理登录可读取本地账号的密码哈希与 Passkey 公钥，并登记 Passkey。只读记忆元数据，无法读取记忆、入站或草稿正文。 |
 | 模拟执行 | 将专用登录配置到 `RICA_SIMULATION_EXECUTION_DATABASE_URL`，仅授予 `rica_simulation_executor`。 | 只处理模拟许可、预算预留和本地回执。复核函数只返回授权结果。 |
+| Newbi 读取及发送 | 复用 `DATABASE_URL`。迁移允许 `rica_runtime` 切换到 `rica_newbi_poller` 和 `rica_newbi_executor`。 | 宿主按操作在事务内切换权限，事务结束即复原。运行账号默认不继承这两个角色的权限。 |
 | 记忆管理 | 管理服务单独使用继承 `rica_memory_admin` 的登录。 | 管理记忆、授权和来源，能推进角色授权版本。业务层负责验证管理员身份和操作范围。 |
 
 迁移完成后，数据库管理员为预先创建的登录赋予组角色。登录名称按部署替换。

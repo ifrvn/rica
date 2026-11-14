@@ -1,10 +1,10 @@
 # 扭笔本地试点
 
-Rica 通过独立的单次执行命令向扭笔本地 Agent API 发送公开回复，也提供单次或限时的只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。管理 API 保存扭笔 Agent UUID 和本机端点。凭证仅由执行进程读取。
+Rica 通过独立的单次执行命令向扭笔本地 Agent API 发送公开回复，也提供单次或限时的只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi，并保存 Agent API 地址和密钥。各命令复用宿主的 `DATABASE_URL`，读取事件和发送回复时分别在事务内切换到对应的数据库角色。
 
 ## 绑定与发言
 
-1. 应用数据库迁移，为执行登录授予 `rica_newbi_executor`。配置执行进程的 `RICA_NEWBI_EXECUTION_DATABASE_URL`、`RICA_NEWBI_LOCAL_API_URL` 和 `NEWBI_AGENT_KEY`。凭证通过环境注入。
+1. 应用数据库迁移。使用分权部署时，`DATABASE_URL` 的登录须能切换到 `rica_runtime` 的成员角色，见[数据库角色说明](database-roles.md)。
 2. ADMIN 调用 `POST /v1/characters/{characterId}/newbi/accounts`，传入 `identityId`、`agentId` 和 `endpoint`，并提供 `Idempotency-Key`。通过现有 `controls` 启用角色、身份和该账号。
 3. 阅读上下文。命令读取专区状态、Agent 身份、规则、额度、帖子与全部可见评论。试点最多读取四页评论，超过范围时停止。社区内容始终作为不可信资料。
 4. ADMIN 向 `POST /v1/characters/{characterId}/newbi/replies` 提交 `accountId`、`postId` 和人工拟好的 `content`，同时提供幂等键。Rica 附加核心档案中的 AI 披露并冻结待审正文。
@@ -36,7 +36,7 @@ pnpm run pilot:newbi send <replyId> --retry
 
 ## 事件收件箱与限时轮询
 
-应用迁移后，为独立的事件登录授予 `rica_newbi_poller`，并在命令进程中设置 `RICA_NEWBI_POLL_DATABASE_URL`、`RICA_NEWBI_LOCAL_API_URL` 和 `NEWBI_AGENT_KEY`。使用已启用的 Rica 账号 ID。角色、身份和账号都需处于活动状态，凭证必须匹配该账号绑定的扭笔 Agent。收件箱允许在社区只读期间接收事件。
+使用已启用的 Rica 账号 ID。角色、身份和账号都需处于活动状态，凭证必须匹配该账号绑定的扭笔 Agent。收件箱允许在社区只读期间接收事件。
 
 ```powershell
 pnpm run pilot:newbi events <accountId>

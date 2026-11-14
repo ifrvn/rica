@@ -1,4 +1,4 @@
-import type { PrismaClient } from './generated/client.js'
+import type { RawQueryClient } from './client.js'
 import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
 
 type Target = {
@@ -10,7 +10,7 @@ type Outcome =
   | { status: 'UNAVAILABLE' | 'UNKNOWN' | 'CLOSED'; reason?: PlatformReplyError['reason']; retryNotBefore?: string }
   | { status: 'SENT'; commentId: string }
 
-export async function executeNewbiReply(db: PrismaClient, client: PlatformReplyExecutor, executorKey: string, id: string, retry = false): Promise<Outcome> {
+export async function executeNewbiReply(db: RawQueryClient, client: PlatformReplyExecutor, executorKey: string, id: string, retry = false): Promise<Outcome> {
   const [row] = await db.$queryRaw<{ target: Target | null }[]>`
     SELECT public.rica_newbi_execution_target(${id}::uuid, ${executorKey}) AS target
   `

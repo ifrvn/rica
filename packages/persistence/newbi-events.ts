@@ -1,7 +1,7 @@
 import { newbiReadError, type NewbiReadError } from '../contracts/newbi-pilot.js'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '../contracts/platform-reader.js'
-import type { PrismaClient } from './generated/client.js'
+import type { RawQueryClient } from './client.js'
 
 type Claim = { ticket: string; cursor: string | null; agentId: string; bindingVersion: number; authEpoch: number }
 type Deferred = { nextAt: string }
@@ -11,7 +11,7 @@ type PollResult =
   | ({ status: 'WAITING'; reason?: 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' } & Deferred)
   | ({ status: 'READ' } & Committed)
 
-export async function pollNewbiEvents(db: PrismaClient, reader: PlatformEventReader, accountId: string, stop?: AbortSignal): Promise<PollResult> {
+export async function pollNewbiEvents(db: RawQueryClient, reader: PlatformEventReader, accountId: string, stop?: AbortSignal): Promise<PollResult> {
   if (stop?.aborted) return { status: 'STOPPED' }
   const [claimed] = await db.$queryRaw<{ claim: Claim | Deferred | null }[]>`
     SELECT public.rica_claim_newbi_event_page(${accountId}::uuid,${reader.endpoint}) AS claim
@@ -60,7 +60,7 @@ export async function pollNewbiEvents(db: PrismaClient, reader: PlatformEventRea
 }
 
 export async function runNewbiEventPoller(
-  db: PrismaClient, reader: PlatformEventReader, accountId: string, report: (result: PollResult) => void, stop?: AbortSignal,
+  db: RawQueryClient, reader: PlatformEventReader, accountId: string, report: (result: PollResult) => void, stop?: AbortSignal,
 ) {
   for (let check = 0; check < (stop ? 100 : 1) && !stop?.aborted; check++) {
     const result = await pollNewbiEvents(db, reader, accountId, stop)

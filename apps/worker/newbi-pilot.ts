@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import { z } from '@hono/zod-openapi'
-import { createDatabase } from '../../packages/persistence/client.js'
+import { createDatabase, type RawQueryClient } from '../../packages/persistence/client.js'
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
@@ -13,12 +13,23 @@ import { startNewbiReader } from './newbi-read-plugin.js'
 import { startNewbiExecutor } from './newbi-execution-plugin.js'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
+import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
+import type { Prisma, PrismaClient } from '../../packages/persistence/generated/client.js'
+
+function scopedDatabase(db: PrismaClient, role: 'reader' | 'executor'): RawQueryClient {
+  return {
+    $queryRaw<T>(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]) {
+      return db.$transaction(async (tx) => {
+        if (role === 'reader') await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
+        else await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
+        return tx.$queryRaw<T>(query, ...values)
+      })
+    },
+  }
+}
 
 async function connectorSettings() {
-  const databaseUrl = process.env.DATABASE_URL
-    ?? process.env.RICA_NEWBI_POLL_DATABASE_URL ?? process.env.RICA_NEWBI_EXECUTION_DATABASE_URL
-  const directory = process.env.RICA_MODEL_SETTINGS_DIR ?? (databaseUrl && modelSettingsDirectory(databaseUrl))
-  if (!directory) throw new Error('Newbi requires the deployment settings directory')
+  const directory = process.env.RICA_MODEL_SETTINGS_DIR ?? modelSettingsDirectory(runtimeDatabaseUrl())
   const store = createDeploymentPluginStore(directory)
   const current = await store.openNewbi()
   if (!current) {
@@ -46,26 +57,24 @@ async function readEvents(accountId: string, args: string[]) {
   const [option, seconds, ...extra] = args
   if (args.length && (option !== '--for-seconds' || !seconds || !/^[1-9][0-9]{0,3}$/u.test(seconds)
     || Number(seconds) > 3600 || extra.length)) throw new Error('Invalid event polling window')
-  const url = process.env.RICA_NEWBI_POLL_DATABASE_URL
-  if (!url || !URL.canParse(url) || !['postgres:', 'postgresql:'].includes(new URL(url).protocol)) {
-    throw new Error('Invalid poller database URL')
-  }
+  const url = runtimeDatabaseUrl()
   const controller = new AbortController()
   const stop = seconds ? AbortSignal.any([controller.signal, AbortSignal.timeout(Number(seconds) * 1000)]) : controller.signal
   const host = await openReader(stop)
   const reader = host.plugin.implementation
   const db = createDatabase(url)
+  const readerDb = scopedDatabase(db, 'reader')
   const interrupt = () => controller.abort()
   process.once('SIGINT', interrupt)
   process.once('SIGTERM', interrupt)
   try {
     if (seconds) {
-      await runNewbiEventPoller(db, reader, accountId, (result) => {
+      await runNewbiEventPoller(readerDb, reader, accountId, (result) => {
         console.info(JSON.stringify(result))
         if (result.status === 'STOPPED' && !stop.aborted) process.exitCode = 1
       }, stop)
     } else {
-      const result = await pollNewbiEvents(db, reader, accountId, stop)
+      const result = await pollNewbiEvents(readerDb, reader, accountId, stop)
       console.info(JSON.stringify(result))
       if (result.status === 'STOPPED') process.exitCode = 1
     }
@@ -96,10 +105,7 @@ async function main() {
     }
     return
   }
-  const url = process.env.RICA_NEWBI_EXECUTION_DATABASE_URL
-  if (!url || !URL.canParse(url) || !['postgres:', 'postgresql:'].includes(new URL(url).protocol)) {
-    throw new Error('Invalid executor database URL')
-  }
+  const url = runtimeDatabaseUrl()
   const { env, beforeRequest } = await connectorSettings()
   const host = await startNewbiExecutor(env, beforeRequest)
   const { id: pluginId, version, contractVersion, implementation } = host.plugin
@@ -107,7 +113,7 @@ async function main() {
     id: pluginId, version, contractVersion, code: 'READY' }))
   const db = createDatabase(url)
   try {
-    const result = await executeNewbiReply(db, implementation, newbiExecutorKey(host.plugin), id, retry === '--retry')
+    const result = await executeNewbiReply(scopedDatabase(db, 'executor'), implementation, newbiExecutorKey(host.plugin), id, retry === '--retry')
     console.info(JSON.stringify(result))
     if (result.status !== 'SENT') process.exitCode = 1
   } finally {

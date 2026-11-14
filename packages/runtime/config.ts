@@ -13,7 +13,11 @@ export function loadConfig() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT')
   return {
     port,
-    databaseUrl: required('DATABASE_URL', ['postgres:', 'postgresql:']),
+    databaseUrl: runtimeDatabaseUrl(),
     redisUrl: required('REDIS_URL', ['redis:', 'rediss:']),
   }
+}
+
+export function runtimeDatabaseUrl() {
+  return required('DATABASE_URL', ['postgres:', 'postgresql:'])
 }
