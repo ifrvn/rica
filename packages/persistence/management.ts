@@ -218,6 +218,17 @@ export async function associateAccount(tx: Tx, scope: Scope, input: Input<typeof
   return { id: account.id, status: account.status, version: account.bindingVersion }
 }
 
+export async function removeAccountRegistration(tx: Tx, scope: Scope, id: string) {
+  const registration = await tx.platformAccountRegistration.findFirst({ where: { id, characterId: scope.characterId } })
+  if (!registration) unavailable()
+  const removed = await tx.platformAccountRegistration.deleteMany({ where: { id, characterId: scope.characterId, boundAt: null } })
+  if (!removed.count) throw new ManagementError(409, 'ACCOUNT_ALREADY_BOUND', 'Platform account already associated')
+  if (registration.platform === 'newbi') {
+    await tx.newbiCredential.deleteMany({ where: { endpoint: registration.instanceKey, agentId: registration.remoteAccountId } })
+  }
+  return { id }
+}
+
 export async function createAccount(tx: Tx, scope: Scope, { identityId, ...input }: Input<typeof contracts.accountInput>) {
   const { id } = await registerAccount(tx, scope, input)
   return associateAccount(tx, scope, { registrationId: id, identityId })

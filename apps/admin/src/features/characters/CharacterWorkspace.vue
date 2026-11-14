@@ -17,7 +17,7 @@ type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>
 type Registration = z.infer<typeof accountRegistrationView>
 type Page<T> = { items: T[]; nextCursor: string | null }
-type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'associate' | 'control' | 'linked-account'
+type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'associate' | 'control' | 'linked-account' | 'remove-account'
 type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; connector?: boolean; revoke?: boolean }
 
 const props = defineProps<{
@@ -32,6 +32,7 @@ const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
+const removingAccount = ref<Registration>()
 const newbiRegistrationAvailable = ref(false)
 const newbiEndpoint = ref<string>()
 const newbiCredential = ref('')
@@ -63,7 +64,7 @@ const isIdentity = computed(() => editor.value === 'identity' || editor.value ==
 const title = computed(() => ({
   character: '新建角色', core: '角色设置', identity: '添加身份', 'identity-edit': '编辑身份',
   account: '添加账号', associate: '关联平台账号',
-  'linked-account': '已关联的平台账号',
+  'linked-account': '已关联的平台账号', 'remove-account': '移除账号',
   control: target.value?.revoke ? '撤销账号'
     : (target.value?.status === 'ACTIVE' ? '暂停' : '恢复')
       + ({ CHARACTER: '角色', IDENTITY: '身份', ACCOUNT: '账号' }[target.value?.scope ?? 'ACCOUNT']),
@@ -167,6 +168,7 @@ function fieldInput(field: string) {
 }
 
 function closeEditor() {
+  removingAccount.value = undefined
   newbiCredential.value = ''
   newbiPreview.value = undefined
   pending = undefined
@@ -253,6 +255,10 @@ async function run(task: () => Promise<void>) {
       error.value = '该身份已有平台账号。撤销原账号后可重新关联。'
       return
     }
+    if (cause instanceof RequestError && cause.code === 'ACCOUNT_ALREADY_BOUND' && editor.value === 'remove-account') {
+      error.value = '该账号已关联身份。请取消操作并刷新账号池。'
+      return
+    }
     if (editor.value === 'account' && form.platform === 'newbi' && cause instanceof RequestError) {
       if (cause.code === 'CONNECTOR_VERIFICATION_FAILED' || cause.code === 'PLUGIN_STATE_CONFLICT') {
         newbiPreview.value = undefined
@@ -324,6 +330,27 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
 function openLinkedAccount(account: Account) {
   linkedAccount.value = account
   open('linked-account')
+}
+
+function confirmRemoveAccount(account: Registration) {
+  removingAccount.value = account
+  open('remove-account')
+}
+
+function removeAccount() {
+  const account = removingAccount.value
+  if (!account || !admin.value || busy.value) return
+  const path = base.value + '/account-pool/' + account.id
+  if (pending?.signature !== path) pending = { signature: path, key: crypto.randomUUID() }
+  const key = pending.key
+  void run(async () => {
+    await request(path, { method: 'DELETE', headers: { 'Idempotency-Key': key } })
+    if (!active) return
+    accountPool.value = accountPool.value.filter(({ id }) => id !== account.id)
+    editorTrigger = undefined
+    closeEditor()
+    notice.value = '已从账号池移除。'
+  })
 }
 
 function command(path: string, data: object, version?: number) {
@@ -415,8 +442,9 @@ onMounted(() => { if (props.characterId) void run(load) })
     <DialogRoot :open="!!editor" @update:open="updateEditorOpen">
     <DialogPortal>
     <DialogOverlay class="workspace-overlay" />
-    <DialogContent class="workspace-editor" :aria-describedby="undefined" @close-auto-focus="restoreEditorFocus"
+    <DialogContent id="character-workspace-editor" class="workspace-editor" :aria-describedby="undefined" @close-auto-focus="restoreEditorFocus"
       @open-auto-focus.prevent="editorHeading?.focus()" @pointer-down-outside.prevent>
+      <div class="workspace-editor-scroll">
       <DialogTitle as-child><h3 ref="editorHeading" tabindex="-1">{{ title }}</h3></DialogTitle>
       <NAlert v-if="error" class="editor-alert" type="error" role="alert">{{ error }}</NAlert>
       <p v-if="editor === 'control' && target">{{ target.name }} · {{ status(target.status) }}</p>
@@ -434,6 +462,14 @@ onMounted(() => { if (props.characterId) void run(load) })
           <NButton @click="closeEditor">关闭</NButton>
         </div>
       </template>
+      <template v-else-if="editor === 'remove-account' && removingAccount">
+        <p class="remove-account-name">{{ accountLabel(removingAccount) }}</p>
+        <p>移除后，如需使用此账号，可以重新添加。</p>
+        <div class="workspace-actions editor-actions">
+          <NButton :disabled="busy" @click="closeEditor">取消</NButton>
+          <NButton type="error" :loading="busy" :disabled="busy" @click="removeAccount">确认移除</NButton>
+        </div>
+      </template>
       <NForm v-else @submit.prevent="save">
         <NFormItem v-if="editor === 'character' || editor === 'identity'" label="唯一标识" :label-props="{ for: 'workspace-slug' }" :validation-status="fieldError('slug') ? 'error' : undefined">
           <NInput v-model:value="form.slug" :input-props="fieldInput('slug')" @blur="touched.add('slug')" placeholder="小写字母、数字和连字符" maxlength="63" />
@@ -448,7 +484,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <NFormItem v-if="editor === 'character' || isIdentity" label="时区" :label-props="{ for: 'workspace-timezone' }" :validation-status="fieldError('timezone') ? 'error' : undefined">
-          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" :to="false" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
+          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" to="#character-workspace-editor" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
             :invalid="!!fieldError('timezone')" @blur="touched.add('timezone')" />
           <template v-if="fieldError('timezone')" #feedback>
             <span id="workspace-timezone-error">{{ fieldError('timezone') }}</span>
@@ -461,7 +497,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <NFormItem v-if="isIdentity" label="写作风格" :label-props="{ for: 'workspace-style' }" :validation-status="fieldError('style') ? 'error' : undefined">
-          <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" :to="false" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
+          <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" to="#character-workspace-editor" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
           <template v-if="fieldError('style')" #feedback>
             <span id="workspace-style-error">{{ fieldError('style') }}</span>
           </template>
@@ -479,7 +515,7 @@ onMounted(() => { if (props.characterId) void run(load) })
         </NFormItem>
         <template v-if="editor === 'account'">
           <NFormItem label="平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
-            <NSelect placeholder="选择平台" filterable v-model:value="form.platform" :to="false" :input-props="fieldInput('platform')"
+            <NSelect placeholder="选择平台" filterable v-model:value="form.platform" to="#character-workspace-editor" :input-props="fieldInput('platform')"
               :disabled="busy" :options="platformChoices" @update:value="clearNewbiPreview" @blur="touched.add('platform')" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
@@ -519,7 +555,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           <p v-if="!accountPool.length" class="workspace-muted">账号池暂无可关联账号，请先登记账号。</p>
           <NFormItem v-else label="平台账号" :label-props="{ for: 'workspace-registrationId' }"
             :validation-status="fieldError('registrationId') ? 'error' : undefined">
-            <NSelect v-model:value="form.registrationId" :to="false" filterable placeholder="从账号池选择未关联账号"
+            <NSelect v-model:value="form.registrationId" to="#character-workspace-editor" filterable placeholder="从账号池选择未关联账号"
               :input-props="fieldInput('registrationId')" @blur="touched.add('registrationId')"
               :options="accountPool.map(item => ({ label: accountLabel(item), value: item.id }))" />
             <template v-if="fieldError('registrationId')" #feedback>
@@ -554,6 +590,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           @click="open('control', undefined, { scope: 'IDENTITY', id: editingIdentity.id, name: identityName(editingIdentity), status: editingIdentity.status })">
           {{ editingIdentity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
         </NButton>
+      </div>
       </div>
     </DialogContent>
     </DialogPortal>
@@ -632,7 +669,10 @@ onMounted(() => { if (props.characterId) void run(load) })
         <ul v-if="accountPool.length" class="workspace-list">
           <li v-for="item in accountPool" :key="item.id" class="workspace-row">
             <span>{{ accountLabel(item) }}</span>
-            <NTag size="small" :bordered="false">未关联</NTag>
+            <div class="workspace-actions">
+              <NTag size="small" :bordered="false">未关联</NTag>
+              <NButton v-if="admin" size="small" type="error" secondary :disabled="busy" @click="confirmRemoveAccount(item)">移除账号</NButton>
+            </div>
           </li>
         </ul>
         <NEmpty v-if="!accounts.length && !accountPool.length" description="暂无平台账号。" />
@@ -702,8 +742,10 @@ onMounted(() => { if (props.characterId) void run(load) })
 .identity-row:hover .edit-icon, .identity-row:focus-within .edit-icon { opacity: 1; }
 .workspace-overlay { position: fixed; inset: 0; z-index: 1000; background: #0006; }
 .workspace-editor { position: fixed; z-index: 1001; inset-block-start: 50%; inset-inline-start: 50%; transform: translate(-50%, -50%);
-  box-sizing: border-box; width: min(34rem, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto;
-  padding: 1.25rem; color: var(--console-text); background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 8px; }
+  box-sizing: border-box; width: min(34rem, calc(100% - 2rem));
+  color: var(--console-text); background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 8px; }
+.workspace-editor-scroll { box-sizing: border-box; max-height: calc(100dvh - 2rem - 2px); overflow: auto; border-radius: inherit; padding: 1.25rem; }
+.remove-account-name { overflow-wrap: anywhere; }
 .workspace-editor h3 { margin: 0 0 1rem; }
 .editor-alert { margin-block-end: 1rem; }
 .editor-actions { justify-content: flex-end; }

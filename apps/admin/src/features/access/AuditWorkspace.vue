@@ -24,7 +24,7 @@ const labels: Record<string, string> = {
   'character.create': '创建角色', 'character.core.update': '更新角色核心',
   'identity.create': '创建身份', 'identity.update': '更新身份', 'account.create': '登记平台账号',
   'account.register': '添加账号到账号池', 'account.associate': '关联平台账号',
-  'control.apply': '变更运行状态', 'membership.change': '变更成员权限',
+  'control.apply': '变更运行状态', 'membership.change': '变更成员权限', 'account.remove': '移除未关联账号',
   'state.energy.approve': '批准角色精力', 'goal.create': '新增目标', 'goal.update': '更新目标',
   'belief.create': '新增观点', 'belief.update': '更新观点', 'belief.restore': '恢复观点版本',
   'contact.boundary': '变更联系边界', 'memory.correct': '纠正记忆',

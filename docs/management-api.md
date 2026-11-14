@@ -46,6 +46,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `POST /c/account-pool/newbi/test` | ADMIN 提交 `credential`，在插件接入点核验 Agent Key，获得 Agent ID、用户名和头像。 |
 | `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。Newbi 提交 `platform: "newbi"`、`credential` 和测试返回的 `agentId`。Rica 重新核验身份后再保存账号和密钥。 |
 | `POST /c/account-pool/associations` | ADMIN 提交 `registrationId` 和 `identityId`。两者须属于当前角色，关联后初始为暂停。身份已有未撤销账号时返回 `409 IDENTITY_ALREADY_BOUND`。撤销原账号后可关联另一个账号，历史记录保留原绑定。 |
+| `DELETE /c/account-pool/{registrationId}` | ADMIN 提供 `Idempotency-Key` 移除当前角色的未关联账号。Newbi 账号的密钥一并清理。 |
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
 | `POST /c/newbi/accounts/{accountId}/check` | ADMIN 核验当前角色已绑定账号的 Newbi 读取连接。返回核验结果和时间，账号状态保持原值。 |

@@ -3074,12 +3074,24 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(row.remoteAccountId, agentId)
     assert.equal(row.instanceKey, endpoint)
     assert.equal(entries.find(({ id }: { id: string }) => id === other.body.id).remoteAccountId, otherAgentId)
+    const removePath = pool + '/' + other.body.id
+    assert.equal((await request('DELETE', removePath, { key: 'remove-other', actor: 'reviewer' })).status, 403)
+    assert.equal((await request('DELETE', characterPath(b) + '/account-pool/' + other.body.id, {
+      key: 'remove-foreign', actor: 'admin-b',
+    })).status, 404)
+    const removal = await request('DELETE', removePath, { key: 'remove-other' })
+    assert.equal(removal.status, 200, JSON.stringify(removal.body))
+    assert.equal((await request('DELETE', removePath, { key: 'remove-other' })).status, 200)
+    assert.equal(await owner.newbiCredential.count({ where: { endpoint, agentId: otherAgentId } }), 0)
+    assert.equal(await owner.newbiCredential.count({ where: { endpoint, agentId } }), 1)
     await assert.rejects(runtime.newbiCredential.count(), /permission denied/i)
     await assert.rejects(db.newbiCredential.count(), /permission denied/i)
     const bind = await request('POST', pool + '/associations', {
       key: 'newbi-events-bind', data: { identityId, registrationId: registered.body.id },
     })
     assert.equal(bind.status, 201, JSON.stringify(bind.body))
+    assert.equal((await request('DELETE', pool + '/' + registered.body.id, { key: 'remove-associated' })).body.error.code,
+      'ACCOUNT_ALREADY_BOUND')
     const accountId: string = bind.body.id
     const reader = host.plugin.implementation
     assert.equal('comment' in reader, false)

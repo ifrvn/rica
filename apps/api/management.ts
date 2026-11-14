@@ -397,6 +397,21 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   })
 
   app.openapi(createRoute({
+    method: 'delete', path: `${character}/account-pool/{registrationId}`, security,
+    request: { params: characterParams.extend({ registrationId: schema.resourceId }), headers: schema.idempotencyHeader },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, registrationId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'account.remove', targetScope: registrationId, input: { registrationId }, requestId,
+      key: c.req.valid('header')['idempotency-key'],
+    }, (tx) => management.removeAccountRegistration(tx, scope, registrationId))
+    return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
     method: 'post', path: `${character}/account-pool/associations`, security,
     request: { params: characterParams, headers: schema.idempotencyHeader, body: body(schema.accountBindingInput) },
     responses: { ...errors, 201: success(schema.commandResponse) },
