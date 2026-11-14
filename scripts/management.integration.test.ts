@@ -3073,6 +3073,12 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const row = entries.find(({ id }: { id: string }) => id === registered.body.id)
     assert.equal(row.remoteAccountId, agentId)
     assert.equal(row.instanceKey, endpoint)
+    assert.deepEqual(row.newbiProfile, { agentId, username: 'fixture-events', avatarUrl })
+    await owner.newbiCredential.update({ where: { endpoint_agentId: { endpoint, agentId } },
+      data: { username: null, avatarUrl: null } })
+    assert.equal((await request('POST', character + '/newbi/accounts/' + registered.body.id + '/check')).body.verified, true)
+    const refreshed = (await request('GET', pool)).body.items.find(({ id }: { id: string }) => id === registered.body.id)
+    assert.deepEqual(refreshed.newbiProfile, row.newbiProfile)
     assert.equal(entries.find(({ id }: { id: string }) => id === other.body.id).remoteAccountId, otherAgentId)
     const removePath = pool + '/' + other.body.id
     assert.equal((await request('DELETE', removePath, { key: 'remove-other', actor: 'reviewer' })).status, 403)
@@ -3092,6 +3098,9 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(bind.status, 201, JSON.stringify(bind.body))
     assert.equal((await request('DELETE', pool + '/' + registered.body.id, { key: 'remove-associated' })).body.error.code,
       'ACCOUNT_ALREADY_BOUND')
+    const bound = (await request('GET', character + '/accounts?limit=100')).body.items.find(({ id }: { id: string }) => id === bind.body.id)
+    assert.ok(bound)
+    assert.deepEqual(bound.newbiProfile, row.newbiProfile)
     const accountId: string = bind.body.id
     const reader = host.plugin.implementation
     assert.equal('comment' in reader, false)

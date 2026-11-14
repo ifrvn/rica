@@ -9,6 +9,7 @@ import { formatTime } from '../../shared/console-data.js'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import ConnectorAccountStatus from './ConnectorAccountStatus.vue'
+import NewbiAccountLabel from './NewbiAccountLabel.vue'
 import { request, RequestError } from '../../shared/request.js'
 
 type Workspace = z.infer<typeof characterWorkspaceView>
@@ -43,7 +44,7 @@ const platformChoices = computed(() => [
     ? [{ label: newbiRegistrationAvailable.value ? 'Newbi' : 'Newbi（请先启用并配置接入点）', value: 'newbi', disabled: !newbiRegistrationAvailable.value }] : []),
 ])
 type AccountCheck = z.infer<typeof newbiAccountCheckView>
-const newbiChecks = reactive(new Map<string, AccountCheck & { version: number }>())
+const newbiChecks = reactive(new Map<string, AccountCheck & { version?: number }>())
 const checkingAccount = ref<string>()
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
@@ -88,7 +89,7 @@ const accountsByIdentity = computed(() => {
 })
 
 const identityName = (identity: Identity) => identity.profile?.displayName || identity.slug
-const boundAccountLabel = (account: Account) => account.platform + ' · ' + account.instanceKey
+const boundAccountLabel = (account: Account) => account.newbiProfile ? accountLabel(account) : account.platform + ' · ' + account.instanceKey
 
 function accountControl(account: Account, revoke = false) {
   open('control', undefined, { scope: 'ACCOUNT', id: account.id, name: boundAccountLabel(account),
@@ -191,8 +192,9 @@ let pending: { signature: string; key: string } | undefined
 let active = true
 onBeforeUnmount(() => { active = false })
 
-function accountLabel(account: Registration) {
-  return [account.platform === 'newbi' ? 'Newbi' : account.platform, account.instanceKey, account.remoteAccountId].join(' · ')
+function accountLabel(account: Pick<Registration, 'instanceKey' | 'newbiProfile'> & { platform: string; remoteAccountId?: string }) {
+  if (account.newbiProfile) return 'Newbi · ' + (account.newbiProfile.username || account.newbiProfile.agentId)
+  return [account.platform, account.instanceKey, account.remoteAccountId].filter(Boolean).join(' · ')
 }
 
 function status(value: string) {
@@ -283,20 +285,23 @@ async function run(task: () => Promise<void>) {
   }
 }
 
-function checkNewbiConnection(account: Account) {
+function checkNewbiConnection(account: Pick<Account, 'id'> & { version?: number }) {
   void run(async () => {
     checkingAccount.value = account.id
     newbiChecks.delete(account.id)
     try {
       const result = await request<AccountCheck>(base.value + '/newbi/accounts/' + account.id + '/check', { method: 'POST' })
-      if (active) newbiChecks.set(account.id, { ...result, version: account.version })
+      if (active) {
+        newbiChecks.set(account.id, { ...result, version: account.version })
+        if (result.verified) await load()
+      }
     } finally {
       checkingAccount.value = undefined
     }
   })
 }
 
-function accountCheckLabel(account: Account) {
+function accountCheckLabel(account: Pick<Account, 'id'> & { version?: number }) {
   const check = newbiChecks.get(account.id)
   if (!check || check.version !== account.version) return ''
   const result = check.verified ? '读取连接核验通过' : '读取连接核验失败，请核对 Agent ID、地址和读取凭据。'
@@ -529,7 +534,7 @@ onMounted(() => { if (props.characterId) void run(load) })
             </NFormItem>
             <NButton attr-type="button" secondary :disabled="busy || !newbiCredential.trim()" @click="testNewbiAccount">测试连接</NButton>
             <div v-if="newbiPreview" class="workspace-actions newbi-preview" role="status">
-              <img v-if="newbiPreview.avatarUrl" :src="newbiPreview.avatarUrl" alt="" width="36" height="36" referrerpolicy="no-referrer" />
+              <img v-if="newbiPreview.avatarUrl" :src="newbiPreview.avatarUrl" alt="" referrerpolicy="no-referrer" />
               <strong>{{ newbiPreview.username }}</strong>
               <NTag size="small" type="success">核验通过</NTag>
             </div>
@@ -668,9 +673,15 @@ onMounted(() => { if (props.characterId) void run(load) })
         <NAlert v-if="admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
         <ul v-if="accountPool.length" class="workspace-list">
           <li v-for="item in accountPool" :key="item.id" class="workspace-row">
-            <span>{{ accountLabel(item) }}</span>
+            <div class="account-summary">
+              <NewbiAccountLabel v-if="item.newbiProfile" :profile="item.newbiProfile" />
+              <span v-else>{{ accountLabel(item) }}</span>
+              <p v-if="accountCheckLabel(item)" class="workspace-muted account-check" role="status">{{ accountCheckLabel(item) }}</p>
+            </div>
             <div class="workspace-actions">
               <NTag size="small" :bordered="false">未关联</NTag>
+              <NButton v-if="admin && item.newbiProfile && !item.newbiProfile.username && newbiRegistrationAvailable && item.instanceKey === newbiEndpoint"
+                size="small" secondary :disabled="busy" @click="checkNewbiConnection(item)">核验并更新资料</NButton>
               <NButton v-if="admin" size="small" type="error" secondary :disabled="busy" @click="confirmRemoveAccount(item)">移除账号</NButton>
             </div>
           </li>
@@ -679,9 +690,11 @@ onMounted(() => { if (props.characterId) void run(load) })
         <ul v-if="accounts.length" class="workspace-list">
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
             <div class="account-summary">
-              <span class="workspace-actions"><strong>{{ boundAccountLabel(account) }}</strong>
+              <div class="workspace-actions">
+              <NewbiAccountLabel v-if="account.newbiProfile" :profile="account.newbiProfile" />
+              <strong v-else>{{ boundAccountLabel(account) }}</strong>
               <NTag size="small">{{ status(account.status) }}</NTag>
-              </span>
+              </div>
               <span class="workspace-muted">{{ workspace.profile?.name || workspace.slug }} / {{
                 identities.find(item => item.id === account.identityId)?.profile?.displayName
                   || identities.find(item => item.id === account.identityId)?.slug || '身份不可用'
@@ -717,7 +730,7 @@ onMounted(() => { if (props.characterId) void run(load) })
 
 <style scoped>
 .newbi-preview { margin-block: .75rem; }
-.newbi-preview img { border-radius: 50%; object-fit: cover; }
+.newbi-preview img { flex: none; width: 2.25rem; height: 2.25rem; border-radius: 50%; object-fit: cover; object-position: center; }
 .character-workspace { display: grid; gap: 1.25rem; min-width: 0; }
 .account-check { margin: 0; }
 .workspace-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }

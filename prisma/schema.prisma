@@ -237,6 +237,8 @@ model NewbiCredential {
   endpoint   String
   agentId    String @map("agent_id") @db.Uuid
   credential String
+  username   String?
+  avatarUrl  String? @map("avatar_url")
 
   @@id([endpoint, agentId])
   @@map("newbi_credentials")

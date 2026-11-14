@@ -185,9 +185,27 @@ export async function updateIdentity(
 
 type AccountRegistration = Pick<Prisma.PlatformAccountRegistrationUncheckedCreateInput, 'platform' | 'instanceKey' | 'remoteAccountId'>
 
-export async function saveNewbiCredential(tx: Tx, endpoint: string, agentId: string, credential: string) {
+type NewbiProfile = { username: string | null; avatarUrl: string | null }
+
+export async function saveNewbiCredential(tx: Tx, account: NewbiProfile & { endpoint: string; agentId: string }, credential: string) {
+  const { endpoint, agentId, username, avatarUrl } = account
   await tx.newbiCredential.upsert({ where: { endpoint_agentId: { endpoint, agentId } },
-    create: { endpoint, agentId, credential }, update: { credential } })
+    create: { endpoint, agentId, credential, username, avatarUrl }, update: { credential, username, avatarUrl } })
+}
+
+async function newbiProfiles(tx: Tx, accounts: { platform: string; instanceKey: string; remoteAccountId: string }[]) {
+  const key = (endpoint: string, agentId: string) => JSON.stringify([endpoint, agentId])
+  const requested = accounts.flatMap(({ platform, instanceKey, remoteAccountId }) =>
+    platform === 'newbi' ? [{ endpoint: instanceKey, agentId: remoteAccountId }] : [])
+  const rows = requested.length ? await tx.newbiCredential.findMany({
+    where: { OR: requested }, select: { endpoint: true, agentId: true, username: true, avatarUrl: true },
+  }) : []
+  const profiles = new Map(rows.map(({ endpoint, agentId, username, avatarUrl }) =>
+    [key(endpoint, agentId), { agentId, username, avatarUrl }] as const))
+  return (account: typeof accounts[number]) => account.platform === 'newbi'
+    ? { newbiProfile: profiles.get(key(account.instanceKey, account.remoteAccountId))
+      ?? { agentId: account.remoteAccountId, username: null, avatarUrl: null } }
+    : {}
 }
 
 export async function registerAccount(tx: Tx, scope: Scope, input: AccountRegistration) {
@@ -244,7 +262,8 @@ export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page
     const rows = await tx.platformAccountRegistration.findMany({
       ...args, where, select: { id: true, platform: true, instanceKey: true, remoteAccountId: true },
     })
-    return makePage(rows, page, (row) => accountRegistrationView.parse(row))
+    const profile = await newbiProfiles(tx, rows)
+    return makePage(rows, page, (row) => accountRegistrationView.parse({ ...row, ...profile(row) }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 
@@ -447,9 +466,11 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
     const args = await pageArgs(page, (id) => tx.platformAccount.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.platformAccount.findMany({
       ...args, where,
-      select: { id: true, identityId: true, platform: true, instanceKey: true, status: true, bindingVersion: true, createdAt: true },
+      select: { id: true, identityId: true, platform: true, instanceKey: true, remoteAccountId: true, status: true, bindingVersion: true, createdAt: true },
     })
-    return makePage(rows, page, ({ bindingVersion, createdAt: _, ...view }) => ({ ...view, version: bindingVersion }))
+    const profile = await newbiProfiles(tx, rows)
+    return makePage(rows, page, ({ bindingVersion, createdAt: _, remoteAccountId, ...view }) =>
+      ({ ...view, ...profile({ ...view, remoteAccountId }), version: bindingVersion }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 

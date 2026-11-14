@@ -162,8 +162,12 @@ export async function readNewbiConnections(db: PrismaClient, characterId: string
 export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: VerifyConnector) {
   const account = await db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN'])
-    return tx.platformAccount.findFirst({
+    const account = await tx.platformAccount.findFirst({
       where: { id: accountId, characterId: scope.characterId, platform: 'newbi', status: { not: 'REVOKED' } },
+      select: { instanceKey: true, remoteAccountId: true },
+    })
+    return account ?? tx.platformAccountRegistration.findFirst({
+      where: { id: accountId, characterId: scope.characterId, platform: 'newbi', boundAt: null },
       select: { instanceKey: true, remoteAccountId: true },
     })
   }, { isolationLevel: 'RepeatableRead' })

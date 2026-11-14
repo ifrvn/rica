@@ -150,8 +150,15 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }
 
   const verifySavedConnector: management.VerifyConnector = async (endpoint, agentId, tx = db) => {
-    const saved = await tx.newbiCredential.findUnique({ where: { endpoint_agentId: { endpoint, agentId } } })
-    return !!saved && (await identifyConnector?.(saved.credential, endpoint))?.agentId === agentId
+    const where = { endpoint, agentId }
+    const saved = await tx.newbiCredential.findUnique({ where: { endpoint_agentId: where }, select: { credential: true } })
+    const profile = saved && await identifyConnector?.(saved.credential, endpoint)
+    if (!profile || profile.agentId !== agentId || profile.endpoint !== endpoint) return false
+    await tx.newbiCredential.updateMany({
+      where: { ...where, credential: saved.credential },
+      data: { username: profile.username, avatarUrl: profile.avatarUrl },
+    })
+    return true
   }
 
   app.openapi(createRoute({
@@ -388,9 +395,9 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
       if (input.platform !== 'newbi') return management.registerAccount(tx, scope, input)
-      const { endpoint, agentId } = await identifyNewbi(input.credential, input.agentId)
-      const result = await management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: endpoint, remoteAccountId: agentId })
-      await management.saveNewbiCredential(tx, endpoint, agentId, input.credential)
+      const account = await identifyNewbi(input.credential, input.agentId)
+      const result = await management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: account.endpoint, remoteAccountId: account.agentId })
+      await management.saveNewbiCredential(tx, account, input.credential)
       return result
     })
     return c.json({ ...result, requestId }, 201)
@@ -1115,9 +1122,9 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
-      const { endpoint, agentId } = await identifyNewbi(input.credential, input.agentId)
-      const result = await bindNewbiAccount(tx, scope, { ...input, endpoint, agentId })
-      await management.saveNewbiCredential(tx, endpoint, agentId, input.credential)
+      const account = await identifyNewbi(input.credential, input.agentId)
+      const result = await bindNewbiAccount(tx, scope, { ...input, ...account })
+      await management.saveNewbiCredential(tx, account, input.credential)
       return result
     })
     return c.json({ ...result, requestId }, 201)
