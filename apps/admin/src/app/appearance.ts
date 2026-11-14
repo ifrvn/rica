@@ -5,6 +5,13 @@ export const palettes = {
   blue: { label: '雾蓝', light: ['#4a69ad', '#3d5b9e'], dark: ['#384e78', '#415b89'], text: { light: '#304e88', dark: '#c9dcff' } },
 } as const
 
+export const darkPrimaryButton = {
+  sage: { fill: '#44754d', hover: '#487b52' },
+  terracotta: { fill: '#945343', hover: '#9b5949' },
+  iris: { fill: '#73569c', hover: '#7c5da6' },
+  blue: { fill: '#4969a0', hover: '#5073ab' },
+} as const
+
 type Palette = keyof typeof palettes
 type Mode = 'system' | 'light' | 'dark'
 const key = 'rica.console.appearance'

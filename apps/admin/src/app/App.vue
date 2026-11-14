@@ -8,7 +8,7 @@ import {
 } from 'reka-ui'
 import ReviewDesk from './ReviewDesk.vue'
 import type { Readiness } from '../../../../packages/contracts/health.js'
-import { palettes, readAppearance, saveAppearance } from './appearance.js'
+import { darkPrimaryButton, palettes, readAppearance, saveAppearance } from './appearance.js'
 import '../styles/console-theme.css'
 
 const appearance = ref(readAppearance())
@@ -31,7 +31,10 @@ function updateSystemMode(event: MediaQueryListEvent) {
 }
 
 const theme = computed<GlobalThemeOverrides>(() => {
-  const [primary, hover] = palettes[appearance.value.palette][effectiveMode.value]
+  const key = appearance.value.palette
+  const palette = palettes[key]
+  const [primary, hover] = palette[effectiveMode.value]
+  const button = darkPrimaryButton[key]
   return {
     common: {
       primaryColor: primary, primaryColorHover: hover, primaryColorPressed: hover, primaryColorSuppl: hover,
@@ -39,6 +42,20 @@ const theme = computed<GlobalThemeOverrides>(() => {
       popoverColor: 'var(--console-surface)', borderRadius: '5px',
     },
     Card: { borderRadius: '5px', borderColor: 'var(--console-line)' },
+    Button: effectiveMode.value === 'dark' ? {
+      colorPrimary: button.fill,
+      colorHoverPrimary: button.hover,
+      colorFocusPrimary: button.hover,
+      textColorPrimary: '#fff',
+      textColorHoverPrimary: '#fff',
+      textColorFocusPrimary: '#fff',
+      textColorPressedPrimary: '#fff',
+      textColorDisabledPrimary: '#fff',
+      textColorTextPrimary: palette.text.dark,
+      textColorTextHoverPrimary: '#fff',
+      textColorTextFocusPrimary: '#fff',
+      textColorTextPressedPrimary: palette.text.dark,
+    } : undefined,
   }
 })
 
