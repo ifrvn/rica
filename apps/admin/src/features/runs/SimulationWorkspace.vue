@@ -58,6 +58,9 @@ const listHeading = ref<HTMLElement>()
 const editorHeading = ref<HTMLElement>()
 const resolutionNotice = ref('')
 let detailRevision = 0
+let detailTimer: ReturnType<typeof setTimeout> | undefined
+const progressingStates = new Set(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'WAITING_APPROVAL', 'READY', 'EXECUTING'])
+const trackingRun = computed(() => !!selected.value && !detailError.value && progressingStates.has(selected.value.state))
 const accountId = ref('')
 const message = ref('')
 const busy = ref(false)
@@ -70,7 +73,10 @@ const filters = ref({ state: '', identityId: '', accountId: '', from: '', throug
 const invalidDates = computed(() => !!filters.value.from && !!filters.value.through && filters.value.from > filters.value.through)
 let pending: { body: string; key: string } | undefined
 let active = true
-onBeforeUnmount(() => { active = false })
+onBeforeUnmount(() => {
+  active = false
+  clearTimeout(detailTimer)
+})
 
 const stateLabels = {
   QUEUED: '已排队', CONTEXT_READY: '准备草稿', DRAFTED: '草稿已生成', WAITING_APPROVAL: '待审批', READY: '待执行',
@@ -145,18 +151,23 @@ watch(() => props.runQuery, (value, previous) => {
   void list()
 }, { immediate: true })
 
-async function detail(id?: string) {
+async function detail(id?: string, background = false) {
+  clearTimeout(detailTimer)
   const current = ++detailRevision
-  selected.value = undefined
   detailError.value = ''
-  loadingDetail.value = !!id
+  loadingDetail.value = !!id && !background
   if (!id) return
   try {
     const view = await request<Replay>(base.value + '/runs/' + encodeURIComponent(id) + '/replay')
-    if (active && current === detailRevision) selected.value = view
+    if (!active || current !== detailRevision) return
+    selected.value = view
+    if (progressingStates.has(view.state)) {
+      detailTimer = setTimeout(() => { void detail(id, true) }, 4000)
+    }
   } catch (cause) {
     if (!active || current !== detailRevision) return
     const status = cause instanceof RequestError ? cause.status : 0
+    if ([401, 403, 404].includes(status)) selected.value = undefined
     if (status === 401) emit('expired')
     else detailError.value = status === 403 || status === 404 ? '找不到该角色的运行详情。' : '无法读取运行详情，请重试。'
   } finally {
@@ -165,6 +176,7 @@ async function detail(id?: string) {
 }
 
 watch(() => props.detailId, (id, previous) => {
+  selected.value = undefined
   resolutionNotice.value = ''
   void detail(id)
   void nextTick(() => {
@@ -330,11 +342,12 @@ onMounted(() => { void act(load) })
         </div>
         <NAlert v-if="resolutionNotice" type="success" role="status">{{ resolutionNotice }}</NAlert>
         <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
-        <NButton v-if="detailError" size="small" @click="detail(detailId)">重新加载详情</NButton>
+        <NButton v-if="detailError" size="small" :disabled="loadingDetail" @click="detail(detailId)">重新加载详情</NButton>
         <NSpin v-if="loadingDetail" aria-label="正在加载运行详情" />
         <template v-if="selected">
           <div class="run-actions">
             <NTag size="small" :bordered="false">{{ stateName(selected.state) }}</NTag>
+            <span v-if="trackingRun" class="run-muted">自动更新中</span>
             <NButton v-if="canReview && selected.proposal" size="small" secondary
               @click="emit('review', selected.proposal.id)">查看模拟提案</NButton>
             <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
