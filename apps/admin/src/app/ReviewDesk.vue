@@ -580,7 +580,7 @@ async function decide(decision: Decision) {
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :can-configure-model="canCreate" @expired="resetSession"
         @newbi="newbiInstalled = $event"
-        @accounts="changeTab('accounts')" />
+        @accounts="changeTab('accounts')" @health="changeTab('health')" />
       <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId + '/' + (healthNode ?? '')"
         :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
         :initial-node="healthNode"

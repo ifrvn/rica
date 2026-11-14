@@ -8,7 +8,7 @@ import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
 import ModelSettings from './ModelSettings.vue'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean }>()
-const emit = defineEmits<{ expired: []; accounts: []; newbi: [installed: boolean] }>()
+const emit = defineEmits<{ expired: []; accounts: []; health: []; newbi: [installed: boolean] }>()
 const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
@@ -30,6 +30,8 @@ const modelVersions = computed(() => new Map(status.value?.services.find(({ serv
 const release = computed(() => status.value?.release)
 const upgrades = computed(() => new Map(release.value?.status === 'AVAILABLE'
   ? release.value.upgrades.map((item) => [item.id, item] as const) : []))
+const releaseBlocked = computed(() => !!releasePreview.value
+  && !!upgrades.value.get(releasePreview.value)?.components.some(({ problem }) => problem))
 const upgradeProblems = {
   MISSING_COMPONENT: '目标发布缺少此组件',
   INCOMPATIBLE_CONTRACT: '宿主契约版本不兼容',
@@ -100,7 +102,7 @@ function saveNewbi() {
     <div class="console-actions plugin-toolbar">
       <span v-if="release?.status === 'UNCONFIGURED'" class="plugin-release-note">尚未配置发布清单</span>
       <span v-else-if="release?.status === 'AVAILABLE' && !release.upgrades.length"
-        class="plugin-release-note">发布清单无组件版本变更</span>
+        class="plugin-release-note">当前插件组件与发布清单一致</span>
       <NButton size="small" quaternary :loading="loading" :disabled="busy" @click="refresh">刷新插件</NButton>
     </div>
     <NAlert v-if="loadError" type="error" role="alert">{{ loadError }}</NAlert>
@@ -161,7 +163,7 @@ function saveNewbi() {
           <NButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && upgrades.has(id)"
             :id="'plugin-release-toggle-' + id" size="small" secondary
             :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
-            {{ releasePreview === id ? '收起升级预览' : '查看升级预览' }}
+            {{ releasePreview === id ? '收起版本检查' : '检查升级' }}
           </NButton>
         </div>
 
@@ -181,14 +183,26 @@ function saveNewbi() {
               <span v-if="entry.problem">{{ upgradeProblems[entry.problem] }}</span>
             </li>
           </ul>
-          <NAlert v-if="upgrades.get(id)?.components.some(({ problem }) => problem)" type="warning">
-            该发布需要先解决上述组件问题。
+          <NAlert v-if="releaseBlocked" type="warning" title="当前发布有升级阻碍">
+            请让部署维护者核对上述组件，修正发布清单或选择兼容的 Rica 版本。
           </NAlert>
-          <p v-else>部署此版本的 Rica 并重启相关进程后生效。</p>
-          <p v-if="id === 'newbi'">待核对的发送结果仍绑定原执行版本及幂等键。</p>
-          <NButton tag="a" :href="release.releaseUrl" target="_blank" rel="noopener noreferrer" size="small" secondary>
-            查看发布说明
-          </NButton>
+          <template v-else>
+            <h4>升级步骤</h4>
+            <ol class="plugin-release-steps">
+              <li v-if="id === 'newbi'">先核对受影响账号的在途发送。待核对的结果须用原执行版本和幂等键恢复，或按现有流程结案。</li>
+              <li>请部署维护者按发布说明更新 Rica 至 {{ release.ricaVersion }}，并重启相关进程。</li>
+              <li>部署完成后刷新插件，核对组件版本，并到系统运行状况确认相关进程的最新报告。</li>
+            </ol>
+          </template>
+          <div class="console-actions plugin-release-actions">
+            <NButton tag="a" :href="release.releaseUrl" target="_blank" rel="noopener noreferrer" size="small"
+              :type="releaseBlocked ? 'default' : 'primary'">
+              打开发布说明
+            </NButton>
+            <NButton v-if="!releaseBlocked" size="small" secondary
+              :disabled="busy || loading" @click="refresh">刷新组件版本</NButton>
+            <NButton v-if="!releaseBlocked" size="small" quaternary @click="emit('health')">查看系统运行状况</NButton>
+          </div>
         </section>
 
         <NAlert v-if="error && changedPlugin === id" type="error" role="alert">{{ error }}</NAlert>
@@ -231,5 +245,7 @@ function saveNewbi() {
 .plugin-components code, .plugin-component small, .plugin-integration > span { color: var(--console-muted); overflow-wrap: anywhere; }
 .plugin-integration { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .625rem; }
 .plugin-config { border-top: 1px solid var(--console-line); padding-block-start: 1rem; }
+.plugin-release-steps { display: grid; gap: .5rem; padding-inline-start: 1.25rem; }
+.plugin-release-actions { margin-block-start: .75rem; }
 .newbi-form { max-width: 35rem; }
 </style>
