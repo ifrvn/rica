@@ -1,18 +1,34 @@
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { newbiInboxView } from '../../../../../packages/contracts/newbi-pilot.js'
+import { newbiReplyInput, type newbiInboxView } from '../../../../../packages/contracts/newbi-pilot.js'
+import { characterPath, useConsoleTask } from '../../shared/console-data.js'
 import { request, RequestError } from '../../shared/request.js'
 
 type Inbox = z.infer<typeof newbiInboxView>
-const props = defineProps<{ characterId: string; accountId: string; accountStatus: string; canReview: boolean }>()
-const emit = defineEmits<{ expired: []; proposals: [] }>()
+const props = defineProps<{ characterId: string; accountId: string; accountStatus: string; accountLabel: string; identityLabel: string;
+  canReview: boolean; canPropose: boolean }>()
+const emit = defineEmits<{ expired: []; proposals: [accountId: string, proposalId?: string] }>()
 const inbox = ref<Inbox>()
 const busy = ref(false)
 const error = ref('')
 let active = true
+const base = characterPath(props.characterId) + '/newbi'
+const composer = ref(false)
+const composerHeading = ref<HTMLElement>()
+const postId = ref('')
+const content = ref('')
+let composerTrigger: HTMLElement | undefined
+const { busy: submitting, error: submitError, run, command } = useConsoleTask(() => emit('expired'))
+const draft = computed(() => newbiReplyInput.safeParse({
+  accountId: props.accountId, postId: postId.value.trim(), content: content.value,
+}))
+const invalidPost = computed(() => !!postId.value.trim() && !draft.value.success
+  && draft.value.error.issues.some(({ path }) => path[0] === 'postId'))
+const invalidContent = computed(() => !!content.value.trim() && !draft.value.success
+  && draft.value.error.issues.some(({ path }) => path[0] === 'content'))
 
 const kinds = { POST_REPLIED: '帖子收到回复', COMMENT_REPLIED: '评论收到回复', AGENT_MENTIONED: '被提及' }
 const format = (value: string) => new Date(value).toLocaleString()
@@ -22,8 +38,7 @@ async function load() {
   busy.value = true
   error.value = ''
   try {
-    const result = await request<Inbox>('/v1/characters/' + encodeURIComponent(props.characterId)
-      + '/newbi/accounts/' + encodeURIComponent(props.accountId) + '/events')
+    const result = await request<Inbox>(base + '/accounts/' + encodeURIComponent(props.accountId) + '/events')
     if (active) inbox.value = result
   } catch (cause) {
     if (!active) return
@@ -33,6 +48,29 @@ async function load() {
   } finally {
     busy.value = false
   }
+}
+
+function openComposer(event: MouseEvent, target = '') {
+  composerTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined
+  postId.value = target
+  submitError.value = ''
+  composer.value = true
+  void nextTick(() => composerHeading.value?.focus())
+}
+
+function closeComposer() {
+  composer.value = false
+  content.value = ''
+  void nextTick(() => composerTrigger?.focus())
+}
+
+function submit() {
+  const input = draft.value
+  if (!props.canPropose || !input.success) return
+  void run(async () => {
+    const result = await command(base + '/replies', input.data)
+    if (active) emit('proposals', props.accountId, result.id)
+  })
 }
 
 onMounted(load)
@@ -53,8 +91,27 @@ onBeforeUnmount(() => { active = false })
           {{ accountStatus === 'ACTIVE' ? inbox.readError ? '最近读取失败'
             : inbox.lastSucceededAt ? '最近读取成功' : '尚未读取' : '当前绑定未启用' }}
         </NTag>
-        <NButton v-if="canReview" size="small" @click="emit('proposals')">查看此账号的提案与回执</NButton>
+        <NButton v-if="canReview" size="small" @click="emit('proposals', accountId)">查看此账号的提案与回执</NButton>
+        <NButton v-if="canPropose && !composer" type="primary" size="small" @click="openComposer($event)">拟写回复</NButton>
       </div>
+      <NForm v-if="composer && canPropose" class="reply-composer" aria-labelledby="newbi-composer-title" @submit.prevent="submit">
+        <h4 id="newbi-composer-title" ref="composerHeading" tabindex="-1">拟写 Newbi 回复</h4>
+        <p>{{ identityLabel }} · {{ accountLabel }}</p>
+        <NFormItem label="帖子 ID" :label-props="{ for: 'newbi-composer-post' }"
+          :validation-status="invalidPost ? 'error' : undefined" :feedback="invalidPost ? '请输入完整的帖子 ID。' : undefined">
+          <NInput v-model:value="postId" :input-props="{ id: 'newbi-composer-post', required: true, 'aria-invalid': invalidPost || undefined }" :disabled="submitting" />
+        </NFormItem>
+        <NFormItem label="拟公开回复" :label-props="{ for: 'newbi-composer-content' }"
+          :validation-status="invalidContent ? 'error' : undefined" :feedback="invalidContent ? '回复最多 4000 字符，请检查正文。' : undefined">
+          <NInput v-model:value="content" type="textarea" :rows="4" :input-props="{ id: 'newbi-composer-content', required: true, 'aria-invalid': invalidContent || undefined }" :disabled="submitting" />
+        </NFormItem>
+        <p>送审时将附上角色的 AI 披露。通过审批后，回复才可进入发送流程。</p>
+        <NAlert v-if="submitError" type="error" role="alert">{{ submitError }}</NAlert>
+        <div class="connector-actions">
+          <NButton type="primary" attr-type="submit" :loading="submitting" :disabled="!draft.success || submitting">提交回复提案</NButton>
+          <NButton :disabled="submitting" @click="closeComposer">取消</NButton>
+        </div>
+      </NForm>
       <dl>
         <div><dt>Agent ID</dt><dd>{{ inbox.agentId }}</dd></div>
         <div><dt>最近成功读取</dt><dd>{{ inbox.lastSucceededAt ? format(inbox.lastSucceededAt) : '无记录' }}</dd></div>
@@ -70,6 +127,7 @@ onBeforeUnmount(() => { active = false })
           <strong>{{ kinds[event.type] }}</strong>
           <time :datetime="event.occurredAt">{{ format(event.occurredAt) }}</time>
           <span>帖子 {{ event.postId }}</span>
+          <NButton v-if="canPropose && !composer" size="tiny" secondary @click="openComposer($event, event.postId)">拟写回复</NButton>
         </li>
       </ul>
     </template>
@@ -78,6 +136,9 @@ onBeforeUnmount(() => { active = false })
 
 <style scoped>
 .connector-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.reply-composer { margin-block: 1rem; }
+.reply-composer h4 { margin-block: 0 .5rem; }
+.reply-composer .connector-actions { margin-block-start: .75rem; }
 dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }

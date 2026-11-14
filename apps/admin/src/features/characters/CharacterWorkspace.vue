@@ -27,7 +27,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   created: [character: Workspace]; updated: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']];
-  account: [id?: string]; proposals: [id: string]; selectCharacter: [id: string]; loadCharacters: [];
+  account: [id?: string]; proposals: [accountId: string, proposalId?: string]; selectCharacter: [id: string]; loadCharacters: [];
 }>()
 const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
@@ -60,6 +60,10 @@ const base = computed(() => '/v1/characters/' + encodeURIComponent(props.charact
 const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
 const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
 const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && platform === 'newbi'))
+const connectorIdentity = computed(() => identities.value.find(({ id }) => id === connector.value?.identityId))
+const canProposeConnectorReply = computed(() => !!admin.value && newbiRegistrationAvailable.value
+  && connector.value?.instanceKey === newbiEndpoint.value && connector.value?.status === 'ACTIVE'
+  && connectorIdentity.value?.status === 'ACTIVE' && workspace.value?.status === 'ACTIVE')
 const isCharacter = computed(() => editor.value === 'character' || editor.value === 'core')
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
@@ -722,7 +726,9 @@ onMounted(() => { if (props.characterId) void run(load) })
       </section>
       <ConnectorAccountStatus v-if="connector && inspectConnector" :key="connector.id + '/' + connector.version"
         :character-id="characterId" :account-id="connector.id" :account-status="connector.status" :can-review="!!admin"
-        @expired="emit('expired')" @proposals="emit('proposals', connector.id)" />
+        :account-label="boundAccountLabel(connector)" :identity-label="connectorIdentity ? identityName(connectorIdentity) : '身份不可用'"
+        :can-propose="canProposeConnectorReply"
+        @expired="emit('expired')" @proposals="(accountId, proposalId) => emit('proposals', accountId, proposalId)" />
       <NAlert v-else-if="accountDetail" type="warning">找不到当前角色的连接器账号。</NAlert>
     </template>
   </div>

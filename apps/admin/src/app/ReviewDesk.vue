@@ -559,7 +559,7 @@ async function decide(decision: Decision) {
         @created="characterCreated" @updated="characterUpdated" @expired="resetSession" @roles="roles = $event"
         @select-character="changeCharacter" @load-characters="run(() => fetchCharacters(characterCursor ?? undefined))"
         @account="navigate({ characterId, page: 'accounts', detail: $event })"
-        @proposals="navigate({ characterId, page: 'connector', connectorAccountId: $event })" />
+        @proposals="(accountId, proposalId) => navigate({ characterId, page: 'connector', connectorAccountId: accountId, detail: proposalId })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReview"
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
