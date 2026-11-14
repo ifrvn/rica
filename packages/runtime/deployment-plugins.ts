@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
-  deploymentPluginChange, deploymentPluginId, deploymentPluginIds, newbiCredential, pluginStage,
+  deploymentPluginChange, deploymentPluginId, deploymentPluginIds, pluginStage,
   type DeploymentPluginsView,
 } from '../contracts/deployment-plugins.js'
 import { newbiEndpoint } from '../contracts/newbi-pilot.js'
@@ -10,7 +10,7 @@ import type { ModelSettingsInput } from '../contracts/model-settings.js'
 import type { createModelSettingsStore } from './model-settings-store.js'
 import { writeSettings } from './write-settings.js'
 
-const connector = z.strictObject({ endpoint: newbiEndpoint, credential: newbiCredential })
+const connector = z.object({ endpoint: newbiEndpoint })
 const recordSchema = z.strictObject({
   version: z.number().int().nonnegative(),
   plugins: z.partialRecord(deploymentPluginId, pluginStage),
@@ -20,12 +20,11 @@ type Record = z.infer<typeof recordSchema>
 type Change = z.infer<typeof deploymentPluginChange>
 
 export class DeploymentPluginError extends Error {
-  constructor(readonly code: 'VERSION_CONFLICT' | 'PLUGIN_STATE_CONFLICT' | 'KEY_REQUIRED') { super(code) }
+  constructor(readonly code: 'VERSION_CONFLICT' | 'PLUGIN_STATE_CONFLICT') { super(code) }
 }
 
-export function createDeploymentPluginStore(directory: string, env = process.env) {
+export function createDeploymentPluginStore(directory: string) {
   const path = join(directory, 'deployment-plugins.json')
-  const envConnector = connector.safeParse({ endpoint: env.RICA_NEWBI_LOCAL_API_URL, credential: env.NEWBI_AGENT_KEY }).data
   let writes: Promise<unknown> = Promise.resolve()
 
   async function read(): Promise<Record> {
@@ -39,28 +38,28 @@ export function createDeploymentPluginStore(directory: string, env = process.env
 
   function view(record: Record, provider: ModelSettingsInput['provider']): DeploymentPluginsView {
     const plugins = {} as DeploymentPluginsView['plugins']
-    const config = record.newbi ?? envConnector
+    const config = record.newbi
     for (const id of deploymentPluginIds) {
-      const previouslyEnabled = id === 'newbi' ? !!config : id === provider
+      const previouslyEnabled = id === provider
       plugins[id] = record.plugins[id] ?? (previouslyEnabled ? 'ENABLED' : 'NOT_INSTALLED')
     }
-    return { version: record.version, plugins, newbi: { endpoint: config?.endpoint ?? null, hasCredential: !!config },
+    return { version: record.version, plugins, newbi: { endpoint: config?.endpoint ?? null },
       configuredModel: provider === 'simulated' ? null : provider }
   }
 
   async function readNewbi() {
     const record = await read()
-    return view(record, 'simulated').plugins.newbi === 'ENABLED' ? record.newbi ?? envConnector : undefined
+    return record.plugins.newbi === 'ENABLED' ? record.newbi : undefined
   }
 
-  async function openNewbi() {
+  async function openNewbi(credential: string, expectedEndpoint?: string) {
     const current = await readNewbi()
-    if (!current) return
+    if (!current || (expectedEndpoint && expectedEndpoint !== current.endpoint)) return
     return {
-      env: { RICA_NEWBI_LOCAL_API_URL: current.endpoint, NEWBI_AGENT_KEY: current.credential },
+      connection: { endpoint: current.endpoint, credential },
       async beforeRequest() {
         const latest = await readNewbi()
-        if (latest?.endpoint !== current.endpoint || latest.credential !== current.credential) {
+        if (latest?.endpoint !== current.endpoint) {
           throw new Error('Newbi configuration changed')
         }
       },
@@ -83,10 +82,7 @@ export function createDeploymentPluginStore(directory: string, env = process.env
       const current = view(record, provider)
       if (change.action === 'CONFIGURE_NEWBI') {
         if (current.plugins.newbi !== 'ENABLED') throw new DeploymentPluginError('PLUGIN_STATE_CONFLICT')
-        const previous = record.newbi ?? envConnector
-        const credential = change.credential ?? (previous?.endpoint === change.endpoint ? previous.credential : undefined)
-        if (!credential) throw new DeploymentPluginError('KEY_REQUIRED')
-        record.newbi = { endpoint: change.endpoint, credential }
+        record.newbi = { endpoint: change.endpoint }
       } else {
         const transition = {
           INSTALL: ['NOT_INSTALLED', 'INSTALLED'],

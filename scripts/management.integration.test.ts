@@ -9,7 +9,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
-import { identifyNewbiAccount, startNewbiReader, verifyNewbiBinding } from '../apps/worker/newbi-read-plugin.js'
+import { identifyNewbiAccount, startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -43,13 +43,13 @@ const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
-let connectorEnv: NodeJS.ProcessEnv = {}
+let connectorEndpoint: string | undefined
 const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
-    verifyConnector: (endpoint, agentId) => verifyNewbiBinding(endpoint, agentId, connectorEnv),
-    identifyConnector: () => identifyNewbiAccount(connectorEnv),
+    identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
+      ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
     deploymentPlugins,
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
@@ -2617,11 +2617,10 @@ test('concurrent model calls share one enforced character budget and report the 
 test('Newbi installation gates new proposals and approvals while preserving review history', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'rica-connector-lifecycle-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const plugins = createDeploymentPluginStore(directory, {})
+  const plugins = createDeploymentPluginStore(directory)
   const target = testApp(plugins)
   const change = (input: Parameters<typeof plugins.save>[0], expected: number) => plugins.save(input, expected, async () => 'simulated')
   const endpoint = 'http://127.0.0.1:5000/agent-api/v1'
-  const credential = 'nbi_agent_' + 'x'.repeat(43)
   const created = await request('POST', '/characters', { key: 'newbi-lifecycle-character', data: characterData('-newbi-lifecycle') })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const characterId: string = created.body.id
@@ -2646,7 +2645,7 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   await change({ action: 'INSTALL', id: 'newbi' }, 0)
   assert.equal((await request('GET', base, { target, actor: 'reviewer' })).body.newbiInstalled, true)
   await change({ action: 'ENABLE', id: 'newbi' }, 1)
-  await change({ action: 'CONFIGURE_NEWBI', endpoint, credential }, 2)
+  await change({ action: 'CONFIGURE_NEWBI', endpoint }, 2)
   const checkedAt = new Date(await databaseNow())
   await owner.newbiEventCheckpoint.upsert({
     where: { accountId }, create: { accountId, lastSucceededAt: checkedAt, readError: 'RATE_LIMITED' },
@@ -2670,7 +2669,7 @@ test('Newbi installation gates new proposals and approvals while preserving revi
     target, actor, key: 'newbi-lifecycle-' + decision,
     data: { decision, reviewDigest: initial.body.reviewDigest, reason: 'Verified lifecycle fixture' },
   })
-  await change({ action: 'CONFIGURE_NEWBI', endpoint: 'http://127.0.0.1:5001/agent-api/v1', credential }, 3)
+  await change({ action: 'CONFIGURE_NEWBI', endpoint: 'http://127.0.0.1:5001/agent-api/v1' }, 3)
   assert.equal((await preview()).body.connectorAvailable, false)
   assert.equal((await decide('APPROVE')).body.error.code, 'PLUGIN_STATE_CONFLICT')
   await change({ action: 'DISABLE', id: 'newbi' }, 4)
@@ -2683,7 +2682,7 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   assert.equal((await decide('REJECT', 'admin-b')).body.status, 'REJECTED')
 })
 
-test('Newbi pilot binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async () => {
+test('Newbi pilot binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async (t) => {
   const agentId = randomUUID()
   let currentAgent = agentId
   const postId = randomUUID()
@@ -2737,14 +2736,20 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   await once(server, 'listening')
   const { port } = server.address() as { port: number }
   const endpoint = 'http://localhost:' + port + '/agent-api/v1'
+  const settingsDir = await mkdtemp(join(tmpdir(), 'rica-newbi-host-'))
+  t.after(() => rm(settingsDir, { recursive: true, force: true }))
+  const settings = createDeploymentPluginStore(settingsDir)
+  await settings.save({ action: 'INSTALL', id: 'newbi' }, 0, async () => 'simulated')
+  await settings.save({ action: 'ENABLE', id: 'newbi' }, 1, async () => 'simulated')
+  await settings.save({ action: 'CONFIGURE_NEWBI', endpoint }, 2, async () => 'simulated')
   const executorUrl = new URL(config.databaseUrl)
   executorUrl.searchParams.set('options', '-c role=rica_newbi_executor')
   const executor = createDatabase(executorUrl.toString())
   try {
     const identityId = await reflectionIdentity()
     const prefix = characterPath(a) + '/newbi'
-    connectorEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
-    const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId } })
+    connectorEndpoint = endpoint
+    const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId, credential: secret, agentId } })
     assert.equal(binding.status, 201, JSON.stringify(binding.body))
     const accountId = binding.body.id
     assert.equal(binding.body.status, 'PAUSED')
@@ -2767,13 +2772,13 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal((await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })).status, 'PAUSED')
     const resumed = await resume('newbi-test-resume')
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
-    connectorEnv = {}
+    connectorEndpoint = undefined
     assert.equal((await resume('newbi-test-resume')).status, 200)
     assert.equal(writes, 0)
     const client = createNewbiReplyExecutor(endpoint, secret)
     const executorKey = newbiExecutorKey(newbiExecutorIdentity)
-    const inspector = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'inspect', postId], {
-      env: { ...process.env, RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret },
+    const inspector = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'inspect', accountId, postId], {
+      env: { ...process.env, RICA_MODEL_SETTINGS_DIR: settingsDir },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })
     let inspected = ''
@@ -2844,10 +2849,9 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, approved.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 0)
     currentAgent = agentId
-    const send = async (id: string, key: string, ...args: string[]) => {
+    const send = async (id: string, ...args: string[]) => {
       const processResult = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'send', id, ...args], {
-        env: { ...process.env, RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: key,
-          DATABASE_URL: scheduleRuntimeUrl() },
+        env: { ...process.env, RICA_MODEL_SETTINGS_DIR: settingsDir, DATABASE_URL: scheduleRuntimeUrl() },
         stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       })
       let stdout = ''
@@ -2857,14 +2861,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       const [code] = await once(processResult, 'close')
       return { code, stdout, stderr }
     }
-    const missing = await send(approved.id, '')
-    assert.equal(missing.code, 1)
-    assert.match(missing.stderr, /"kind":"platform-reply-executor".*"code":"MISSING_SERVICE"/)
-    assert.equal(missing.stdout, '')
-    assert.equal(writes, 0)
-    assert.equal((await request('GET', approved.path)).body.attempts, 0)
-
-    const normal = await send(approved.id, secret)
+    const normal = await send(approved.id)
     assert.equal(normal.code, 0, normal.stderr)
     assert.match(normal.stderr, /"kind":"platform-reply-executor".*"code":"READY"/)
     assert.ok(!normal.stderr.includes(secret))
@@ -2883,11 +2880,11 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, waiting.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 2)
     assert.deepEqual(await executeNewbiReply(executor, client, nextExecutor, lost.id, true), { status: 'UNAVAILABLE' })
-    const withoutRetry = await send(lost.id, secret)
+    const withoutRetry = await send(lost.id)
     assert.equal(withoutRetry.code, 1, withoutRetry.stderr)
     assert.deepEqual(JSON.parse(withoutRetry.stdout), { status: 'UNAVAILABLE' })
     assert.equal(writes, 2)
-    const recovered = await send(lost.id.toUpperCase(), secret, '--retry')
+    const recovered = await send(lost.id.toUpperCase(), '--retry')
     assert.equal(recovered.code, 0, recovered.stderr)
     assert.deepEqual(JSON.parse(recovered.stdout), { status: 'SENT', commentId: sent.get(lost.id)?.id })
     const receipt = await request('GET', lost.path)
@@ -2976,15 +2973,18 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal((await request('GET', paused.path)).body.attempts, 0)
     assert.equal(writes, 7)
   } finally {
-    connectorEnv = {}
+    connectorEndpoint = undefined
     await executor.$disconnect()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
 
-test('Newbi event polling checkpoints empty and replayed pages, backs off, and fences revoked work', { timeout: 30_000 }, async () => {
+test('Newbi event polling checkpoints empty and replayed pages, backs off, and fences revoked work', { timeout: 30_000 }, async (t) => {
   const agentId = randomUUID()
+  const otherAgentId = randomUUID()
+  const otherKey = 'nbi_agent_' + 'y'.repeat(43)
+  const avatarUrl = 'https://example.test/avatar.png'
   const postId = randomUUID()
   const commentId = randomUUID()
   const secret = 'nbi_agent_' + 'z'.repeat(43)
@@ -3007,8 +3007,10 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const reply = (data: unknown) => json({ code: 0, data })
     if (req.method !== 'GET') { writes++; return res.writeHead(405).end() }
     if (url.pathname.endsWith('/status')) return reply({ state: 'READ_ONLY', protocolVersion: 1 })
-    if (req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
-    if (url.pathname.endsWith('/me')) return reply({ id: verifiedAgent, username: 'fixture-events', accessStatus: 'ACTIVE' })
+    const otherAgent = req.headers.authorization === 'Bearer ' + otherKey
+    if (!otherAgent && req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
+    if (url.pathname.endsWith('/me')) return reply({ id: otherAgent ? otherAgentId : verifiedAgent,
+      username: otherAgent ? 'other-agent' : 'fixture-events', accessStatus: 'ACTIVE', avatarUrl })
     if (url.pathname.endsWith('/rules')) return reply({ idempotencyDays: 7, pollIntervalSeconds: 30 })
     if (url.pathname.endsWith('/quota')) return reply({ comments: [{ remaining: 0 }] })
     if (!url.pathname.endsWith('/events')) return res.writeHead(404).end()
@@ -3031,28 +3033,49 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
   await once(server, 'listening')
   const { port } = server.address() as { port: number }
   const endpoint = 'http://localhost:' + port + '/agent-api/v1'
+  const settingsDir = await mkdtemp(join(tmpdir(), 'rica-newbi-host-'))
+  t.after(() => rm(settingsDir, { recursive: true, force: true }))
+  const settings = createDeploymentPluginStore(settingsDir)
+  await settings.save({ action: 'INSTALL', id: 'newbi' }, 0, async () => 'simulated')
+  await settings.save({ action: 'ENABLE', id: 'newbi' }, 1, async () => 'simulated')
+  await settings.save({ action: 'CONFIGURE_NEWBI', endpoint }, 2, async () => 'simulated')
   const url = new URL(config.databaseUrl)
   url.searchParams.set('options', '-c role=rica_newbi_poller')
   const db = createDatabase(url.toString())
   const runtime = createDatabase(scheduleRuntimeUrl())
   let worker: ReturnType<typeof spawn> | undefined
-  const readerEnv = { RICA_NEWBI_LOCAL_API_URL: endpoint, NEWBI_AGENT_KEY: secret }
+  const readerEnv = { endpoint, credential: secret }
   const host = await startNewbiReader(readerEnv)
   try {
     const identityId = await reflectionIdentity()
     const character = characterPath(a)
     const pool = character + '/account-pool'
-    const data = { platform: 'newbi' }
-    connectorEnv = { ...readerEnv, NEWBI_AGENT_KEY: 'nbi_agent_' + 'x'.repeat(43) }
-    assert.equal((await request('POST', pool, { key: 'newbi-events-register', data })).body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
-    connectorEnv = readerEnv
+    const data = { platform: 'newbi', agentId, credential: secret }
+    connectorEndpoint = endpoint
+    const testConnection = await request('POST', pool + '/newbi/test', { data: { credential: secret } })
+    assert.equal(testConnection.status, 200)
+    assert.deepEqual(testConnection.body, { agentId, username: 'fixture-events', avatarUrl })
+    assert.ok(!JSON.stringify(testConnection.body).includes(secret))
+    assert.equal((await request('GET', pool)).body.items.filter(({ platform }: { platform: string }) => platform === 'newbi').length, 0)
+    assert.equal((await request('POST', pool, { key: 'newbi-events-mismatch', data: { ...data, agentId: otherAgentId } })).status, 409)
+    assert.equal((await request('POST', pool, { key: 'newbi-events-register', data: { ...data, credential: 'nbi_agent_' + 'x'.repeat(43) } })).body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
+    connectorEndpoint = endpoint
     assert.equal((await request('POST', pool, { actor: 'reviewer', key: 'newbi-events-forbidden', data })).status, 403)
     assert.equal((await request('POST', pool, { key: 'newbi-events-spoof', data: { ...data, agentId, endpoint } })).status, 422)
     const registered = await request('POST', pool, { key: 'newbi-events-register', data })
     assert.equal(registered.status, 201, JSON.stringify(registered.body))
-    const row = (await request('GET', pool)).body.items.find(({ id }: { id: string }) => id === registered.body.id)
+    const other = await request('POST', pool, {
+      key: 'newbi-events-register-other', data: { platform: 'newbi', agentId: otherAgentId, credential: otherKey },
+    })
+    assert.equal(other.status, 201, JSON.stringify(other.body))
+    const entries = (await request('GET', pool)).body.items
+    assert.ok(!JSON.stringify(entries).includes(secret) && !JSON.stringify(entries).includes(otherKey))
+    const row = entries.find(({ id }: { id: string }) => id === registered.body.id)
     assert.equal(row.remoteAccountId, agentId)
     assert.equal(row.instanceKey, endpoint)
+    assert.equal(entries.find(({ id }: { id: string }) => id === other.body.id).remoteAccountId, otherAgentId)
+    await assert.rejects(runtime.newbiCredential.count(), /permission denied/i)
+    await assert.rejects(db.newbiCredential.count(), /permission denied/i)
     const bind = await request('POST', pool + '/associations', {
       key: 'newbi-events-bind', data: { identityId, registrationId: registered.body.id },
     })
@@ -3070,18 +3093,18 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const callsAfterRegistration = calls
     assert.deepEqual(await poll(), { status: 'STOPPED' })
     assert.equal(calls, callsAfterRegistration)
-    connectorEnv = readerEnv
+    connectorEndpoint = endpoint
     assert.equal((await control('RESUME')).status, 200)
-    connectorEnv = {}
-    await assert.rejects(startNewbiReader({ RICA_NEWBI_LOCAL_API_URL: endpoint }), /MISSING_SERVICE/)
-    await assert.rejects(startNewbiReader({ ...readerEnv, RICA_NEWBI_LOCAL_API_URL: 'https://fixture.example/agent-api/v1' }),
+    connectorEndpoint = undefined
+    await assert.rejects(startNewbiReader({ endpoint, credential: '' }), /MISSING_SERVICE/)
+    await assert.rejects(startNewbiReader({ ...readerEnv, endpoint: 'https://fixture.example/agent-api/v1' }),
       /INVALID_CONFIG/)
     verifiedAgent = randomUUID()
     assert.deepEqual(await poll(), { status: 'STOPPED' })
     assert.deepEqual(cursors, [])
     assert.equal((await request('GET', character + inbox)).body.readError, 'AGENT_MISMATCH')
     verifiedAgent = agentId
-    const badHost = await startNewbiReader({ ...readerEnv, NEWBI_AGENT_KEY: 'nbi_agent_' + 'x'.repeat(43) })
+    const badHost = await startNewbiReader({ ...readerEnv, credential: 'nbi_agent_' + 'x'.repeat(43) })
     try {
       await assert.rejects(pollNewbiEvents(db, badHost.plugin.implementation, accountId), /CREDENTIAL_INVALID/)
     } finally {
@@ -3095,7 +3118,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.deepEqual(cursors, [null])
 
     worker = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/newbi-pilot.ts', 'events', accountId, '--for-seconds', '5'], {
-      env: { ...process.env, ...readerEnv, DATABASE_URL: scheduleRuntimeUrl() },
+      env: { ...process.env, RICA_MODEL_SETTINGS_DIR: settingsDir, DATABASE_URL: scheduleRuntimeUrl() },
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     })
     let output = ''

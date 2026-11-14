@@ -20,7 +20,7 @@ const modelEditor = computed(() => {
 })
 const changedPlugin = ref<DeploymentPluginId>()
 const releasePreview = ref<DeploymentPluginId>()
-const form = reactive({ endpoint: '', credential: '' })
+const form = reactive({ endpoint: '' })
 const stages = { NOT_INSTALLED: '未安装', INSTALLED: '已安装 · 未启用', ENABLED: '已启用' } as const
 const operations = { NOT_INSTALLED: 'INSTALL', INSTALLED: 'ENABLE', ENABLED: 'DISABLE' } as const
 const newbiComponents = computed(() => status.value?.services.flatMap(({ catalog }) =>
@@ -56,7 +56,7 @@ function toggleEditor(id: DeploymentPluginId) {
   }
   editing.value = id
   error.value = ''
-  if (id === 'newbi') Object.assign(form, { endpoint: deployment.value?.newbi.endpoint ?? '', credential: '' })
+  if (id === 'newbi') Object.assign(form, { endpoint: deployment.value?.newbi.endpoint ?? '' })
   void nextTick(() => document.getElementById(id === 'newbi' ? 'newbi-settings-heading' : 'model-settings-heading')?.focus())
 }
 
@@ -65,7 +65,7 @@ function update(id: DeploymentPluginId, data: unknown) {
   changedPlugin.value = id
   const parsed = deploymentPluginChange.safeParse(data)
   if (!parsed.success) {
-    error.value = '请核对本机 API 地址和 Agent 密钥格式。'
+    error.value = '请核对本机 API 地址。'
     return
   }
   const version = deployment.value.version
@@ -77,10 +77,9 @@ function update(id: DeploymentPluginId, data: unknown) {
     })
     if (!active() || !status.value) return
     status.value = { ...status.value, deployment: updated,
-      newbiRegistrationAvailable: updated.plugins.newbi === 'ENABLED' && updated.newbi.hasCredential }
+      newbiRegistrationAvailable: updated.plugins.newbi === 'ENABLED' && !!updated.newbi.endpoint }
     emit('newbi', updated.plugins.newbi !== 'NOT_INSTALLED')
     if (parsed.data.action === 'CONFIGURE_NEWBI' || (parsed.data.action === 'DISABLE' && editing.value === id)) {
-      form.credential = ''
       editing.value = undefined
       void nextTick(() => document.getElementById('plugin-heading-' + id)?.focus())
     }
@@ -93,7 +92,7 @@ function changeStage(id: DeploymentPluginId) {
 }
 
 function saveNewbi() {
-  update('newbi', { action: 'CONFIGURE_NEWBI', endpoint: form.endpoint.trim(), credential: form.credential.trim() || undefined })
+  update('newbi', { action: 'CONFIGURE_NEWBI', endpoint: form.endpoint.trim() })
 }
 </script>
 
@@ -135,11 +134,11 @@ function saveNewbi() {
 
         <div v-if="deployment.plugins[id] === 'ENABLED'" class="plugin-integration">
           <template v-if="id === 'newbi'">
-            <span>{{ deployment.newbi.hasCredential ? '可接入账号' : '等待配置 Agent API' }}</span>
+            <span>{{ deployment.newbi.endpoint ? '可接入账号' : '等待配置 Agent API' }}</span>
             <div class="console-actions">
               <NButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" secondary
                 :aria-expanded="editing === id" :disabled="busy || loading" @click="toggleEditor(id)">
-                {{ deployment.newbi.hasCredential ? '查看 Agent API 设置' : '配置 Agent API' }}
+                {{ deployment.newbi.endpoint ? '查看 Agent API 设置' : '配置 Agent API' }}
               </NButton>
               <NButton v-if="status?.newbiRegistrationAvailable" size="small" secondary @click="emit('accounts')">前往平台账号池</NButton>
             </div>
@@ -216,11 +215,6 @@ function saveNewbi() {
             <NFormItem label="本机 API 地址" :label-props="{ for: 'newbi-endpoint' }">
               <NInput v-model:value="form.endpoint" placeholder="http://127.0.0.1:5000/agent-api/v1" :disabled="busy"
                 :input-props="{ id: 'newbi-endpoint', required: true }" />
-            </NFormItem>
-            <NFormItem label="Agent 密钥" :label-props="{ for: 'newbi-secret' }">
-              <NInput v-model:value="form.credential" type="password" :disabled="busy"
-                :placeholder="deployment.newbi.hasCredential && deployment.newbi.endpoint === form.endpoint ? '留空继续使用已保存密钥' : '输入 Agent 密钥'"
-                :input-props="{ id: 'newbi-secret', autocomplete: 'new-password' }" />
             </NFormItem>
             <NButton type="primary" attr-type="submit" :loading="busy">保存 Newbi 设置</NButton>
           </NForm>

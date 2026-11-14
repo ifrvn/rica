@@ -6,7 +6,7 @@ import { loadManagementConfig } from './admin-auth.js'
 import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
-import { identifyNewbiAccount, verifyNewbiBinding } from '../worker/newbi-read-plugin.js'
+import { identifyNewbiAccount } from '../worker/newbi-read-plugin.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
@@ -41,13 +41,9 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   modelSettings: createModelSettingsStore(settingsDirectory),
   deploymentPlugins,
-  identifyConnector: async () => {
-    const current = await deploymentPlugins.openNewbi()
-    return current && identifyNewbiAccount(current.env, current.beforeRequest)
-  },
-  verifyConnector: async (endpoint, agentId) => {
-    const current = await deploymentPlugins.openNewbi()
-    return !!current && verifyNewbiBinding(endpoint, agentId, current.env, current.beforeRequest)
+  identifyConnector: async (credential, endpoint) => {
+    const current = await deploymentPlugins.openNewbi(credential, endpoint)
+    return current && identifyNewbiAccount(current.connection, current.beforeRequest)
   },
 }) : undefined
 

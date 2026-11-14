@@ -22,7 +22,7 @@ async function fixture(t: TestContext, managePlugins = false) {
   const directory = await mkdtemp(join(tmpdir(), 'rica-model-settings-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = createModelSettingsStore(directory)
-  const plugins = createDeploymentPluginStore(directory, {})
+  const plugins = createDeploymentPluginStore(directory)
   const app = createManagementApp({
     db: { $transaction: (work: (tx: object) => unknown) => work({
       managementMembership: { findMany: async () => [{ role: 'ADMIN' }] },
@@ -157,24 +157,24 @@ test('model checks use the saved configuration and disclose only a redacted repl
   assert.equal(upstream.mock.callCount(), 2)
 })
 
-test('Newbi credentials stay write-only and disabled connectors cannot acquire credentials', async (t) => {
+test('Newbi settings accept only the endpoint and disabling fences existing clients', async (t) => {
   const { pluginChange, plugins } = await fixture(t, true)
   const credential = 'nbi_agent_' + 'x'.repeat(43)
   const endpoint = 'http://127.0.0.1:5000/agent-api/v1'
-  const config = { action: 'CONFIGURE_NEWBI', endpoint, credential }
+  const config = { action: 'CONFIGURE_NEWBI', endpoint }
   assert.equal((await pluginChange(config, 0)).status, 409)
   assert.equal((await pluginChange({ action: 'INSTALL', id: 'newbi' }, 0)).status, 200)
   assert.equal((await pluginChange({ action: 'ENABLE', id: 'newbi' }, 1)).status, 200)
   const saved = await pluginChange(config, 2)
   assert.equal(saved.status, 200)
   const view = await saved.json()
-  assert.deepEqual(view.newbi, { endpoint, hasCredential: true })
+  assert.deepEqual(view.newbi, { endpoint })
   assert.equal(JSON.stringify(view).includes(credential), false)
-  assert.deepEqual(await plugins.readNewbi(), { endpoint, credential })
-  const opened = await plugins.openNewbi()
+  assert.deepEqual(await plugins.readNewbi(), { endpoint })
+  const opened = await plugins.openNewbi(credential)
   assert.ok(opened)
   const oldExecutor = createNewbiReplyExecutor(endpoint, credential, undefined, opened.beforeRequest)
-  assert.equal((await pluginChange({ action: 'CONFIGURE_NEWBI', endpoint: 'http://127.0.0.1:5001/agent-api/v1' }, 3)).status, 422)
+  assert.equal((await pluginChange({ ...config, credential }, 3)).status, 422)
   assert.equal((await pluginChange({ action: 'DISABLE', id: 'newbi' }, 3)).status, 200)
   assert.equal(await plugins.readNewbi(), undefined)
   await assert.rejects(oldExecutor.verify(), /Newbi configuration changed/)

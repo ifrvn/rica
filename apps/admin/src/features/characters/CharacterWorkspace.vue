@@ -17,7 +17,7 @@ type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>
 type Registration = z.infer<typeof accountRegistrationView>
 type Page<T> = { items: T[]; nextCursor: string | null }
-type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'connector-account' | 'associate' | 'control' | 'linked-account'
+type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'associate' | 'control' | 'linked-account'
 type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; connector?: boolean; revoke?: boolean }
 
 const props = defineProps<{
@@ -34,6 +34,13 @@ const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
 const newbiRegistrationAvailable = ref(false)
 const newbiEndpoint = ref<string>()
+const newbiCredential = ref('')
+const newbiPreview = ref<{ agentId: string; username: string; avatarUrl: string | null }>()
+const platformChoices = computed(() => [
+  ...(workspace.value?.simulationPlatforms ?? []).map(value => ({ label: value, value })),
+  ...(workspace.value?.newbiInstalled || newbiRegistrationAvailable.value
+    ? [{ label: newbiRegistrationAvailable.value ? 'Newbi' : 'Newbi（请先启用并配置接入点）', value: 'newbi', disabled: !newbiRegistrationAvailable.value }] : []),
+])
 type AccountCheck = z.infer<typeof newbiAccountCheckView>
 const newbiChecks = reactive(new Map<string, AccountCheck & { version: number }>())
 const checkingAccount = ref<string>()
@@ -55,7 +62,7 @@ const isCharacter = computed(() => editor.value === 'character' || editor.value 
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
   character: '新建角色', core: '角色设置', identity: '添加身份', 'identity-edit': '编辑身份',
-  account: '添加模拟账号', 'connector-account': '接入 Newbi 账号', associate: '关联平台账号',
+  account: '添加账号', associate: '关联平台账号',
   'linked-account': '已关联的平台账号',
   control: target.value?.revoke ? '撤销账号'
     : (target.value?.status === 'ACTIVE' ? '暂停' : '恢复')
@@ -113,10 +120,11 @@ const parsed = computed(() => {
     case 'core': return coreInput.safeParse({ coreProfile, reason })
     case 'identity': return identityInput.safeParse({ slug: form.slug.trim(), roleProfile })
     case 'identity-edit': return identityUpdate.safeParse({ roleProfile, reason })
-    case 'account': return simulationAccountRegistration.safeParse({
+    case 'account': return form.platform === 'newbi'
+      ? connectorAccountRegistration.safeParse({ platform: 'newbi', credential: newbiCredential.value.trim(), agentId: newbiPreview.value?.agentId })
+      : simulationAccountRegistration.safeParse({
       platform: form.platform, instanceKey: form.instance.trim(), remoteAccountId: form.remoteId.trim(),
     })
-    case 'connector-account': return connectorAccountRegistration.safeParse({ platform: 'newbi' })
     case 'associate': return accountBindingInput.safeParse({
       registrationId: form.registrationId, identityId: editingIdentity.value?.id,
     })
@@ -159,6 +167,9 @@ function fieldInput(field: string) {
 }
 
 function closeEditor() {
+  newbiCredential.value = ''
+  newbiPreview.value = undefined
+  pending = undefined
   editor.value = undefined
 }
 
@@ -242,9 +253,10 @@ async function run(task: () => Promise<void>) {
       error.value = '该身份已有平台账号。撤销原账号后可重新关联。'
       return
     }
-    if (editor.value === 'connector-account' && cause instanceof RequestError) {
+    if (editor.value === 'account' && form.platform === 'newbi' && cause instanceof RequestError) {
       if (cause.code === 'CONNECTOR_VERIFICATION_FAILED' || cause.code === 'PLUGIN_STATE_CONFLICT') {
-        error.value = '无法识别 Newbi 账号。请到插件中心核对启用状态、Agent API 地址和密钥。'
+        newbiPreview.value = undefined
+        error.value = '无法核验 Newbi 账号。请检查 Agent Key 和插件中心的 API 接入点。'
         return
       }
       if (cause.code === 'ACCOUNT_REGISTERED' || cause.code === 'CONFLICT') {
@@ -295,13 +307,15 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
   target.value = resource
   const core = editingCore.value?.profile
   pending = undefined
+  newbiCredential.value = ''
+  newbiPreview.value = undefined
   error.value = ''
   notice.value = ''
   Object.assign(form, { slug: '', name: core?.name ?? identity?.profile?.displayName ?? '',
     timezone: kind === 'character' ? Intl.DateTimeFormat().resolvedOptions().timeZone : identity?.profile?.timezone ?? '',
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
-    registrationId: null, platform: workspace.value?.simulationPlatforms[0] ?? '',
+    registrationId: null, platform: '',
     instance: 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
   void loadSchemas().catch(() => {})
@@ -323,6 +337,28 @@ function command(path: string, data: object, version?: number) {
     headers['If-Match'] = '"' + version + '"'
   }
   return request<{ id: string }>(path, { method: version === undefined ? 'POST' : 'PUT', headers, body })
+}
+
+function clearNewbiPreview() {
+  newbiPreview.value = undefined
+  error.value = ''
+  pending = undefined
+}
+
+function testNewbiAccount() {
+  void run(async () => {
+    newbiPreview.value = undefined
+    await loadSchemas()
+    const input = schemas.value?.connector.newbiAccountTest.safeParse({ credential: newbiCredential.value.trim() })
+    if (!input?.success) {
+      error.value = '请输入有效的 Newbi Agent Key。'
+      return
+    }
+    const preview = await request<NonNullable<typeof newbiPreview.value>>(base.value + '/account-pool/newbi/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input.data),
+    })
+    if (active) newbiPreview.value = preview
+  })
 }
 
 async function save() {
@@ -352,7 +388,7 @@ async function save() {
       await command(base.value + '/identities', input.data)
     } else if (kind === 'identity-edit' && identity?.version != null) {
       await command(base.value + '/identities/' + identity.id, input.data, identity.version)
-    } else if (kind === 'account' || kind === 'connector-account') {
+    } else if (kind === 'account') {
       await command(base.value + '/account-pool', input.data)
     } else if (kind === 'associate') {
       await command(base.value + '/account-pool/associations', input.data)
@@ -442,13 +478,27 @@ onMounted(() => { if (props.characterId) void run(load) })
           </template>
         </NFormItem>
         <template v-if="editor === 'account'">
-          <NFormItem label="模拟平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
-            <NSelect placeholder="选择模拟平台" filterable v-model:value="form.platform" :to="false" :input-props="fieldInput('platform')" @blur="touched.add('platform')"
-              :options="workspace?.simulationPlatforms.map(value => ({ label: value, value }))" />
+          <NFormItem label="平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
+            <NSelect placeholder="选择平台" filterable v-model:value="form.platform" :to="false" :input-props="fieldInput('platform')"
+              :disabled="busy" :options="platformChoices" @update:value="clearNewbiPreview" @blur="touched.add('platform')" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
             </template>
           </NFormItem>
+          <template v-if="form.platform === 'newbi'">
+            <NFormItem label="Agent Key" :label-props="{ for: 'workspace-newbi-key' }">
+              <NInput v-model:value="newbiCredential" type="password" :disabled="busy"
+                :input-props="{ id: 'workspace-newbi-key', autocomplete: 'new-password' }"
+                @update:value="clearNewbiPreview" />
+            </NFormItem>
+            <NButton attr-type="button" secondary :disabled="busy || !newbiCredential.trim()" @click="testNewbiAccount">测试连接</NButton>
+            <div v-if="newbiPreview" class="workspace-actions newbi-preview" role="status">
+              <img v-if="newbiPreview.avatarUrl" :src="newbiPreview.avatarUrl" alt="" width="36" height="36" referrerpolicy="no-referrer" />
+              <strong>{{ newbiPreview.username }}</strong>
+              <NTag size="small" type="success">核验通过</NTag>
+            </div>
+          </template>
+          <template v-else-if="form.platform">
           <NFormItem label="实例标识" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
             <NInput placeholder="例如：sandbox" v-model:value="form.instance" :input-props="fieldInput('instance')"
               @blur="touched.add('instance')" :maxlength="120" />
@@ -462,8 +512,8 @@ onMounted(() => { if (props.characterId) void run(load) })
               <span id="workspace-remote-error">{{ fieldError('remote') }}</span>
             </template>
           </NFormItem>
+          </template>
         </template>
-        <p v-if="editor === 'connector-account'">Rica 会用插件中心配置的密钥识别 Newbi 账号，并将它加入当前角色的账号池。</p>
         <template v-if="editor === 'associate'">
           <p>关联到 {{ editingIdentity && identityName(editingIdentity) }}</p>
           <p v-if="!accountPool.length" class="workspace-muted">账号池暂无可关联账号，请先登记账号。</p>
@@ -486,8 +536,9 @@ onMounted(() => { if (props.characterId) void run(load) })
         </NFormItem>
         <div class="workspace-actions editor-actions">
           <NButton :type="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
-            attr-type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)">
-            {{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : title }}
+            attr-type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)
+              || (editor === 'account' && (!form.platform || (form.platform === 'newbi' && !newbiPreview)))">
+            {{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : editor === 'account' ? '确定' : title }}
           </NButton>
           <NButton :disabled="busy" @click="closeEditor">取消</NButton>
         </div>
@@ -572,10 +623,8 @@ onMounted(() => { if (props.characterId) void run(load) })
         <div class="console-section-heading">
           <h3 id="platform-accounts-heading" :ref="(node) => { if (accountsOnly) workspaceHeading = node as HTMLElement | undefined }" tabindex="-1">平台账号池</h3>
           <div v-if="admin || accountsOnly" class="workspace-actions">
-            <NButton v-if="admin" size="small" :disabled="busy || !workspace.simulationPlatforms.length"
-              @click="open('account')">添加模拟账号</NButton>
-            <NButton v-if="admin && newbiRegistrationAvailable" size="small" :disabled="busy"
-              @click="open('connector-account')">接入 Newbi 账号</NButton>
+            <NButton v-if="admin" size="small" type="primary" :disabled="busy || !platformChoices.length"
+              @click="open('account')">添加账号</NButton>
             <NButton v-if="accountsOnly" text :disabled="busy" @click="run(load)">刷新账号</NButton>
           </div>
         </div>
@@ -627,6 +676,8 @@ onMounted(() => { if (props.characterId) void run(load) })
 </template>
 
 <style scoped>
+.newbi-preview { margin-block: .75rem; }
+.newbi-preview img { border-radius: 50%; object-fit: cover; }
 .character-workspace { display: grid; gap: 1.25rem; min-width: 0; }
 .account-check { margin: 0; }
 .workspace-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }

@@ -185,6 +185,11 @@ export async function updateIdentity(
 
 type AccountRegistration = Pick<Prisma.PlatformAccountRegistrationUncheckedCreateInput, 'platform' | 'instanceKey' | 'remoteAccountId'>
 
+export async function saveNewbiCredential(tx: Tx, endpoint: string, agentId: string, credential: string) {
+  await tx.newbiCredential.upsert({ where: { endpoint_agentId: { endpoint, agentId } },
+    create: { endpoint, agentId, credential }, update: { credential } })
+}
+
 export async function registerAccount(tx: Tx, scope: Scope, input: AccountRegistration) {
   if (await tx.platformAccount.findUnique({ where: { platform_instanceKey_remoteAccountId: input }, select: { id: true } })) {
     throw new ManagementError(409, 'ACCOUNT_REGISTERED', 'Platform account already registered')
@@ -232,7 +237,7 @@ export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export type VerifyConnector = (endpoint: string, agentId: string) => Promise<boolean>
+export type VerifyConnector = (endpoint: string, agentId: string, tx?: Tx) => Promise<boolean>
 
 export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>, verifyConnector?: VerifyConnector) {
   const { characterId } = scope
@@ -248,7 +253,7 @@ export async function control(tx: Tx, scope: Scope, input: Input<typeof contract
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
     }
     if (operation === 'RESUME' && account.platform === 'newbi'
-      && !await verifyConnector?.(account.instanceKey, account.remoteAccountId)) {
+      && !await verifyConnector?.(account.instanceKey, account.remoteAccountId, tx)) {
       throw new ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Connector read identity could not be verified')
     }
     // Pausing a reauthentication or pending account must not make it eligible for activation.

@@ -6,7 +6,7 @@ import type { PlatformEventReader } from '../contracts/platform-reader.js'
 import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
 
 const uuid = z.uuid().transform((value) => value.toLowerCase())
-const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string() })
+const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string(), avatarUrl: z.string().nullish() })
 const thread = z.object({ id: uuid, title: z.string(), content: z.string(), isHidden: z.boolean(), isLocked: z.boolean() })
 const comment = z.object({ id: uuid, author: z.object({ id: z.union([z.string(), z.number()]), username: z.string() }),
   content: z.string(), isHidden: z.boolean(), replyToCommentId: uuid.nullable() })
@@ -125,7 +125,9 @@ function createReads(get: (path: string) => Promise<unknown>) {
       if (writing && (rules.idempotencyDays < 1 || quota.comments.some(({ remaining }) => remaining === 0))) {
         throw new Error('Newbi comment budget is unavailable')
       }
-      return { ...identity, pollIntervalSeconds: Math.max(30, rules.pollIntervalSeconds) }
+      const avatar = identity.avatarUrl && URL.canParse(identity.avatarUrl) ? new URL(identity.avatarUrl) : undefined
+      const avatarUrl = avatar && ['http:', 'https:'].includes(avatar.protocol) && !avatar.username && !avatar.password ? avatar.href : null
+      return { ...identity, avatarUrl, pollIntervalSeconds: Math.max(30, rules.pollIntervalSeconds) }
     },
     async readEvents(cursor: string | null) {
       try {

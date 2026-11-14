@@ -4,12 +4,12 @@ import { createDatabase, type RawQueryClient } from '../../packages/persistence/
 import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
-import { newbiEndpoint, newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
+import { newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
 import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
 import { observationError, reportPluginResult } from '../plugin-observation.js'
 import type { PluginDiagnostic } from '../../packages/contracts/plugin-status.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
-import { startNewbiReader } from './newbi-read-plugin.js'
+import { startNewbiReader, type NewbiConnection } from './newbi-read-plugin.js'
 import { startNewbiExecutor } from './newbi-execution-plugin.js'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
@@ -28,25 +28,22 @@ function scopedDatabase(db: PrismaClient, role: 'reader' | 'executor'): RawQuery
   }
 }
 
-async function connectorSettings() {
-  const directory = process.env.RICA_MODEL_SETTINGS_DIR ?? modelSettingsDirectory(runtimeDatabaseUrl())
+async function connectorSettings(db: RawQueryClient, id: string, sending: boolean) {
+  const directory = modelSettingsDirectory(runtimeDatabaseUrl())
   const store = createDeploymentPluginStore(directory)
-  const current = await store.openNewbi()
-  if (!current) {
-    const sending = process.argv[2] === 'send'
-    const identity = sending ? newbiExecutorIdentity : newbiReaderIdentity
-    const status = await store.status('simulated')
-    const missingKey = !status.newbi.hasCredential && !process.env.NEWBI_AGENT_KEY
-      && newbiEndpoint.safeParse(process.env.RICA_NEWBI_LOCAL_API_URL).success
-    throw new PluginHostError({ kind: sending ? 'platform-reply-executor' : 'platform-reader', id: identity.id,
-      version: identity.version, code: missingKey ? 'MISSING_SERVICE' : 'INVALID_CONFIG' })
-  }
-  return current
+  const [saved] = sending
+    ? await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_send_connection(${id}::uuid)`
+    : await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_poll_connection(${id}::uuid)`
+  const current = saved && await store.openNewbi(saved.credential, saved.endpoint)
+  if (current) return current
+  const identity = sending ? newbiExecutorIdentity : newbiReaderIdentity
+  throw new PluginHostError({ kind: sending ? 'platform-reply-executor' : 'platform-reader', id: identity.id,
+    version: identity.version, code: 'INVALID_CONFIG' })
 }
 
-async function openReader(signal?: AbortSignal) {
-  const { env, beforeRequest } = await connectorSettings()
-  const host = await startNewbiReader(env, signal, beforeRequest)
+async function openReader(db: RawQueryClient, accountId: string, signal?: AbortSignal) {
+  const { connection, beforeRequest } = await connectorSettings(db, accountId, false)
+  const host = await startNewbiReader(connection, signal, beforeRequest)
   const { id, version, contractVersion } = host.plugin
   console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reader',
     id, version, contractVersion, code: 'READY' }))
@@ -60,28 +57,30 @@ async function readEvents(accountId: string, args: string[]) {
   const url = runtimeDatabaseUrl()
   const controller = new AbortController()
   const stop = seconds ? AbortSignal.any([controller.signal, AbortSignal.timeout(Number(seconds) * 1000)]) : controller.signal
-  const host = await openReader(stop)
-  const reader = host.plugin.implementation
   const db = createDatabase(url)
   const readerDb = scopedDatabase(db, 'reader')
   const interrupt = () => controller.abort()
   process.once('SIGINT', interrupt)
   process.once('SIGTERM', interrupt)
   try {
-    if (seconds) {
-      await runNewbiEventPoller(readerDb, reader, accountId, (result) => {
+    const host = await openReader(readerDb, accountId, stop)
+    try {
+      const reader = host.plugin.implementation
+      if (seconds) {
+        await runNewbiEventPoller(readerDb, reader, accountId, (result) => {
+          console.info(JSON.stringify(result))
+          if (result.status === 'STOPPED' && !stop.aborted) process.exitCode = 1
+        }, stop)
+      } else {
+        const result = await pollNewbiEvents(readerDb, reader, accountId, stop)
         console.info(JSON.stringify(result))
-        if (result.status === 'STOPPED' && !stop.aborted) process.exitCode = 1
-      }, stop)
-    } else {
-      const result = await pollNewbiEvents(readerDb, reader, accountId, stop)
-      console.info(JSON.stringify(result))
-      if (result.status === 'STOPPED') process.exitCode = 1
-    }
+        if (result.status === 'STOPPED') process.exitCode = 1
+      }
+    } finally { await host.stop() }
   } finally {
     process.off('SIGINT', interrupt)
     process.off('SIGTERM', interrupt)
-    await Promise.all([host.stop(), db.$disconnect()])
+    await db.$disconnect()
   }
 }
 
@@ -89,36 +88,34 @@ async function main() {
   const [command, value, ...args] = process.argv.slice(2)
   const id = z.uuid().parse(value)
   if (command === 'events') return readEvents(id, args)
-  const [retry, ...extra] = args
-  if (extra.length || (command === 'inspect' && retry)
-    || (command === 'send' && retry && retry !== '--retry') || (command !== 'inspect' && command !== 'send')) {
+  const [option, ...extra] = args
+  if (extra.length || (command === 'inspect' && !z.uuid().safeParse(option).success)
+    || (command === 'send' && option && option !== '--retry') || (command !== 'inspect' && command !== 'send')) {
     throw new Error('Invalid arguments')
   }
-  if (command === 'inspect') {
-    const host = await openReader()
-    try {
-      const reader = host.plugin.implementation
-      const identity = await reader.verify()
-      console.info(JSON.stringify({ identity, ...await reader.readThread(id) }, null, 2))
-    } finally {
-      await host.stop()
-    }
-    return
-  }
-  const url = runtimeDatabaseUrl()
-  const { env, beforeRequest } = await connectorSettings()
-  const host = await startNewbiExecutor(env, beforeRequest)
-  const { id: pluginId, version, contractVersion, implementation } = host.plugin
-  console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reply-executor',
-    id: pluginId, version, contractVersion, code: 'READY' }))
-  const db = createDatabase(url)
+  const db = createDatabase(runtimeDatabaseUrl())
   try {
-    const result = await executeNewbiReply(scopedDatabase(db, 'executor'), implementation, newbiExecutorKey(host.plugin), id, retry === '--retry')
-    console.info(JSON.stringify(result))
-    if (result.status !== 'SENT') process.exitCode = 1
-  } finally {
-    await Promise.all([host.stop(), db.$disconnect()])
-  }
+    if (command === 'inspect') {
+      const host = await openReader(scopedDatabase(db, 'reader'), id)
+      try {
+        const reader = host.plugin.implementation
+        const identity = await reader.verify()
+        console.info(JSON.stringify({ identity, ...await reader.readThread(option) }, null, 2))
+      } finally { await host.stop() }
+      return
+    }
+    const executorDb = scopedDatabase(db, 'executor')
+    const { connection, beforeRequest } = await connectorSettings(executorDb, id, true)
+    const host = await startNewbiExecutor(connection, beforeRequest)
+    try {
+      const { id: pluginId, version, contractVersion, implementation } = host.plugin
+      console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reply-executor',
+        id: pluginId, version, contractVersion, code: 'READY' }))
+      const result = await executeNewbiReply(executorDb, implementation, newbiExecutorKey(host.plugin), id, option === '--retry')
+      console.info(JSON.stringify(result))
+      if (result.status !== 'SENT') process.exitCode = 1
+    } finally { await host.stop() }
+  } finally { await db.$disconnect() }
 }
 
 const command = process.argv[2]

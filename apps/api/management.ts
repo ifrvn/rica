@@ -11,7 +11,7 @@ import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, read
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '../../packages/persistence/console-knowledge.js'
 import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
+import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
 import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from '../../packages/persistence/newbi-management.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
@@ -33,8 +33,7 @@ type Options = {
   pluginRelease?: (services: Awaited<ReturnType<typeof readPluginStatus>>['services']) => Promise<PluginReleaseView>
   modelSettings?: ReturnType<typeof createModelSettingsStore>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
-  verifyConnector?: management.VerifyConnector
-  identifyConnector?: () => Promise<{ endpoint: string; agentId: string } | undefined>
+  identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -74,7 +73,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  modelSettings, deploymentPlugins, verifyConnector, identifyConnector }: Options) {
+  modelSettings, deploymentPlugins, identifyConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -141,11 +140,18 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Newbi is disabled or its endpoint does not match')
     }
   }
-  async function identifyNewbi() {
-    const account = await identifyConnector?.()
-    if (!account) throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Could not identify the configured Newbi account')
+  async function identifyNewbi(credential: string, expectedAgent?: string) {
+    const account = await identifyConnector?.(credential)
+    if (!account || (expectedAgent && account.agentId !== expectedAgent)) {
+      throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Could not verify the Newbi account')
+    }
     await requireNewbi(account.endpoint)
     return account
+  }
+
+  const verifySavedConnector: management.VerifyConnector = async (endpoint, agentId, tx = db) => {
+    const saved = await tx.newbiCredential.findUnique({ where: { endpoint_agentId: { endpoint, agentId } } })
+    return !!saved && (await identifyConnector?.(saved.credential, endpoint))?.agentId === agentId
   }
 
   app.openapi(createRoute({
@@ -164,7 +170,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       return c.json(saved, 200)
     } catch (cause) {
       if (!(cause instanceof DeploymentPluginError)) throw cause
-      const status = cause.code === 'VERSION_CONFLICT' ? 412 : cause.code === 'KEY_REQUIRED' ? 422 : 409
+      const status = cause.code === 'VERSION_CONFLICT' ? 412 : 409
       throw new management.ManagementError(status, cause.code, 'Check plugin state, version and credentials')
     }
   })
@@ -335,7 +341,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const modelCheck = latestModelCheck && latestModelCheck.version === settings?.version
       && latestModelCheck.result.provider === deployment.configuredModel
       && deployment.plugins[latestModelCheck.result.provider] === 'ENABLED' ? latestModelCheck.result : undefined
-    const newbiRegistrationAvailable = deployment.plugins.newbi === 'ENABLED' && deployment.newbi.hasCredential
+    const newbiRegistrationAvailable = deployment.plugins.newbi === 'ENABLED' && !!deployment.newbi.endpoint
     const newbiConnections = newbiRegistrationAvailable && deployment.newbi.endpoint
       ? await readNewbiConnections(db, scope.characterId, deployment.newbi.endpoint) : undefined
     return c.json({ ...current, deployment, release, modelCheck, newbiConnections, newbiRegistrationAvailable }, 200)
@@ -358,6 +364,17 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   ), 200))
 
   app.openapi(createRoute({
+    method: 'post', path: `${character}/account-pool/newbi/test`, security,
+    request: { params: characterParams, body: body(newbiAccountTest) },
+    responses: { ...errors, 200: success(newbiAccountPreview) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN']))
+    c.header('Cache-Control', 'no-store')
+    return c.json(newbiAccountPreview.parse(await identifyNewbi(c.req.valid('json').credential)), 200)
+  })
+
+  app.openapi(createRoute({
     method: 'post', path: `${character}/account-pool`, security,
     request: { params: characterParams, headers: schema.idempotencyHeader,
       body: body(z.union([schema.simulationAccountRegistration, connectorAccountRegistration])) },
@@ -371,8 +388,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
       if (input.platform !== 'newbi') return management.registerAccount(tx, scope, input)
-      const { endpoint, agentId } = await identifyNewbi()
-      return management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: endpoint, remoteAccountId: agentId })
+      const { endpoint, agentId } = await identifyNewbi(input.credential, input.agentId)
+      const result = await management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: endpoint, remoteAccountId: agentId })
+      await management.saveNewbiCredential(tx, endpoint, agentId, input.credential)
+      return result
     })
     return c.json({ ...result, requestId }, 201)
   })
@@ -428,7 +447,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'control.apply', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.control(tx, scope, input, verifyConnector))
+    }, (tx) => management.control(tx, scope, input, verifySavedConnector))
     return c.json({ ...result, requestId }, 200)
   })
 
@@ -1081,7 +1100,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
-      return bindNewbiAccount(tx, scope, { ...input, ...await identifyNewbi() })
+      const { endpoint, agentId } = await identifyNewbi(input.credential, input.agentId)
+      const result = await bindNewbiAccount(tx, scope, { ...input, endpoint, agentId })
+      await management.saveNewbiCredential(tx, endpoint, agentId, input.credential)
+      return result
     })
     return c.json({ ...result, requestId }, 201)
   })
@@ -1160,7 +1182,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const { characterId, accountId } = c.req.valid('param')
     const result = await checkNewbiAccount(db, { characterId, actor: c.get('actor') }, accountId, async (endpoint, agentId) => {
       await requireNewbi(endpoint)
-      return !!verifyConnector && verifyConnector(endpoint, agentId)
+      return verifySavedConnector(endpoint, agentId)
     })
     return c.json(result, 200)
   })

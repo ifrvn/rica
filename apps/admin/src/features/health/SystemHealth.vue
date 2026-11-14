@@ -77,7 +77,7 @@ const layers = computed(() => {
   const external = (id: string, label: string, description: string, configured: boolean): Node =>
     ({ id, label, description, state: configured ? '暂无独立探测' : '待配置', tone: 'default' })
   if (hasNewbi) {
-    const configured = !!deployment?.newbi.hasCredential
+    const configured = !!deployment?.newbi.endpoint
     const read = external('newbi-read', 'Newbi 读取 API', '按当前角色已启用的账号汇总。可在平台账号池查看每个账号的读取结果。', configured)
     const write = external('newbi-write', 'Newbi 发送 API', '依据当前角色的发送结果。可在审批页查看对应的 Newbi 回执。', configured)
     const observed = status.value?.newbiConnections

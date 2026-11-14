@@ -4,21 +4,17 @@ import { startPluginHost, type PluginDefinition } from '../../packages/runtime/p
 
 const credentialService = 'local-agent-credential'
 
-export async function verifyNewbiBinding(endpoint: string, agentId: string, env = process.env, beforeRequest?: () => Promise<void>) {
-  // Only the deployment-configured endpoint may receive the deployment credential.
-  if (newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).data !== endpoint) return false
-  return (await identifyNewbiAccount(env, beforeRequest))?.agentId === agentId
-}
+export type NewbiConnection = { endpoint: string; credential: string }
 
-export async function identifyNewbiAccount(env: NodeJS.ProcessEnv, beforeRequest?: () => Promise<void>) {
-  const endpoint = newbiEndpoint.safeParse(env.RICA_NEWBI_LOCAL_API_URL).data
+export async function identifyNewbiAccount(connection: NewbiConnection, beforeRequest?: () => Promise<void>) {
+  const endpoint = newbiEndpoint.safeParse(connection.endpoint).data
   if (!endpoint) return
   try {
-    const host = await startNewbiReader(env, AbortSignal.timeout(2000), beforeRequest)
+    const host = await startNewbiReader(connection, AbortSignal.timeout(2000), beforeRequest)
     try {
-      const { id: agentId } = await host.plugin.implementation.verify()
+      const { id: agentId, username, avatarUrl } = await host.plugin.implementation.verify()
       await beforeRequest?.()
-      return { endpoint, agentId }
+      return { endpoint, agentId, username, avatarUrl }
     } finally {
       await host.stop()
     }
@@ -27,8 +23,8 @@ export async function identifyNewbiAccount(env: NodeJS.ProcessEnv, beforeRequest
   }
 }
 
-export async function startNewbiReader(env = process.env, signal?: AbortSignal, beforeRequest?: () => Promise<void>) {
-  const credential = env.NEWBI_AGENT_KEY ?? ''
+export async function startNewbiReader(connection: NewbiConnection, signal?: AbortSignal, beforeRequest?: () => Promise<void>) {
+  const credential = connection.credential
   const definition: PluginDefinition<ReturnType<typeof createNewbiReadClient>> = {
     ...newbiReaderIdentity,
     requires: [credentialService],
@@ -43,7 +39,7 @@ export async function startNewbiReader(env = process.env, signal?: AbortSignal, 
     },
   }
   const host = await startPluginHost('platform-reader', [definition], [
-    { id: definition.id, config: env.RICA_NEWBI_LOCAL_API_URL },
+    { id: definition.id, config: connection.endpoint },
   ], { services: new Set(credential ? [credentialService] : []) })
   return { plugin: host.find(definition.id)!, stop: host.stop }
 }

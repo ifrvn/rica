@@ -233,6 +233,15 @@ model IdentityVersion {
   @@map("identity_versions")
 }
 
+model NewbiCredential {
+  endpoint   String
+  agentId    String @map("agent_id") @db.Uuid
+  credential String
+
+  @@id([endpoint, agentId])
+  @@map("newbi_credentials")
+}
+
 model PlatformAccountRegistration {
   id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   characterId     String    @map("character_id") @db.Uuid
