@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { newbiReviewView, newbiReplySummary } from '../../../../../packages/contracts/newbi-pilot.js'
+import type { newbiReviewView, newbiReplySummary, newbiSendView } from '../../../../../packages/contracts/newbi-pilot.js'
 import { focusRecord, formatTime } from '../../shared/console-data.js'
 import { request, RequestError } from '../../shared/request.js'
 
 type Summary = z.infer<typeof newbiReplySummary>
 type Reply = z.infer<typeof newbiReviewView>
+type SendResult = z.infer<typeof newbiSendView>
 type Page = { items: Summary[]; nextCursor: string | null }
-const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; canReview: boolean; canClose: boolean }>()
+const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; canReview: boolean; canManage: boolean }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; all: [] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId) + '/newbi/replies'
 const statusText: Record<Summary['status'], string> = {
@@ -30,6 +31,23 @@ const submitting = ref(false)
 const listError = ref('')
 const detailError = ref('')
 const notice = ref('')
+const confirmation = ref(false)
+const checkedAt = ref(Date.now())
+const leaseExpired = computed(() => reply.value?.status === 'IN_FLIGHT'
+  && !!reply.value.leaseUntil && Date.parse(reply.value.leaseUntil) <= checkedAt.value)
+const canRetry = computed(() => reply.value?.status === 'UNKNOWN' || leaseExpired.value)
+const canClose = computed(() => {
+  const item = reply.value
+  return props.canManage && !!item && (item.status === 'UNKNOWN'
+    || (leaseExpired.value && (item.attempts >= 3 || Date.parse(item.expiresAt) <= checkedAt.value)))
+})
+const canSend = computed(() => {
+  const item = reply.value
+  return props.canManage && !!item?.connectorAvailable && !!item.content
+    && (item.status === 'READY' || canRetry.value) && item.attempts < 3
+    && Date.parse(item.expiresAt) > checkedAt.value + 10_000
+    && (!item.retryNotBefore || Date.parse(item.retryNotBefore) <= checkedAt.value)
+})
 let pending: { signature: string; key: string } | undefined
 let active = true
 let selection = 0
@@ -85,6 +103,7 @@ async function detail(id?: string) {
   try {
     const view = await request<Reply>(base + '/' + encodeURIComponent(id))
     if (!active || current !== selection) return
+    checkedAt.value = Date.now()
     if (props.accountId && props.accountId !== view.accountId) {
       detailError.value = '找不到当前账号的提案。'
     } else reply.value = view
@@ -97,6 +116,7 @@ watch([() => props.detailId, () => props.accountId], ([id], previous) => {
   reason.value = ''
   pending = undefined
   notice.value = ''
+  confirmation.value = false
   void detail(id)
   void nextTick(() => {
     if (active && id === props.detailId) focusRecord('connector-row-', id, previous?.[0], detailHeading.value, listHeading.value)
@@ -108,7 +128,7 @@ async function submit(action: 'APPROVE' | 'REJECT' | 'CLOSE') {
   const note = reason.value.trim()
   if (!item || !note || submitting.value || loadingDetail.value
     || (action === 'APPROVE' && !item.connectorAvailable)
-    || (action === 'CLOSE' ? !props.canClose || item.status !== 'UNKNOWN'
+    || (action === 'CLOSE' ? !canClose.value
       : !props.canReview || item.status !== 'WAITING' || !item.content)) return
   const payload = action === 'CLOSE' ? { reason: note } : { reason: note, decision: action, reviewDigest: item.reviewDigest }
   const body = JSON.stringify(payload)
@@ -130,6 +150,43 @@ async function submit(action: 'APPROVE' | 'REJECT' | 'CLOSE') {
     if (!active || current !== selection) return
     if (cause instanceof RequestError && [403, 404, 409, 412].includes(cause.status)) reply.value = undefined
     detailError.value = message(cause)
+  } finally { submitting.value = false }
+}
+
+function sendMessage(result: Exclude<SendResult, { status: 'SENT' }>) {
+  if (result.status === 'UNKNOWN') return '发送结果待核对。请先到 Newbi 查看评论，再决定是否重试。'
+  if (result.status === 'CLOSED') return '帖子已锁定，提案已结案。'
+  if (result.retryNotBefore) return '平台暂缓发送。请于 ' + formatTime(result.retryNotBefore) + ' 后刷新详情。'
+  if (result.reason === 'CREDENTIAL_INVALID' || result.reason === 'ACCESS_DENIED') return '请在平台账号池核对账号连接和 Agent 权限。'
+  if (result.reason === 'COMMUNITY_CLOSED') return 'Newbi 当前暂停公开发布，请稍后重试。'
+  if (result.reason === 'POST_LOCKED') return '帖子已锁定。请在 Newbi 核对此前的发送结果。'
+  return '暂时无法发送。请核对插件、账号和该账号的待核对提案。'
+}
+
+async function send() {
+  const item = reply.value
+  if (!item || !confirmation.value || !canSend.value || submitting.value) return
+  const current = selection
+  submitting.value = true
+  notice.value = ''
+  detailError.value = ''
+  try {
+    const result = await request<SendResult>(base + '/' + encodeURIComponent(item.id) + '/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retry: canRetry.value }),
+    })
+    if (!active || current !== selection) return
+    confirmation.value = false
+    await Promise.all([detail(item.id), list()])
+    if (!active || props.detailId !== item.id) return
+    if (result.status === 'SENT') notice.value = '公开回复已发送。评论回执 ID ' + result.commentId
+    else detailError.value ||= sendMessage(result)
+  } catch (cause) {
+    if (!active || current !== selection) return
+    confirmation.value = false
+    const feedback = cause instanceof RequestError && cause.status < 500
+      ? message(cause) : '暂未确认发送结果。请先核对详情和 Newbi 评论。'
+    await Promise.all([detail(item.id), list()])
+    if (active && props.detailId === item.id) detailError.value ||= feedback
   } finally { submitting.value = false }
 }
 
@@ -199,6 +256,8 @@ onMounted(() => { void list() })
           <div><dt>账号</dt><dd>{{ reply.agentId }}</dd></div>
           <div><dt>目标</dt><dd>{{ reply.postId }} · 公开回复</dd></div>
           <div><dt>到期</dt><dd>{{ new Date(reply.expiresAt).toLocaleString() }}</dd></div>
+          <div v-if="reply.retryNotBefore"><dt>最早重试</dt><dd>{{ formatTime(reply.retryNotBefore) }}</dd></div>
+          <div v-if="reply.status === 'IN_FLIGHT' && reply.leaseUntil"><dt>许可到期</dt><dd>{{ formatTime(reply.leaseUntil) }}</dd></div>
           <div v-if="reply.remoteCommentId"><dt>评论回执</dt><dd>{{ reply.remoteCommentId }}</dd></div>
           <div v-if="reply.closureReason"><dt>结案理由</dt><dd>{{ reply.closureReason }}</dd></div>
         </dl>
@@ -207,19 +266,28 @@ onMounted(() => { void list() })
           <p class="console-payload">{{ reply.content }}</p>
         </template>
         <p v-else-if="reply.status === 'WAITING'">当前无法预览正文，暂不能审批。</p>
-        <NForm v-if="(canReview && reply.status === 'WAITING' && reply.content) || (canClose && reply.status === 'UNKNOWN')"
-          @submit.prevent="submit(reply.status === 'UNKNOWN' ? 'CLOSE' : 'APPROVE')">
-          <NAlert v-if="reply.status === 'UNKNOWN'" type="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</NAlert>
-          <NAlert v-else-if="reply.connectorAvailable" type="warning">批准后，执行器取得发送许可时会向上述 Newbi 帖子公开发布这条回复。</NAlert>
+        <div v-if="canManage && (reply.status === 'READY' || canRetry)" class="send-actions">
+          <NButton v-if="canSend" type="primary" :disabled="submitting" @click="confirmation = true">
+            {{ canRetry ? '核对后重试' : '发送公开回复' }}
+          </NButton>
+          <NAlert v-else type="warning">
+            {{ !reply.connectorAvailable ? '请在插件中心核对 Newbi 的启用状态和 Agent API 地址。'
+              : '当前提案暂不可发送。请核对有效期、重试时间和发送次数。' }}
+          </NAlert>
+        </div>
+        <NForm v-if="(canReview && reply.status === 'WAITING' && reply.content) || canClose"
+          @submit.prevent="submit(canClose ? 'CLOSE' : 'APPROVE')">
+          <NAlert v-if="canClose" type="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</NAlert>
+          <NAlert v-else-if="reply.connectorAvailable" type="warning">批准后，管理员可确认向上述 Newbi 帖子公开发布这条回复。</NAlert>
           <NAlert v-else type="warning">当前 Newbi 配置无法使用此账号。请在插件中心核对启用状态和 Agent API 地址。</NAlert>
-          <NFormItem :label="reply.status === 'UNKNOWN' ? '结案理由' : '审批理由'" :label-props="{ for: 'connector-reason' }">
-            <NInput :placeholder="reply.status === 'UNKNOWN' ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
+          <NFormItem :label="canClose ? '结案理由' : '审批理由'" :label-props="{ for: 'connector-reason' }">
+            <NInput :placeholder="canClose ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
               :input-props="{ id: 'connector-reason' }" />
           </NFormItem>
           <div class="connector-actions">
-            <NButton v-if="reply.status === 'UNKNOWN' || reply.connectorAvailable" :type="reply.status === 'UNKNOWN' ? 'warning' : 'primary'"
+            <NButton v-if="canClose || reply.connectorAvailable" :type="canClose ? 'warning' : 'primary'"
               attr-type="submit" :disabled="submitting || !reason.trim()">
-              {{ reply.status === 'UNKNOWN' ? '确认结案' : '批准公开回复' }}
+              {{ canClose ? '确认结案' : '批准公开回复' }}
             </NButton>
             <NButton v-if="reply.status === 'WAITING'" type="error" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</NButton>
           </div>
@@ -227,10 +295,34 @@ onMounted(() => { void list() })
       </template>
     </section>
   </div>
+  <NModal v-model:show="confirmation" preset="card" :title="canRetry ? '确认重试公开回复' : '确认发送公开回复'"
+    :aria-label="canRetry ? '确认重试公开回复' : '确认发送公开回复'" style="width: 36rem; max-width: calc(100% - 2rem)"
+    :mask-closable="!submitting" :close-on-esc="!submitting" :closable="!submitting">
+    <div v-if="reply" class="send-preview">
+      <p>{{ canRetry ? '请先核对 Newbi 上的评论。重试会沿用原提案的发送编号。' : '这条回复将发布到真实 Newbi 帖子，所有能查看该帖的人都可见。' }}</p>
+      <dl>
+        <div><dt>平台</dt><dd>Newbi · {{ reply.endpoint }}</dd></div>
+        <div><dt>身份</dt><dd>{{ reply.identity || reply.identityId }}</dd></div>
+        <div><dt>Agent ID</dt><dd>{{ reply.agentId }}</dd></div>
+        <div><dt>帖子 ID</dt><dd>{{ reply.postId }}</dd></div>
+      </dl>
+      <p class="console-payload">{{ reply.content }}</p>
+    </div>
+    <template #footer>
+      <div class="connector-actions">
+        <NButton :disabled="submitting" @click="confirmation = false">取消</NButton>
+        <NButton type="primary" :disabled="!canSend || submitting" :loading="submitting" @click="send">
+          {{ canRetry ? '确认重试' : '确认发送' }}
+        </NButton>
+      </div>
+    </template>
+  </NModal>
 </template>
 
 <style scoped>
 .connector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.send-actions { margin-block: 1rem; }
+.send-preview { max-height: min(55dvh, 32rem); overflow: auto; }
 .filter { width: min(10rem, 100%); }
 dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .5rem; }

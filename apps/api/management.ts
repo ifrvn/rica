@@ -26,7 +26,7 @@ import { checkModel } from './model-check.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
 import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
-import { newbiPollView } from '../../packages/contracts/newbi-pilot.js'
+import { newbiPollView, newbiSendInput, newbiSendView } from '../../packages/contracts/newbi-pilot.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
@@ -36,6 +36,7 @@ type Options = {
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
   pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
+  sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -75,7 +76,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  modelSettings, deploymentPlugins, identifyConnector, pollConnector }: Options) {
+  modelSettings, deploymentPlugins, identifyConnector, pollConnector, sendConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -1180,6 +1181,21 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       key: c.req.valid('header')['idempotency-key'], roles: ['REVIEWER'],
     }, (tx) => decideNewbiReply(tx, scope, replyId, input, requireNewbi))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/replies/{replyId}/send`, security,
+    request: { params: newbiReplyParams, body: body(newbiSendInput) },
+    responses: { ...errors, 200: success(newbiSendView) },
+  }), async (c) => {
+    const { characterId, replyId } = c.req.valid('param')
+    const { retry } = c.req.valid('json')
+    const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId, ['ADMIN'])
+    const eligible = retry ? ['UNKNOWN', 'IN_FLIGHT'].includes(reply.status) : reply.status === 'READY'
+    if (!eligible) throw new management.ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is not eligible to send')
+    await requireNewbi(reply.endpoint)
+    const result = await sendConnector?.(reply.id, retry)
+    return c.json(newbiSendView.parse(result ?? { status: 'UNAVAILABLE' }), 200)
   })
 
   app.openapi(createRoute({

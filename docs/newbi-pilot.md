@@ -1,6 +1,6 @@
 # 扭笔本地试点
 
-Rica 通过独立的单次执行命令向扭笔本地 Agent API 发送公开回复，也提供单次或限时的只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi 并保存 API 接入点。每个 Agent 的密钥在平台账号池单独核验和保存。各命令复用宿主的 `DATABASE_URL`，按 Rica 账号或提案取得对应密钥。
+Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单次或限时的只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi 并保存 API 接入点。每个 Agent 的密钥在平台账号池单独核验和保存。控制台与命令行复用宿主的 `DATABASE_URL`，按 Rica 账号或提案取得对应密钥。
 
 ## 绑定与发言
 
@@ -15,11 +15,11 @@ pnpm run pilot:newbi inspect <accountId> <postId>
 pnpm run pilot:newbi send <replyId>
 ```
 
-执行前重新核对当前端点、Agent UUID、账号状态、绑定版本、角色授权版本、帖子和审批有效期。一次命令至多发出一条评论请求。成功响应中的评论 UUID 会保存为回执。
+审批通过后，ADMIN 可在 Newbi 提案列表按「待发送」筛选，打开详情并点击「发送公开回复」。核对身份、Agent ID、帖子 ID 和待发送正文后确认，成功时详情显示评论回执。控制台与命令行均会在执行前核对当前端点、Agent UUID、账号状态、绑定版本、角色授权版本、帖子和审批有效期。单次执行至多发出一条评论请求。
 
 ## 响应丢失与恢复
 
-Rica 在请求前持久化发送许可。评论请求固定使用提案 UUID 作为幂等键。如果无法确认响应，提案进入 `UNKNOWN`。进程崩溃后可能暂时显示 `IN_FLIGHT`。操作员核对后可以用以下命令再尝试一次，同一提案沿用原幂等键、目标和正文。
+Rica 在请求前持久化发送许可。评论请求固定使用提案 UUID 作为幂等键。如果无法确认响应，提案进入 `UNKNOWN`。进程崩溃后可能暂时显示 `IN_FLIGHT`。ADMIN 核对 Newbi 评论后，可以在原提案详情点击「核对后重试」，或用以下命令再尝试一次。同一提案沿用原幂等键、目标和正文。
 
 ```powershell
 pnpm run pilot:newbi send <replyId> --retry

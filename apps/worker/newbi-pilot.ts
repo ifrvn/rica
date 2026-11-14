@@ -9,12 +9,10 @@ import { PlatformReplyError } from '../../packages/contracts/platform-reply-exec
 import { observationError, reportPluginResult } from '../plugin-observation.js'
 import type { PluginDiagnostic } from '../../packages/contracts/plugin-status.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
-import type { NewbiConnection } from './newbi-read-plugin.js'
-import { startNewbiExecutor } from './newbi-execution-plugin.js'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
-import { openSavedNewbiReader, scopedNewbiDatabase } from './newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from './newbi-database.js'
 
 function connectorStore() {
   return createDeploymentPluginStore(modelSettingsDirectory(runtimeDatabaseUrl()))
@@ -85,12 +83,9 @@ async function main() {
       return
     }
     const executorDb = scopedNewbiDatabase(db, 'executor')
-    const [saved] = await executorDb.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_send_connection(${id}::uuid)`
-    const current = saved && await connectorStore().openNewbi(saved.credential, saved.endpoint)
-    if (!current) throw new PluginHostError({ kind: 'platform-reply-executor', id: newbiExecutorIdentity.id,
+    const host = await openSavedNewbiExecutor(executorDb, connectorStore(), id)
+    if (!host) throw new PluginHostError({ kind: 'platform-reply-executor', id: newbiExecutorIdentity.id,
       version: newbiExecutorIdentity.version, code: 'INVALID_CONFIG' })
-    const { connection, beforeRequest } = current
-    const host = await startNewbiExecutor(connection, beforeRequest)
     try {
       const { id: pluginId, version, contractVersion, implementation } = host.plugin
       console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reply-executor',

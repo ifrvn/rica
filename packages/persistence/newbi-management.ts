@@ -66,9 +66,9 @@ export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Pag
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) {
+export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string, roles: readonly ('ADMIN' | 'REVIEWER')[] = ['ADMIN', 'REVIEWER']) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'REVIEWER'])
+    await authorize(tx, scope, roles)
     const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId },
       include: { account: { select: { instanceKey: true, remoteAccountId: true, identity: { select: { slug: true } } } } } })
     if (!reply) missing()
@@ -77,6 +77,7 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
       endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
       content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
       retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
+      leaseUntil: reply.leaseUntil?.toISOString() ?? null,
     })
   }, { isolationLevel: 'RepeatableRead' })
 }

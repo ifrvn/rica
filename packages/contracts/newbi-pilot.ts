@@ -27,6 +27,16 @@ export const newbiDecisionInput = z.strictObject({
   reason: z.string().trim().min(1).max(240),
 })
 export const newbiClosureInput = z.strictObject({ reason: z.string().trim().min(1).max(240) })
+export const newbiSendInput = z.strictObject({ retry: z.boolean() })
+export const newbiSendView = z.union([
+  z.object({ status: z.literal('SENT'), commentId: resourceId }),
+  z.object({
+    status: z.enum(['UNAVAILABLE', 'UNKNOWN', 'CLOSED']),
+    reason: z.enum(['CREDENTIAL_INVALID', 'ACCESS_DENIED', 'RATE_LIMITED', 'SERVICE_UNAVAILABLE',
+      'COMMUNITY_CLOSED', 'POST_LOCKED']).optional(),
+    retryNotBefore: z.iso.datetime().optional(),
+  }),
+])
 const newbiReplyStatus = z.enum(['WAITING', 'READY', 'REJECTED', 'IN_FLIGHT', 'UNKNOWN', 'SENT', 'CLOSED'])
 export const newbiReplyQuery = listQuery.extend({ status: newbiReplyStatus.optional(), accountId: resourceId.optional() })
 export const newbiReplySummary = z.object({
@@ -38,7 +48,7 @@ export const newbiReplyView = z.object({
   endpoint: newbiEndpoint, postId: resourceId, content: z.string().nullable(), reviewDigest: z.string(),
   status: newbiReplyStatus,
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
-  retryNotBefore: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
+  retryNotBefore: z.iso.datetime().nullable(), leaseUntil: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })
 export const newbiReviewView = newbiReplyView.extend({ connectorAvailable: z.boolean() })
 export const newbiAccountCheckView = z.object({ verified: z.boolean(), checkedAt: z.iso.datetime() })

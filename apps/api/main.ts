@@ -12,8 +12,10 @@ import { createModelSettingsStore, modelSettingsDirectory } from '../../packages
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
-import { openSavedNewbiReader, scopedNewbiDatabase } from '../worker/newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from '../worker/newbi-database.js'
 import { pollNewbiEvents } from '../../packages/persistence/newbi-events.js'
+import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
+import { newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
@@ -37,6 +39,7 @@ const auth = managementConfig && managementDb ? createAdminAuth(managementDb, re
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const newbiReaderDb = scopedNewbiDatabase(db, 'reader')
+const newbiExecutorDb = scopedNewbiDatabase(db, 'executor')
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
@@ -44,6 +47,15 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   modelSettings: createModelSettingsStore(settingsDirectory),
   deploymentPlugins,
+  sendConnector: async (id, retry) => {
+    const host = await openSavedNewbiExecutor(newbiExecutorDb, deploymentPlugins, id, AbortSignal.timeout(7000))
+    if (!host) return { status: 'UNAVAILABLE' }
+    try {
+      return await executeNewbiReply(newbiExecutorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry)
+    } finally {
+      await host.stop()
+    }
+  },
   pollConnector: async (accountId) => {
     const stop = AbortSignal.timeout(7000)
     const host = await openSavedNewbiReader(newbiReaderDb, deploymentPlugins, accountId, stop)

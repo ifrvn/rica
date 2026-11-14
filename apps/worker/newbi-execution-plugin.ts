@@ -6,7 +6,7 @@ import { startPluginHost, type PluginDefinition } from '../../packages/runtime/p
 
 const credentialService = 'local-agent-credential'
 
-export async function startNewbiExecutor(connection: NewbiConnection, beforeRequest?: () => Promise<void>) {
+export async function startNewbiExecutor(connection: NewbiConnection, beforeRequest?: () => Promise<void>, signal?: AbortSignal) {
   const credential = connection.credential
   const definition: PluginDefinition<ReturnType<typeof createNewbiReplyExecutor>> = {
     ...newbiExecutorIdentity,
@@ -15,7 +15,8 @@ export async function startNewbiExecutor(connection: NewbiConnection, beforeRequ
     create(config) {
       const stop = new AbortController()
       return {
-        implementation: createNewbiReplyExecutor(newbiEndpoint.parse(config), credential, stop.signal, beforeRequest),
+        implementation: createNewbiReplyExecutor(newbiEndpoint.parse(config), credential,
+          signal ? AbortSignal.any([signal, stop.signal]) : stop.signal, beforeRequest),
         stop: () => stop.abort(),
       }
     },

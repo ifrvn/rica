@@ -10,7 +10,7 @@ import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
 import { identifyNewbiAccount, startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
-import { openSavedNewbiReader } from '../apps/worker/newbi-database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from '../apps/worker/newbi-database.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -46,7 +46,8 @@ const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
 let connectorEndpoint: string | undefined
 const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>,
-  pollConnector?: Parameters<typeof createManagementApp>[0]['pollConnector']) =>
+  pollConnector?: Parameters<typeof createManagementApp>[0]['pollConnector'],
+  sendConnector?: Parameters<typeof createManagementApp>[0]['sendConnector']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
@@ -54,6 +55,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
     deploymentPlugins,
     pollConnector,
+    sendConnector,
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
       return subject && subjects.has(subject) ? {
@@ -2748,6 +2750,15 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   const executorUrl = new URL(config.databaseUrl)
   executorUrl.searchParams.set('options', '-c role=rica_newbi_executor')
   const executor = createDatabase(executorUrl.toString())
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executorDb = scopedNewbiDatabase(runtime, 'executor')
+  const sendApp = testApp(settings, undefined, async (id, retry) => {
+    const host = await openSavedNewbiExecutor(executorDb, settings, id)
+    if (!host) return { status: 'UNAVAILABLE' }
+    try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
+    finally { await host.stop() }
+  })
+  t.after(() => runtime.$disconnect())
   try {
     const identityId = await reflectionIdentity()
     const prefix = characterPath(a) + '/newbi'
@@ -2819,6 +2830,9 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     await assert.rejects(executor.newbiReply.count(), /permission denied/i)
 
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
+    const sendFromConsole = (path: string, actor = 'admin-a', retry = false) =>
+      request('POST', path + '/send', { actor, target: sendApp, data: { retry } })
+    assert.equal((await sendFromConsole(approved.path)).status, 409)
     const queuePath = prefix + '/replies'
     const waitingQueue = await request('GET', queuePath + '?status=WAITING', { actor: 'reviewer' })
     assert.equal(waitingQueue.status, 200, JSON.stringify(waitingQueue.body))
@@ -2840,6 +2854,9 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid
     `, /Approval must bind the reply executor/)
     assert.equal((await approved.decide('APPROVE')).status, 200)
+    assert.equal((await sendFromConsole(approved.path, 'reviewer')).status, 403)
+    assert.equal((await sendFromConsole(characterPath(b) + '/newbi/replies/' + approved.id, 'admin-b')).status, 404)
+    assert.equal((await sendFromConsole(approved.path, 'admin-a', true)).status, 409)
     const nextExecutor = newbiExecutorKey({ ...newbiExecutorIdentity, version: '2.0.0' })
     const readCount = reads
     assert.deepEqual(await executeNewbiReply(executor, client, nextExecutor, approved.id), { status: 'UNAVAILABLE' })
@@ -2864,18 +2881,17 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       const [code] = await once(processResult, 'close')
       return { code, stdout, stderr }
     }
-    const normal = await send(approved.id)
-    assert.equal(normal.code, 0, normal.stderr)
-    assert.match(normal.stderr, /"kind":"platform-reply-executor".*"code":"READY"/)
-    assert.ok(!normal.stderr.includes(secret))
-    assert.deepEqual(JSON.parse(normal.stdout), { status: 'SENT', commentId: sent.get(approved.id)?.id })
+    const normal = await Promise.all([sendFromConsole(approved.path), sendFromConsole(approved.path)])
+    assert.deepEqual(normal.filter(({ body }) => body.status === 'SENT').map(({ status, body }) => [status, body]),
+      [[200, { status: 'SENT', commentId: sent.get(approved.id)?.id }]])
+    assert.equal(normal.filter(({ status, body }) => (status === 200 && body.status === 'UNAVAILABLE') || status === 409).length, 1)
     assert.equal((await request('GET', approved.path)).body.remoteCommentId, sent.get(approved.id)?.id)
     assert.equal(writes, 1)
 
     const lost = await propose('Lost response fixture reply', 'newbi-unknown')
     assert.equal((await lost.decide('APPROVE')).status, 200)
     dropResponse = true
-    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, lost.id), { status: 'UNKNOWN' })
+    assert.deepEqual((await sendFromConsole(lost.path)).body, { status: 'UNKNOWN' })
     assert.equal((await request('GET', lost.path)).body.status, 'UNKNOWN')
     assert.equal(sent.get(lost.id)?.content, lost.content)
     const waiting = await propose('Fixture queued behind unknown result', 'newbi-waiting')
@@ -2887,9 +2903,10 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(withoutRetry.code, 1, withoutRetry.stderr)
     assert.deepEqual(JSON.parse(withoutRetry.stdout), { status: 'UNAVAILABLE' })
     assert.equal(writes, 2)
-    const recovered = await send(lost.id.toUpperCase(), '--retry')
-    assert.equal(recovered.code, 0, recovered.stderr)
-    assert.deepEqual(JSON.parse(recovered.stdout), { status: 'SENT', commentId: sent.get(lost.id)?.id })
+    assert.equal((await sendFromConsole(lost.path)).status, 409)
+    const recovered = await sendFromConsole(prefix + '/replies/' + lost.id.toUpperCase(), 'admin-a', true)
+    assert.equal(recovered.status, 200, JSON.stringify(recovered.body))
+    assert.deepEqual(recovered.body, { status: 'SENT', commentId: sent.get(lost.id)?.id })
     const receipt = await request('GET', lost.path)
     assert.equal(receipt.body.remoteCommentId, sent.get(lost.id)?.id)
     assert.equal(receipt.body.attempts, 2)

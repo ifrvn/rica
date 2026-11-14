@@ -602,7 +602,7 @@ async function decide(decision: Decision) {
       <MetricsWorkspace v-else-if="tab === 'metrics' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" />
       <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
-        :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReview" :can-close="roles.includes('ADMIN')"
+        :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReview" :can-manage="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
         @all="changeTab('connector')" />
       <div v-else-if="tab === 'review' && characterId && canReview" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
