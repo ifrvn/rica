@@ -9,41 +9,21 @@ import { PlatformReplyError } from '../../packages/contracts/platform-reply-exec
 import { observationError, reportPluginResult } from '../plugin-observation.js'
 import type { PluginDiagnostic } from '../../packages/contracts/plugin-status.js'
 import { PluginHostError } from '../../packages/runtime/plugin-registry.js'
-import { startNewbiReader, type NewbiConnection } from './newbi-read-plugin.js'
+import type { NewbiConnection } from './newbi-read-plugin.js'
 import { startNewbiExecutor } from './newbi-execution-plugin.js'
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
-import type { Prisma, PrismaClient } from '../../packages/persistence/generated/client.js'
+import { openSavedNewbiReader, scopedNewbiDatabase } from './newbi-database.js'
 
-function scopedDatabase(db: PrismaClient, role: 'reader' | 'executor'): RawQueryClient {
-  return {
-    $queryRaw<T>(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]) {
-      return db.$transaction(async (tx) => {
-        if (role === 'reader') await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
-        else await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
-        return tx.$queryRaw<T>(query, ...values)
-      })
-    },
-  }
-}
-
-async function connectorSettings(db: RawQueryClient, id: string, sending: boolean) {
-  const directory = modelSettingsDirectory(runtimeDatabaseUrl())
-  const store = createDeploymentPluginStore(directory)
-  const [saved] = sending
-    ? await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_send_connection(${id}::uuid)`
-    : await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_poll_connection(${id}::uuid)`
-  const current = saved && await store.openNewbi(saved.credential, saved.endpoint)
-  if (current) return current
-  const identity = sending ? newbiExecutorIdentity : newbiReaderIdentity
-  throw new PluginHostError({ kind: sending ? 'platform-reply-executor' : 'platform-reader', id: identity.id,
-    version: identity.version, code: 'INVALID_CONFIG' })
+function connectorStore() {
+  return createDeploymentPluginStore(modelSettingsDirectory(runtimeDatabaseUrl()))
 }
 
 async function openReader(db: RawQueryClient, accountId: string, signal?: AbortSignal) {
-  const { connection, beforeRequest } = await connectorSettings(db, accountId, false)
-  const host = await startNewbiReader(connection, signal, beforeRequest)
+  const host = await openSavedNewbiReader(db, connectorStore(), accountId, signal)
+  if (!host) throw new PluginHostError({ kind: 'platform-reader', id: newbiReaderIdentity.id,
+    version: newbiReaderIdentity.version, code: 'INVALID_CONFIG' })
   const { id, version, contractVersion } = host.plugin
   console.error(JSON.stringify({ service: 'newbi-pilot', event: 'plugin_status', kind: 'platform-reader',
     id, version, contractVersion, code: 'READY' }))
@@ -58,7 +38,7 @@ async function readEvents(accountId: string, args: string[]) {
   const controller = new AbortController()
   const stop = seconds ? AbortSignal.any([controller.signal, AbortSignal.timeout(Number(seconds) * 1000)]) : controller.signal
   const db = createDatabase(url)
-  const readerDb = scopedDatabase(db, 'reader')
+  const readerDb = scopedNewbiDatabase(db, 'reader')
   const interrupt = () => controller.abort()
   process.once('SIGINT', interrupt)
   process.once('SIGTERM', interrupt)
@@ -96,7 +76,7 @@ async function main() {
   const db = createDatabase(runtimeDatabaseUrl())
   try {
     if (command === 'inspect') {
-      const host = await openReader(scopedDatabase(db, 'reader'), id)
+      const host = await openReader(scopedNewbiDatabase(db, 'reader'), id)
       try {
         const reader = host.plugin.implementation
         const identity = await reader.verify()
@@ -104,8 +84,12 @@ async function main() {
       } finally { await host.stop() }
       return
     }
-    const executorDb = scopedDatabase(db, 'executor')
-    const { connection, beforeRequest } = await connectorSettings(executorDb, id, true)
+    const executorDb = scopedNewbiDatabase(db, 'executor')
+    const [saved] = await executorDb.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_send_connection(${id}::uuid)`
+    const current = saved && await connectorStore().openNewbi(saved.credential, saved.endpoint)
+    if (!current) throw new PluginHostError({ kind: 'platform-reply-executor', id: newbiExecutorIdentity.id,
+      version: newbiExecutorIdentity.version, code: 'INVALID_CONFIG' })
+    const { connection, beforeRequest } = current
     const host = await startNewbiExecutor(connection, beforeRequest)
     try {
       const { id: pluginId, version, contractVersion, implementation } = host.plugin

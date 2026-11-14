@@ -12,6 +12,8 @@ import { createModelSettingsStore, modelSettingsDirectory } from '../../packages
 import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
+import { openSavedNewbiReader, scopedNewbiDatabase } from '../worker/newbi-database.js'
+import { pollNewbiEvents } from '../../packages/persistence/newbi-events.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
@@ -34,6 +36,7 @@ void redis.connect().catch(() => {})
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
+const newbiReaderDb = scopedNewbiDatabase(db, 'reader')
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
@@ -41,6 +44,16 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   modelSettings: createModelSettingsStore(settingsDirectory),
   deploymentPlugins,
+  pollConnector: async (accountId) => {
+    const stop = AbortSignal.timeout(7000)
+    const host = await openSavedNewbiReader(newbiReaderDb, deploymentPlugins, accountId, stop)
+    if (!host) return
+    try {
+      return await pollNewbiEvents(newbiReaderDb, host.plugin.implementation, accountId, stop)
+    } finally {
+      await host.stop()
+    }
+  },
   identifyConnector: async (credential, endpoint) => {
     const current = await deploymentPlugins.openNewbi(credential, endpoint)
     return current && identifyNewbiAccount(current.connection, current.beforeRequest)

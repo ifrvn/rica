@@ -47,6 +47,12 @@ export const newbiReadError = z.enum(['AGENT_MISMATCH', 'CREDENTIAL_INVALID', 'A
   'SERVICE_UNAVAILABLE', 'COMMUNITY_CLOSED', 'READ_FAILED'])
 export type NewbiReadError = z.infer<typeof newbiReadError>
 
+export const newbiPollView = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('READ'), saved: z.number().int().nonnegative(), nextAt: z.iso.datetime(), historyLost: z.boolean() }),
+  z.object({ status: z.literal('WAITING'), nextAt: z.iso.datetime(), reason: z.enum(['RATE_LIMITED', 'SERVICE_UNAVAILABLE']).optional() }),
+  z.object({ status: z.literal('STOPPED') }),
+])
+
 export const newbiInboxView = z.object({
   agentId: resourceId,
   lastSucceededAt: z.iso.datetime().nullable(),

@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import { newbiReplyInput, type newbiInboxView } from '../../../../../packages/contracts/newbi-pilot.js'
+import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '../../../../../packages/contracts/newbi-pilot.js'
 import { characterPath, useConsoleTask } from '../../shared/console-data.js'
 import { request, RequestError } from '../../shared/request.js'
 
@@ -14,8 +14,12 @@ const emit = defineEmits<{ expired: []; proposals: [accountId: string, proposalI
 const inbox = ref<Inbox>()
 const busy = ref(false)
 const error = ref('')
+const polling = ref(false)
+const pollNotice = ref('')
+const pollError = ref('')
 let active = true
 const base = characterPath(props.characterId) + '/newbi'
+const eventsPath = base + '/accounts/' + encodeURIComponent(props.accountId) + '/events'
 const composer = ref(false)
 const composerHeading = ref<HTMLElement>()
 const postId = ref('')
@@ -38,7 +42,7 @@ async function load() {
   busy.value = true
   error.value = ''
   try {
-    const result = await request<Inbox>(base + '/accounts/' + encodeURIComponent(props.accountId) + '/events')
+    const result = await request<Inbox>(eventsPath)
     if (active) inbox.value = result
   } catch (cause) {
     if (!active) return
@@ -47,6 +51,31 @@ async function load() {
     else error.value = '无法读取当前账号的状态，请刷新后重试。'
   } finally {
     busy.value = false
+  }
+}
+
+async function poll() {
+  if (!props.canPropose || polling.value || busy.value) return
+  polling.value = true
+  pollNotice.value = ''
+  pollError.value = ''
+  try {
+    const result = await request<z.infer<typeof newbiPollView>>(eventsPath + '/poll', { method: 'POST' })
+    if (!active) return
+    if (result.status === 'READ') pollNotice.value = result.saved ? '已保存 ' + result.saved + ' 条新事件。' : '读取完成，本次没有新事件。'
+    else if (result.status === 'WAITING') pollNotice.value = '请在 ' + format(result.nextAt) + ' 后再次读取。'
+    else pollError.value = '读取已停止，请核对账号状态及最近错误。'
+  } catch (cause) {
+    if (!active) return
+    if (cause instanceof RequestError && cause.status === 401) {
+      emit('expired')
+      return
+    }
+    pollError.value = cause instanceof RequestError && cause.status === 403
+      ? '当前账号无权拉取事件。' : '未能读取事件，请核对账号状态、连接配置和最近错误后重试。'
+  } finally {
+    if (active && (pollNotice.value || pollError.value)) await load()
+    polling.value = false
   }
 }
 
@@ -81,10 +110,15 @@ onBeforeUnmount(() => { active = false })
   <section class="console-panel" aria-labelledby="connector-read-heading">
     <div class="console-section-heading">
       <h3 id="connector-read-heading">连接器读取状态</h3>
-      <NButton size="small" quaternary :disabled="busy" @click="load">刷新读取状态</NButton>
+      <div class="connector-actions">
+        <NButton size="small" quaternary :disabled="busy || polling" @click="load">刷新读取状态</NButton>
+        <NButton v-if="canPropose" size="small" secondary :loading="polling" :disabled="busy || polling" @click="poll">立即读取</NButton>
+      </div>
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NSpin v-else-if="busy && !inbox" />
+    <NAlert v-if="pollError" type="error" role="alert">{{ pollError }}</NAlert>
+    <NAlert v-if="pollNotice" type="info" role="status">{{ pollNotice }}</NAlert>
     <template v-if="inbox">
       <div class="connector-actions">
         <NTag size="small" :type="inbox.readError ? 'warning' : 'default'">

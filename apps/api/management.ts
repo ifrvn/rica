@@ -26,6 +26,7 @@ import { checkModel } from './model-check.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
 import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
+import { newbiPollView } from '../../packages/contracts/newbi-pilot.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
@@ -34,6 +35,7 @@ type Options = {
   modelSettings?: ReturnType<typeof createModelSettingsStore>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
+  pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
 }
 type Environment = { Variables: { actor: Principal; requestId: string } }
 
@@ -73,7 +75,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  modelSettings, deploymentPlugins, identifyConnector }: Options) {
+  modelSettings, deploymentPlugins, identifyConnector, pollConnector }: Options) {
   const app = new OpenAPIHono<Environment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -1216,6 +1218,29 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => {
     const { characterId, accountId } = c.req.valid('param')
     return c.json(await getNewbiInbox(db, { characterId, actor: c.get('actor') }, accountId), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'post', path: `${newbi}/accounts/{accountId}/events/poll`, security,
+    request: { params: characterParams.extend({ accountId: schema.resourceId }) },
+    responses: { ...errors, 200: success(newbiPollView) },
+  }), async (c) => {
+    const { characterId, accountId } = c.req.valid('param')
+    await db.$transaction(async (tx) => {
+      await management.authorize(tx, { characterId, actor: c.get('actor') }, ['ADMIN'])
+      const account = await tx.platformAccount.findFirst({
+        where: { id: accountId, characterId, platform: 'newbi' },
+        select: { status: true, instanceKey: true, identity: { select: { status: true, character: { select: { status: true } } } } },
+      })
+      if (!account) throw new management.ManagementError(404, 'NOT_FOUND', 'Newbi account not found')
+      if ([account.status, account.identity.status, account.identity.character.status].some((status) => status !== 'ACTIVE')) {
+        throw new management.ManagementError(409, 'STATE_CONFLICT', 'Newbi account is inactive')
+      }
+      await requireNewbi(account.instanceKey)
+    })
+    const result = await pollConnector?.(accountId)
+    if (!result) throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Newbi reading is unavailable')
+    return c.json(newbiPollView.parse(result), 200)
   })
 
   app.doc31('/openapi.json', {

@@ -50,6 +50,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
 | `POST /c/newbi/accounts/{accountId}/check` | ADMIN 核验当前角色已绑定账号的 Newbi 读取连接。返回核验结果和时间，账号状态保持原值。 |
+| `POST /c/newbi/accounts/{accountId}/events/poll` | ADMIN 拉取当前角色下已启用的 Newbi 账号的一页事件。返回保存事件数量或下次可读时间，复用原有游标和限流。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。可省略 `reason`。 |
 | `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 或 AUDITOR 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
 | `GET /c/memory-grants` | ADMIN 读取共享授权和接收绑定，可按 `memoryId` 筛选。 |

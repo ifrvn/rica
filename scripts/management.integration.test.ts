@@ -10,6 +10,7 @@ import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
 import { createNewbiReplyExecutor } from '../packages/runtime/newbi-client.js'
 import { identifyNewbiAccount, startNewbiReader } from '../apps/worker/newbi-read-plugin.js'
+import { openSavedNewbiReader } from '../apps/worker/newbi-database.js'
 import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
 import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -44,13 +45,15 @@ const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor'])
 let connectorEndpoint: string | undefined
-const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>) =>
+const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>,
+  pollConnector?: Parameters<typeof createManagementApp>[0]['pollConnector']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
     identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
     deploymentPlugins,
+    pollConnector,
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
       return subject && subjects.has(subject) ? {
@@ -3134,7 +3137,19 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal((await account()).cursor, null)
     assert.equal((await request('GET', character + inbox)).body.readError, 'CREDENTIAL_INVALID')
     assert.deepEqual(cursors, [])
-    assert.equal((await poll()).status, 'READ')
+    const target = testApp(settings, async (id) => {
+      const host = await openSavedNewbiReader(db, settings, id)
+      if (!host) return
+      try { return await pollNewbiEvents(db, host.plugin.implementation, id) }
+      finally { await host.stop() }
+    })
+    const pollPath = character + inbox + '/poll'
+    assert.equal((await request('POST', pollPath, { target, actor: 'auditor' })).status, 403)
+    assert.equal((await request('POST', characterPath(b) + inbox + '/poll', { target, actor: 'admin-b' })).status, 404)
+    assert.deepEqual(cursors, [])
+    const firstRead = await request('POST', pollPath, { target })
+    assert.equal(firstRead.status, 200, JSON.stringify(firstRead.body))
+    assert.equal(firstRead.body.status, 'READ')
     assert.equal((await account()).cursor, opaque)
     assert.deepEqual(cursors, [null])
 
@@ -3152,6 +3167,9 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const caughtUp = await account()
     assert.equal(caughtUp.cursor, 'tail')
     assert.ok(caughtUp.nextPollAt.getTime() > Date.now() + 20_000)
+    const deferred = await request('POST', pollPath, { target })
+    assert.deepEqual(deferred.body, { status: 'WAITING', nextAt: caughtUp.nextPollAt.toISOString() })
+    assert.deepEqual(cursors, [null, opaque, 'next-page'])
     const firstInbox = await request('GET', character + inbox)
     assert.equal(firstInbox.status, 200, JSON.stringify(firstInbox.body))
     assert.deepEqual(firstInbox.body.items.map((item: { seq: string }) => item.seq).sort(), [seq, '9007199254740995'])
