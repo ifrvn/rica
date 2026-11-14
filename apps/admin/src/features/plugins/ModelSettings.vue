@@ -6,8 +6,8 @@ import { useConsoleTask } from '../../shared/console-data.js'
 import { request } from '../../shared/request.js'
 import { modelCheckLabels } from './plugin-status.js'
 
-const props = defineProps<{ provider: Exclude<ModelSettingsInput['provider'], 'simulated'>; name: string }>()
-const emit = defineEmits<{ close: []; expired: []; saved: [] }>()
+const props = defineProps<{ provider: Exclude<ModelSettingsInput['provider'], 'simulated'>; name: string; canStartSimulation: boolean }>()
+const emit = defineEmits<{ close: []; expired: []; saved: []; simulate: [] }>()
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
 const path = '/v1/model-settings'
 const current = ref<ModelSettingsView>()
@@ -114,6 +114,13 @@ onMounted(load)
       <NAlert v-if="checkResult && canCheck" :type="checkResult.status === 'OK' ? 'success' : 'error'" role="status">
         {{ modelCheckLabels[checkResult.status] }}
         <p v-if="checkResult.reply" class="console-payload model-settings-reply">{{ checkResult.reply }}</p>
+        <p v-if="checkResult.status === 'OK'" class="model-settings-reply">
+          {{ canStartSimulation
+            ? '用当前角色和模拟账号发起一次模拟，就能在提案中查看认知 Worker 生成的草稿。'
+            : '请让当前角色的管理员发起模拟，在提案中核对认知 Worker 生成的草稿。' }}
+        </p>
+        <NButton v-if="checkResult.status === 'OK' && canStartSimulation" class="model-settings-simulate"
+          size="small" secondary @click="emit('simulate')">发起模拟验证</NButton>
       </NAlert>
     </NForm>
     <template v-else-if="error">
@@ -130,4 +137,5 @@ onMounted(load)
 .model-settings-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 .model-settings-test-hint { margin-block: .5rem; }
 .model-settings-reply { margin-block: .5rem 0; }
+.model-settings-simulate { margin-block-start: .75rem; }
 </style>

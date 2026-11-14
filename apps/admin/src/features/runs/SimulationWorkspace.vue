@@ -20,7 +20,7 @@ type Page<T> = { items: T[]; nextCursor: string | null }
 
 const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string; showForm: boolean }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string]; audit: [id: string]; commitment: [id: string];
-  filter: [query: string]; form: [open: boolean]; executorHealth: [] }>()
+  filter: [query: string]; form: [open: boolean]; executorHealth: []; identities: [] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -271,7 +271,10 @@ onMounted(() => { void act(load) })
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
-    <p v-if="!detailId && canStart && !busy && !options.length && !loadingError" class="run-muted">发起模拟前，请在「角色与身份」启用模拟账号及其角色和身份。</p>
+    <div v-if="!detailId && canStart && !busy && !options.length && !loadingError" class="run-actions">
+      <span class="run-muted">发起模拟前，请启用角色、身份和已关联的模拟账号。</span>
+      <NButton size="small" secondary @click="emit('identities')">前往角色与身份</NButton>
+    </div>
     <section v-if="canStart && showForm && !detailId" class="run-editor console-record-workspace" aria-labelledby="run-editor-heading">
       <h3 id="run-editor-heading" ref="editorHeading" tabindex="-1">发起模拟</h3>
       <NForm @submit.prevent="start">
@@ -357,8 +360,9 @@ onMounted(() => { void act(load) })
             <NButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
               size="small" quaternary @click="emit('commitment', selected.id)">登记模拟承诺</NButton>
           </div>
-          <NAlert v-if="selected.state === 'WAITING_APPROVAL' && !canReview" type="info" title="此提案需要审批权限">
-            请联系当前角色的管理员或审批员处理这次模拟提案。
+          <NAlert v-if="selected.state === 'WAITING_APPROVAL'" type="info"
+            :title="canReview ? '草稿已生成，等待审批' : '此提案需要审批权限'">
+            {{ canReview ? '点击「前往审批」即可查看拟回复正文，并决定是否批准。' : '请联系当前角色的管理员或审批员处理这次模拟提案。' }}
           </NAlert>
           <NAlert v-if="selected.state === 'READY'" type="info" title="已批准，等待模拟执行器">
             <p>执行器会自动领取许可并写入模拟回执。长时间等待时，先查看执行器状态。</p>

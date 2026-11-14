@@ -7,8 +7,8 @@ import { request } from '../../shared/request.js'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
 import ModelSettings from './ModelSettings.vue'
 
-const props = defineProps<{ characterId: string; canConfigureModel: boolean }>()
-const emit = defineEmits<{ expired: []; accounts: []; health: []; newbi: [installed: boolean] }>()
+const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean }>()
+const emit = defineEmits<{ expired: []; accounts: []; health: []; simulate: []; newbi: [installed: boolean] }>()
 const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
@@ -228,7 +228,8 @@ function saveNewbi() {
       </article>
       <ModelSettings v-if="modelEditor" :key="modelEditor"
         class="console-record-workspace" :provider="modelEditor" :name="labels[modelEditor]"
-        @expired="expired" @close="modelEditor && toggleEditor(modelEditor)" @saved="refresh" />
+        :can-start-simulation="canStartSimulation"
+        @expired="expired" @close="modelEditor && toggleEditor(modelEditor)" @saved="refresh" @simulate="emit('simulate')" />
     </template>
   </div>
 </template>

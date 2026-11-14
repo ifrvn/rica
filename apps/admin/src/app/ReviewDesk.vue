@@ -565,6 +565,7 @@ async function decide(decision: Decision) {
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @review="navigate({ characterId, page: 'review', detail: $event })"
           @executor-health="navigate({ characterId, page: 'health', healthNode: 'simulation-executor' })"
+          @identities="changeTab('character')"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @form="navigate({ characterId, page: 'runs', runQuery, startSimulation: $event })"
           @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event, startSimulation })" />
@@ -578,8 +579,9 @@ async function decide(decision: Decision) {
       <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '')"
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
-        :character-id="characterId" :can-configure-model="canCreate" @expired="resetSession"
+        :character-id="characterId" :can-configure-model="canCreate" :can-start-simulation="roles.includes('ADMIN')" @expired="resetSession"
         @newbi="newbiInstalled = $event"
+        @simulate="navigate({ characterId, page: 'runs', startSimulation: true })"
         @accounts="changeTab('accounts')" @health="changeTab('health')" />
       <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId + '/' + (healthNode ?? '')"
         :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
