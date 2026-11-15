@@ -32,7 +32,13 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 - 网页登录后持有有效期 8 小时的 HttpOnly、SameSite=Strict 会话 Cookie。退出会撤销当前会话，HTTPS 下 Cookie 额外使用 Secure 属性。
 - 已登录用户可输入当前密码后登记 Passkey。登记和登录都验证浏览器来源、RP ID、一次性挑战和验证器的用户验证。已登记用户可直接选用 Passkey 登录。
+- 在右上角账号菜单打开「管理通行密钥」，可以查看自己已登记的 Passkey。按登记时间和识别码选中一条，输入当前密码后移除。该凭据随即失去 Rica 登录资格，已登录会话及其他凭据继续有效。设备或密码管理器保存的副本可从原处删除。
 - 脚本可向 `POST /v1/auth/login` 提交 `username`、`password`，保存响应 Cookie，并在后续请求复用。所有写请求须附带与 `RICA_ADMIN_ORIGIN` 一致的 `Origin`。会话查询和退出使用 `GET /v1/auth/session` 与 `POST /v1/auth/logout`。管理接口的 OpenAPI 文档位于 `GET /v1/openapi.json`。
+
+| 通行密钥接口 | 参数 | 结果 |
+| --- | --- | --- |
+| `GET /v1/auth/passkeys` | 当前登录会话。 | 200，`{ items: [{ id, createdAt }] }`。旧记录的 `createdAt` 为 `null`。 |
+| `DELETE /v1/auth/passkeys/{id}` | 同源请求，提交 `{ password }` 确认当前密码。 | 200，`{ success: true }`。错误密码返回 422，凭据不可访问返回 404，尝试过多返回 429。 |
 
 ## 已开放的入口
 

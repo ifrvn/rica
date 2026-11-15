@@ -141,6 +141,34 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     return c.json({ success: true })
   })
 
+  app.get('/passkeys', async (c) => {
+    const user = await sessions.read(getCookie(c, config.cookie))
+    if (!user) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
+    const items = await db.adminPasskey.findMany({
+      where: { userId: user.id }, select: { id: true, createdAt: true },
+      orderBy: [{ createdAt: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+    })
+    return c.json({ items })
+  })
+
+  app.delete('/passkeys/:id', async (c) => {
+    const user = await sessions.read(getCookie(c, config.cookie))
+    if (!user) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
+    const id = credentialId.safeParse(c.req.param('id'))
+    const input = registrationPassword.safeParse(await c.req.json().catch(() => null))
+    if (!id.success) return c.json({ error: { code: 'INVALID_INPUT' } }, 422)
+    if (!input.success) return c.json({ error: { code: 'INVALID_CREDENTIALS' } }, 422)
+    if (!await allowAuthAttempt(redis, 'password', user.id)) return c.json({ error: { code: 'RATE_LIMITED' } }, 429)
+    if (!await verifyPassword(input.data.password, user.passwordHash)) return c.json({ error: { code: 'INVALID_CREDENTIALS' } }, 422)
+
+    const [result] = await db.$queryRaw<{ removed: boolean }[]>`
+      SELECT public.rica_remove_passkey(${user.id}::uuid, ${user.authVersion}::int, ${id.data}::text) AS removed
+    `
+    if (!result.removed) return c.json({ error: { code: 'PASSKEY_NOT_FOUND' } }, 404)
+    console.info(JSON.stringify({ service: 'api', event: 'passkey_removed', actorId: user.actorId }))
+    return c.json({ success: true })
+  })
+
   app.post('/passkeys/login/options', async (c) => {
     if (!await allowAuthAttempt(redis, 'passkey')) return c.json({ error: { code: 'RATE_LIMITED' } }, 429)
     const options = await generateAuthenticationOptions({ rpID: config.rpID, userVerification: 'required' })

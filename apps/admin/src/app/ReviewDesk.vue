@@ -29,6 +29,7 @@ const GrowthWorkspace = defineAsyncComponent(() => import('../features/knowledge
 const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowledge/KnowledgeWorkspace.vue'))
 const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
 const LocalUsers = defineAsyncComponent(() => import('../features/access/LocalUsers.vue'))
+const PasskeyWorkspace = defineAsyncComponent(() => import('../features/access/PasskeyWorkspace.vue'))
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
@@ -45,6 +46,7 @@ const passkeyPassword = ref('')
 const showPasskeyForm = ref(false)
 const accountMenuOpen = ref(false)
 const localUsersOpen = ref(false)
+const managePasskeysOpen = ref(false)
 let localUsersTrigger: HTMLElement | undefined
 const navigationBreakpoint = window.matchMedia('(max-width: 46rem)')
 const narrowNavigation = ref(navigationBreakpoint.matches)
@@ -366,6 +368,7 @@ async function disconnect() {
 }
 
 function resetSession() {
+  managePasskeysOpen.value = false
   navigationOpen.value = false
   focusPageAfterNavigation = false
   ++revision
@@ -399,6 +402,11 @@ function openLocalUsers() {
 function closeLocalUsers() {
   localUsersOpen.value = false
   void nextTick(() => (localUsersTrigger?.isConnected ? localUsersTrigger : document.getElementById('console-account-menu'))?.focus())
+}
+
+function closePasskeyManager() {
+  managePasskeysOpen.value = false
+  void nextTick(() => document.getElementById('console-account-menu')?.focus())
 }
 
 async function fetchQueue(current: number, append = false) {
@@ -546,6 +554,9 @@ async function decide(decision: Decision) {
                 </UiField>
                 <UiButton type="submit" tone="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</UiButton>
               </form>
+              <UiButton size="small" variant="quiet" :disabled="busy" @click="accountMenuOpen = false; managePasskeysOpen = true">
+                <span class="i-lucide-shield-check" aria-hidden="true" />管理通行密钥
+              </UiButton>
               <UiButton size="small" variant="quiet" :disabled="busy" @click="disconnect">退出登录</UiButton>
               </PopoverContent>
             </PopoverPortal>
@@ -554,6 +565,7 @@ async function decide(decision: Decision) {
       </Teleport>
 
       <LocalUsers v-if="canCreate && localUsersOpen" @close="closeLocalUsers" @expired="resetSession" />
+      <PasskeyWorkspace v-if="managePasskeysOpen" @close="closePasskeyManager" @expired="resetSession" />
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
       <ConsoleNavigation v-if="characters.length && !narrowNavigation" :has-character="!!characterId" :main-page="mainPage"

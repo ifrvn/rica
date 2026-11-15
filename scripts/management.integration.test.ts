@@ -1,6 +1,6 @@
 import { startCognitionPlugins, startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -332,7 +332,75 @@ test('deployment account management leaves role grants scoped and revokes creden
     `
     assert.equal(stale.code, 'FORBIDDEN')
 
-    await owner.adminPasskey.create({ data: { id: suffix, userId: user.id, publicKey: Uint8Array.of(1) } })
+    const passkeys = '/v1/auth/passkeys'
+    const removeKey = passkeys + '/' + suffix
+    const retainedKey = 'retained-' + suffix
+    const otherKey = 'other-' + suffix
+    const keyPair = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    const { x, y } = keyPair.publicKey.export({ format: 'jwk' })
+    assert.ok(x && y)
+    // COSE EC2 public key with the ES256 algorithm and P-256 curve.
+    const publicKey = Buffer.concat([
+      Buffer.from('a5010203262001215820', 'hex'), Buffer.from(x, 'base64url'),
+      Buffer.from('225820', 'hex'), Buffer.from(y, 'base64url'),
+    ])
+    async function authenticateFixturePasskey(counter: number) {
+      const challenge = await call('POST', passkeys + '/login/options')
+      assert.equal(challenge.status, 200)
+      const { challengeId, options } = await challenge.json()
+      const clientData = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: options.challenge, origin: fixtureOrigin }))
+      const authenticatorData = Buffer.alloc(37)
+      createHash('sha256').update(authConfig.rpID).digest().copy(authenticatorData)
+      authenticatorData[32] = 0x05
+      authenticatorData.writeUInt32BE(counter, 33)
+      const signature = sign('sha256', Buffer.concat([authenticatorData, createHash('sha256').update(clientData).digest()]), keyPair.privateKey)
+      return call('POST', passkeys + '/login/verify', '', {
+        challengeId, response: { id: suffix, rawId: suffix, type: 'public-key', clientExtensionResults: {}, response: {
+          clientDataJSON: clientData.toString('base64url'), authenticatorData: authenticatorData.toString('base64url'),
+          signature: signature.toString('base64url'), userHandle: Buffer.from(user.id).toString('base64url'),
+        } },
+      })
+    }
+    await owner.adminPasskey.createMany({ data: [
+      { id: suffix, userId: user.id, publicKey, createdAt: null },
+      { id: retainedKey, userId: user.id, publicKey },
+      { id: otherKey, userId: operator.id, publicKey },
+    ] })
+    assert.equal((await call('GET', passkeys)).status, 401)
+    const listedPasskeys = await call('GET', passkeys, userCookie)
+    assert.equal(listedPasskeys.status, 200)
+    assert.equal(listedPasskeys.headers.get('cache-control'), 'no-store')
+    const [latest, legacy] = (await listedPasskeys.json()).items
+    assert.deepEqual(latest, { id: retainedKey, createdAt: new Date(latest.createdAt).toISOString() })
+    assert.deepEqual(legacy, { id: suffix, createdAt: null })
+    assert.equal((await call('DELETE', removeKey, '', { password })).status, 401)
+    assert.equal((await call('DELETE', removeKey, userCookie, { password }, 'https://foreign.example.test')).status, 403)
+    assert.equal((await call('DELETE', removeKey, operatorCookie, { password: currentPassword })).status, 404)
+    const shortPassword = await call('DELETE', removeKey, userCookie, { password: 'wrong' })
+    assert.equal(shortPassword.status, 422)
+    assert.equal((await shortPassword.json()).error.code, 'INVALID_CREDENTIALS')
+    assert.equal((await call('DELETE', removeKey, userCookie, { password: replacement })).status, 422)
+    assert.equal(await owner.adminPasskey.count({ where: { userId: user.id } }), 2)
+
+    const [removePermissions] = await owner.$queryRaw<{ direct: boolean; runtime: boolean }[]>`
+      SELECT has_table_privilege('rica_admin_api', 'public.admin_passkeys', 'DELETE') AS direct,
+        has_function_privilege('rica_runtime', 'public.rica_remove_passkey(uuid,integer,text)', 'EXECUTE') AS runtime
+    `
+    assert.deepEqual(removePermissions, { direct: false, runtime: false })
+    const [staleRemoval] = await management.$queryRaw<{ removed: boolean }[]>`
+      SELECT public.rica_remove_passkey(${user.id}::uuid, ${user.authVersion + 1}::int, ${suffix}::text) AS removed
+    `
+    assert.equal(staleRemoval.removed, false)
+    assert.equal((await authenticateFixturePasskey(1)).status, 200)
+    assert.equal((await call('DELETE', removeKey, userCookie, { password })).status, 200)
+    const remaining = await call('GET', passkeys, userCookie)
+    assert.deepEqual((await remaining.json()).items, [latest])
+    assert.ok(await owner.adminPasskey.findUnique({ where: { id: otherKey } }))
+    assert.equal((await call('GET', '/v1/auth/session', userCookie)).status, 200)
+
+    const removedLogin = await authenticateFixturePasskey(2)
+    assert.equal(removedLogin.status, 401)
+    assert.equal((await removedLogin.json()).error.code, 'INVALID_PASSKEY')
     const updated = await call('PUT', reset, operatorCookie, { password: replacement, currentPassword })
     assert.equal(updated.status, 200)
     assert.deepEqual(await updated.json(), { username: name })
