@@ -1,6 +1,6 @@
 import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
-import type { ModelSettingsInput } from '../packages/contracts/model-settings.js'
-import type { createModelSettingsStore } from '../packages/runtime/model-settings-store.js'
+import type { ModelSettingsInput } from '@rica/plugin-hosted-models/contracts'
+import type { createModelSettingsStore } from '@rica/plugin-hosted-models/settings'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
 import { hostedModelConfig, hostedModelDefinitions } from '@rica/plugin-hosted-models'

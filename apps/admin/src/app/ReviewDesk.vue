@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import { platformReviews, type ConsoleWorkspace } from './plugin-integrations.js'
+import type { DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
-import { newbiConsole } from '@rica/plugin-newbi/console/labels'
-import ConnectorReview from '@rica/plugin-newbi/console/ConnectorReview.vue'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
@@ -11,7 +11,6 @@ import { focusRecord } from '@rica/console-shared/console-data'
 import { request, RequestError } from '@rica/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView } from '../../../../packages/contracts/management.js'
-import type { newbiCharacterWorkspaceView as characterWorkspaceView } from '@rica/plugin-newbi/contracts'
 import { hasManagementRole } from '../../../../packages/contracts/management-permissions.js'
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '../../../../packages/contracts/action-review.js'
@@ -31,7 +30,7 @@ const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/P
 const SystemHealth = defineAsyncComponent(() => import('../features/health/SystemHealth.vue'))
 
 type Character = z.infer<typeof characterView>
-type CharacterAccess = z.infer<typeof characterWorkspaceView>['roles']
+type CharacterAccess = ConsoleWorkspace['roles']
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Decision = 'APPROVE' | 'REJECT'
 
@@ -79,7 +78,16 @@ const routing = ref(false)
 let revision = 0
 const characterCursor = ref<string | null>(null)
 const roles = ref<CharacterAccess>([])
-const newbiInstalled = ref(false)
+const installedReviews = ref<string[]>([])
+const reviewPlugin = ref<string>()
+const activePlatformReview = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)
+  ?? (reviewPlugin.value ? undefined : platformReviews.find(({ id }) => installedReviews.value.includes(id)) ?? platformReviews[0]))
+const reviewTabs = computed(() => platformReviews.filter(({ id }) => installedReviews.value.includes(id)
+  || (tab.value === 'connector' && activePlatformReview.value?.id === id)))
+
+function refreshReviewTabs(deployment: DeploymentPluginsView) {
+  installedReviews.value = platformReviews.filter((review) => review.deployed(deployment)).map(({ id }) => id)
+}
 const canReadRuns = computed(() => hasManagementRole(roles.value, ['AUDITOR']))
 const canReview = computed(() => hasManagementRole(roles.value, ['REVIEWER']))
 const characterId = ref('')
@@ -210,10 +218,10 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       return
     }
     if (changedCharacter) {
-      const workspace = await request<z.infer<typeof characterWorkspaceView>>('/v1/characters/' + target)
+      const workspace = await request<ConsoleWorkspace>('/v1/characters/' + target)
       if (current !== revision) return
       roles.value = workspace.roles
-      newbiInstalled.value = workspace.newbiInstalled
+      installedReviews.value = platformReviews.filter((review) => review.installed(workspace)).map(({ id }) => id)
       if (!characters.value.some(({ id }) => id === target)) characters.value = [...characters.value, workspace]
       else characterUpdated(workspace)
     }
@@ -229,11 +237,13 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
     startSimulation.value = tab.value === 'runs' && roles.value.includes('ADMIN') && !!location.startSimulation
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
+    reviewPlugin.value = tab.value === 'connector' ? location.reviewPlugin : undefined
     healthNode.value = tab.value === 'health' ? location.healthNode : undefined
     if (denied) error.value = '当前账号无权打开此链接。'
     if (replace || tab.value !== location.page || (location.startSimulation && !startSimulation.value)) {
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value,
-        runQuery: runQuery.value, startSimulation: startSimulation.value, healthNode: healthNode.value }))
+        runQuery: runQuery.value, startSimulation: startSimulation.value, connectorAccountId: connectorAccountId.value,
+        reviewPlugin: reviewPlugin.value, healthNode: healthNode.value }))
     }
     if (tab.value === 'review' && canReview.value) {
       if (!queueLoaded) await fetchQueue(current)
@@ -542,12 +552,13 @@ async function decide(decision: Decision) {
         </NButton>
       </nav>
 
-      <nav v-if="canReview && (tab === 'connector' || (tab === 'review' && newbiInstalled))" class="account-actions" aria-label="审批类型">
+      <nav v-if="canReview && (tab === 'connector' || (tab === 'review' && reviewTabs.length))" class="account-actions" aria-label="审批类型">
         <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('review')">模拟提案</NButton>
-        <NButton v-if="newbiInstalled || tab === 'connector'" size="small" :type="tab === 'connector' ? 'primary' : 'default'"
-          :aria-current="tab === 'connector' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('connector')">{{ newbiConsole.reviewTitle }}</NButton>
+        <NButton v-for="review in reviewTabs" :key="review.id" size="small"
+          :type="tab === 'connector' && activePlatformReview?.id === review.id ? 'primary' : 'default'"
+          :aria-current="tab === 'connector' && activePlatformReview?.id === review.id ? 'page' : undefined" :disabled="busy || routing"
+          @click="navigate({ characterId, page: 'connector', reviewPlugin: review.id })">{{ review.title }}</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canReadRuns" :key="characterId" :character="currentCharacter"
@@ -561,7 +572,7 @@ async function decide(decision: Decision) {
         @created="characterCreated" @updated="characterUpdated" @expired="resetSession" @roles="roles = $event"
         @select-character="changeCharacter" @load-characters="run(() => fetchCharacters(characterCursor ?? undefined))"
         @account="navigate({ characterId, page: 'accounts', detail: $event })"
-        @proposals="(accountId, proposalId) => navigate({ characterId, page: 'connector', connectorAccountId: accountId, detail: proposalId })" />
+        @proposals="(platform, accountId, proposalId) => navigate({ characterId, page: 'connector', reviewPlugin: platform, connectorAccountId: accountId, detail: proposalId })" />
       <template v-else-if="tab === 'runs' && characterId && canReadRuns">
         <SimulationWorkspace :key="characterId" :character-id="characterId" :can-start="roles.includes('ADMIN')" :can-review="canReview"
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
@@ -582,7 +593,7 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :can-configure-model="canCreate" :can-start-simulation="roles.includes('ADMIN')" @expired="resetSession"
-        @newbi="newbiInstalled = $event"
+        @deployment-changed="refreshReviewTabs"
         @simulate="navigate({ characterId, page: 'runs', startSimulation: true })"
         @accounts="changeTab('accounts')" @health="changeTab('health')" />
       <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId + '/' + (healthNode ?? '')"
@@ -603,10 +614,13 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="closePlanning" @run="openRun" />
       <MetricsWorkspace v-else-if="tab === 'metrics' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" @expired="resetSession" />
-      <ConnectorReview v-else-if="tab === 'connector' && characterId && canReview" :key="characterId"
-        :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReview" :can-manage="roles.includes('ADMIN')"
-        @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId })"
-        @all="changeTab('connector')" />
+      <template v-else-if="tab === 'connector' && characterId && canReview">
+        <component v-if="activePlatformReview" :is="activePlatformReview.component" :key="characterId + '/' + activePlatformReview.id"
+          :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReview" :can-manage="roles.includes('ADMIN')"
+          @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId, reviewPlugin: activePlatformReview?.id })"
+          @all="navigate({ characterId, page: 'connector', reviewPlugin: activePlatformReview?.id })" />
+        <NEmpty v-else description="此插件未注册审批页面。" />
+      </template>
       <div v-else-if="tab === 'review' && characterId && canReview" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
         <section class="console-split-list" aria-labelledby="review-list-heading">
           <div class="console-section-heading">

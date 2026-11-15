@@ -7,10 +7,10 @@
     "./model-provider": "./model-provider.ts",
     "./run-continuity": "./run-continuity.ts",
     "./simulation-platform": "./simulation-platform.ts",
-    "./model-settings": "./model-settings.ts",
     "./platform-reader": "./platform-reader.ts",
     "./platform-reply-executor": "./platform-reply-executor.ts",
-    "./management": "./management.ts"
+    "./management": "./management.ts",
+    "./deployment-plugins": "./deployment-plugins.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",

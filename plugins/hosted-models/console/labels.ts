@@ -1,4 +1,4 @@
-import type { ModelCheckStatus } from '@rica/contracts/model-settings'
+import type { ModelCheckStatus } from '../contracts.js'
 
 export const modelCheckLabels: Record<ModelCheckStatus['status'], string> = {
   OK: '模型已返回回复',

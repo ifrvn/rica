@@ -4,26 +4,19 @@ import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
 import type { characterView, identityView } from '../../../../../packages/contracts/management.js'
-import type { newbiAccountRegistrationView as accountRegistrationView, newbiAccountView as accountView, newbiCharacterWorkspaceView as characterWorkspaceView } from '@rica/plugin-newbi/contracts'
-import type { newbiAccountCheckView } from '@rica/plugin-newbi/contracts'
-import { formatTime } from '@rica/console-shared/console-data'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
-import ConnectorAccountStatus from '@rica/plugin-newbi/console/ConnectorAccountStatus.vue'
-import { newbiConsole } from '@rica/plugin-newbi/console/labels'
-import AccountConnectionForm from '@rica/plugin-newbi/console/AccountConnectionForm.vue'
-import { checkAccount, testAccount, type AccountPreview } from '@rica/plugin-newbi/console/accounts'
-import NewbiAccountLabel from '@rica/plugin-newbi/console/NewbiAccountLabel.vue'
+import { isSimulationPlatform, platformAccounts, type ConnectorAccount, type ConnectorRegistration, type ConsoleWorkspace } from '../../app/plugin-integrations.js'
 import { request, RequestError } from '@rica/console-shared/request'
 
-type Workspace = z.infer<typeof characterWorkspaceView>
+type Workspace = ConsoleWorkspace
 type Character = z.infer<typeof characterView>
 type Identity = z.infer<typeof identityView>
-type Account = z.infer<typeof accountView>
-type Registration = z.infer<typeof accountRegistrationView>
+type Account = ConnectorAccount
+type Registration = ConnectorRegistration
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'associate' | 'control' | 'linked-account' | 'remove-account'
-type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; connector?: boolean; revoke?: boolean }
+type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; platform?: string; revoke?: boolean }
 
 const props = defineProps<{
   characterId: string; canCreate: boolean; accountsOnly?: boolean; accountDetail?: string;
@@ -31,25 +24,23 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   created: [character: Workspace]; updated: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']];
-  account: [id?: string]; proposals: [accountId: string, proposalId?: string]; selectCharacter: [id: string]; loadCharacters: [];
+  account: [id?: string]; proposals: [platform: string, accountId: string, proposalId?: string]; selectCharacter: [id: string]; loadCharacters: [];
 }>()
 const workspace = ref<Workspace>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
 const removingAccount = ref<Registration>()
-const newbiRegistrationAvailable = ref(false)
-const newbiEndpoint = ref<string>()
-const newbiCredential = ref('')
-const newbiPreview = ref<AccountPreview>()
+const connectors = platformAccounts.map((plugin) => ({ plugin, state: plugin.use({
+  base: () => base.value, run, active: () => active, refresh: load,
+  error: (message) => { error.value = message }, clearError: () => { error.value = ''; pending = undefined },
+}) }))
+const connectorFor = (platform?: string) => connectors.find(({ plugin }) => plugin.platform === platform)
+const registrationConnector = computed(() => connectorFor(form.platform))
 const platformChoices = computed(() => [
   ...(workspace.value?.simulationPlatforms ?? []).map(value => ({ label: value, value })),
-  ...(workspace.value?.newbiInstalled || newbiRegistrationAvailable.value
-    ? [{ label: newbiRegistrationAvailable.value ? newbiConsole.name : newbiConsole.disabledAccountLabel, value: newbiConsole.id, disabled: !newbiRegistrationAvailable.value }] : []),
+  ...connectors.flatMap(({ state }) => state.choices(workspace.value)),
 ])
-type AccountCheck = z.infer<typeof newbiAccountCheckView>
-const newbiChecks = reactive(new Map<string, AccountCheck & { version?: number }>())
-const checkingAccount = ref<string>()
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
@@ -63,11 +54,11 @@ const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style:
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
 const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
-const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && platform === 'newbi'))
+const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && connectorFor(platform)))
+const connectorDetails = computed(() => connectorFor(connector.value?.platform))
 const connectorIdentity = computed(() => identities.value.find(({ id }) => id === connector.value?.identityId))
-const canProposeConnectorReply = computed(() => !!admin.value && newbiRegistrationAvailable.value
-  && connector.value?.instanceKey === newbiEndpoint.value && connector.value?.status === 'ACTIVE'
-  && connectorIdentity.value?.status === 'ACTIVE' && workspace.value?.status === 'ACTIVE')
+const canProposeConnectorReply = computed(() => !!admin.value && !!connector.value
+  && connectorDetails.value?.state.canPropose(connector.value, connectorIdentity.value?.status, workspace.value?.status))
 const isCharacter = computed(() => editor.value === 'character' || editor.value === 'core')
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
 const title = computed(() => ({
@@ -97,30 +88,26 @@ const accountsByIdentity = computed(() => {
 })
 
 const identityName = (identity: Identity) => identity.profile?.displayName || identity.slug
-const boundAccountLabel = (account: Account) => account.newbiProfile ? accountLabel(account) : account.platform + ' · ' + account.instanceKey
+const boundAccountLabel = (account: Account) => connectorFor(account.platform)?.plugin.label(account) ?? account.platform + ' · ' + account.instanceKey
 
 function accountControl(account: Account, revoke = false) {
   open('control', undefined, { scope: 'ACCOUNT', id: account.id, name: boundAccountLabel(account),
-    status: account.status, connector: account.platform === 'newbi', revoke })
+    status: account.status, platform: account.platform, revoke })
 }
 const schemas = shallowRef<{
   management: typeof import('../../../../../packages/contracts/management.js')
-  connector: typeof import('@rica/plugin-newbi/contracts')
 }>()
 
 async function loadSchemas() {
   if (schemas.value) return
-  const [management, connector] = await Promise.all([
-    import('../../../../../packages/contracts/management.js'), import('@rica/plugin-newbi/contracts'),
-  ])
-  if (active) schemas.value = { management, connector }
+  const management = await import('../../../../../packages/contracts/management.js')
+  if (active) schemas.value = { management }
 }
 const attempted = ref(false)
 const touched = ref(new Set<string>())
 const parsed = computed(() => {
   if (!schemas.value) return
   const { accountBindingInput, characterInput, controlInput, coreInput, identityInput, identityUpdate, simulationAccountRegistration } = schemas.value.management
-  const { connectorAccountRegistration } = schemas.value.connector
   const reason = form.reason.trim() || undefined
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
@@ -130,8 +117,8 @@ const parsed = computed(() => {
     case 'core': return coreInput.safeParse({ coreProfile, reason })
     case 'identity': return identityInput.safeParse({ slug: form.slug.trim(), roleProfile })
     case 'identity-edit': return identityUpdate.safeParse({ roleProfile, reason })
-    case 'account': return form.platform === 'newbi'
-      ? connectorAccountRegistration.safeParse({ platform: 'newbi', credential: newbiCredential.value.trim(), agentId: newbiPreview.value?.agentId })
+    case 'account': return registrationConnector.value
+      ? registrationConnector.value.state.parse()
       : simulationAccountRegistration.safeParse({
       platform: form.platform, instanceKey: form.instance.trim(), remoteAccountId: form.remoteId.trim(),
     })
@@ -176,10 +163,15 @@ function fieldInput(field: string) {
     'aria-describedby': fieldError(field) ? 'workspace-' + field + '-error' : undefined }
 }
 
+function resetAccountEditor() {
+  connectors.forEach(({ state }) => state.reset())
+  error.value = ''
+  pending = undefined
+}
+
 function closeEditor() {
   removingAccount.value = undefined
-  newbiCredential.value = ''
-  newbiPreview.value = undefined
+  connectors.forEach(({ state }) => state.reset())
   pending = undefined
   editor.value = undefined
 }
@@ -200,8 +192,9 @@ let pending: { signature: string; key: string } | undefined
 let active = true
 onBeforeUnmount(() => { active = false })
 
-function accountLabel(account: Pick<Registration, 'instanceKey' | 'newbiProfile'> & { platform: string; remoteAccountId?: string }) {
-  if (account.newbiProfile) return 'Newbi · ' + (account.newbiProfile.username || account.newbiProfile.agentId)
+function accountLabel(account: Pick<Registration, 'instanceKey'> & { platform: string; remoteAccountId?: string }) {
+  const label = connectorFor(account.platform)?.plugin.label(account as Partial<Account>)
+  if (label) return label
   return [account.platform, account.instanceKey, account.remoteAccountId].filter(Boolean).join(' · ')
 }
 
@@ -241,8 +234,7 @@ async function load() {
   identities.value = nextIdentities
   accounts.value = nextAccounts
   accountPool.value = pool
-  newbiRegistrationAvailable.value = pluginStatus?.newbiRegistrationAvailable === true
-  newbiEndpoint.value = pluginStatus?.deployment?.newbi.endpoint ?? undefined
+  connectors.forEach(({ state }) => state.sync(pluginStatus))
   emit('roles', current.roles)
   emit('updated', current)
 }
@@ -269,19 +261,13 @@ async function run(task: () => Promise<void>) {
       error.value = '该账号已关联身份。请取消操作并刷新账号池。'
       return
     }
-    if (editor.value === 'account' && form.platform === 'newbi' && cause instanceof RequestError) {
-      if (cause.code === 'CONNECTOR_VERIFICATION_FAILED' || cause.code === 'PLUGIN_STATE_CONFLICT') {
-        newbiPreview.value = undefined
-        error.value = '无法核验 Newbi 账号。请检查 Agent Key 和插件中心的 API 接入点。'
-        return
-      }
-      if (cause.code === 'ACCOUNT_REGISTERED' || cause.code === 'CONFLICT') {
-        error.value = '此 Newbi 账号已登记。'
-        return
-      }
+    if (editor.value === 'account' && registrationConnector.value) {
+      const message = registrationConnector.value.state.registrationError(cause)
+      if (message) { error.value = message; return }
     }
-    if (code === 409 && target.value?.connector && target.value.status === 'PAUSED' && !target.value.revoke) {
-      error.value = '恢复未完成。请核对部署中的读取凭据、服务地址和 Agent ID，再重试。'
+    const targetConnector = connectorFor(target.value?.platform)
+    if (code === 409 && targetConnector && target.value?.status === 'PAUSED' && !target.value.revoke) {
+      error.value = targetConnector.plugin.resumeError
       return
     }
     error.value = ({
@@ -291,29 +277,6 @@ async function run(task: () => Promise<void>) {
   } finally {
     busy.value = false
   }
-}
-
-function checkNewbiConnection(account: Pick<Account, 'id'> & { version?: number }) {
-  void run(async () => {
-    checkingAccount.value = account.id
-    newbiChecks.delete(account.id)
-    try {
-      const result = await checkAccount(base.value, account.id)
-      if (active) {
-        newbiChecks.set(account.id, { ...result, version: account.version })
-        if (result.verified) await load()
-      }
-    } finally {
-      checkingAccount.value = undefined
-    }
-  })
-}
-
-function accountCheckLabel(account: Pick<Account, 'id'> & { version?: number }) {
-  const check = newbiChecks.get(account.id)
-  if (!check || check.version !== account.version) return ''
-  const result = check.verified ? '读取连接核验通过' : '读取连接核验失败，请核对 Agent ID、地址和读取凭据。'
-  return result + ' · ' + formatTime(check.checkedAt)
 }
 
 function open(kind: Editor, identity?: Identity, resource?: Control) {
@@ -326,8 +289,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
   target.value = resource
   const core = editingCore.value?.profile
   pending = undefined
-  newbiCredential.value = ''
-  newbiPreview.value = undefined
+  connectors.forEach(({ state }) => state.reset())
   error.value = ''
   notice.value = ''
   Object.assign(form, { slug: '', name: core?.name ?? identity?.profile?.displayName ?? '',
@@ -377,26 +339,6 @@ function command(path: string, data: object, version?: number) {
     headers['If-Match'] = '"' + version + '"'
   }
   return request<{ id: string }>(path, { method: version === undefined ? 'POST' : 'PUT', headers, body })
-}
-
-function clearNewbiPreview() {
-  newbiPreview.value = undefined
-  error.value = ''
-  pending = undefined
-}
-
-function testNewbiAccount() {
-  void run(async () => {
-    newbiPreview.value = undefined
-    await loadSchemas()
-    const input = schemas.value?.connector.newbiAccountTest.safeParse({ credential: newbiCredential.value.trim() })
-    if (!input?.success) {
-      error.value = '请输入有效的 Newbi Agent Key。'
-      return
-    }
-    const preview = await testAccount(base.value, input.data)
-    if (active) newbiPreview.value = preview
-  })
 }
 
 async function save() {
@@ -460,8 +402,8 @@ onMounted(() => { if (props.characterId) void run(load) })
       <NAlert v-if="error" class="editor-alert" type="error" role="alert">{{ error }}</NAlert>
       <p v-if="editor === 'control' && target">{{ target.name }} · {{ status(target.status) }}</p>
       <p v-if="target?.revoke">撤销后，原账号不能恢复，可为该身份关联其他账号。历史记录仍可查看。</p>
-      <p v-else-if="target?.connector">{{ target.status === 'ACTIVE' ? '暂停后，此账号无法领取新的读取任务或发送许可。'
-          : '恢复前会核对读取权限。发送仍需独立审批和执行许可。' }}</p>
+      <p v-else-if="connectorFor(target?.platform)">{{ target?.status === 'ACTIVE' ? connectorFor(target?.platform)?.plugin.pauseMessage
+          : connectorFor(target?.platform)?.plugin.resumeMessage }}</p>
       <template v-if="editor === 'linked-account' && linkedAccount">
         <p>{{ boundAccountLabel(linkedAccount) }} · {{ status(linkedAccount.status) }}</p>
         <div class="workspace-actions editor-actions">
@@ -527,14 +469,13 @@ onMounted(() => { if (props.characterId) void run(load) })
         <template v-if="editor === 'account'">
           <NFormItem label="平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
             <NSelect placeholder="选择平台" filterable v-model:value="form.platform" to="#character-workspace-editor" :input-props="fieldInput('platform')"
-              :disabled="busy" :options="platformChoices" @update:value="clearNewbiPreview" @blur="touched.add('platform')" />
+              :disabled="busy" :options="platformChoices" @update:value="resetAccountEditor" @blur="touched.add('platform')" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
             </template>
           </NFormItem>
-          <template v-if="form.platform === 'newbi'">
-            <AccountConnectionForm v-model:credential="newbiCredential" :preview="newbiPreview" :busy="busy"
-              @changed="clearNewbiPreview" @test="testNewbiAccount" />
+          <template v-if="registrationConnector">
+            <component :is="registrationConnector.plugin.Form" v-bind="registrationConnector.state.formProps()" :busy="busy" />
           </template>
           <template v-else-if="form.platform">
           <NFormItem label="实例标识" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
@@ -575,7 +516,7 @@ onMounted(() => { if (props.characterId) void run(load) })
         <div class="workspace-actions editor-actions">
           <NButton :type="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
             attr-type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)
-              || (editor === 'account' && (!form.platform || (form.platform === 'newbi' && !newbiPreview)))">
+              || (editor === 'account' && (!form.platform || (registrationConnector && !registrationConnector.state.ready())))">
             {{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : editor === 'account' ? '确定' : title }}
           </NButton>
           <NButton :disabled="busy" @click="closeEditor">取消</NButton>
@@ -671,14 +612,15 @@ onMounted(() => { if (props.characterId) void run(load) })
         <ul v-if="accountPool.length" class="workspace-list">
           <li v-for="item in accountPool" :key="item.id" class="workspace-row">
             <div class="account-summary">
-              <NewbiAccountLabel v-if="item.newbiProfile" :profile="item.newbiProfile" />
+              <component v-if="connectorFor(item.platform)?.plugin.labelProps(item)" :is="connectorFor(item.platform)?.plugin.Label"
+                v-bind="connectorFor(item.platform)?.plugin.labelProps(item)" />
               <span v-else>{{ accountLabel(item) }}</span>
-              <p v-if="accountCheckLabel(item)" class="workspace-muted account-check" role="status">{{ accountCheckLabel(item) }}</p>
+              <p v-if="connectorFor(item.platform)?.state.accountCheckLabel(item)" class="workspace-muted account-check" role="status">{{ connectorFor(item.platform)?.state.accountCheckLabel(item) }}</p>
             </div>
             <div class="workspace-actions">
               <NTag size="small" :bordered="false">未关联</NTag>
-              <NButton v-if="admin && item.newbiProfile && !item.newbiProfile.username && newbiRegistrationAvailable && item.instanceKey === newbiEndpoint"
-                size="small" secondary :disabled="busy" @click="checkNewbiConnection(item)">核验并更新资料</NButton>
+              <NButton v-if="admin && connectorFor(item.platform)?.state.canRefreshProfile(item)"
+                size="small" secondary :disabled="busy" @click="connectorFor(item.platform)?.state.check(item)">核验并更新资料</NButton>
               <NButton v-if="admin" size="small" type="error" secondary :disabled="busy" @click="confirmRemoveAccount(item)">移除账号</NButton>
             </div>
           </li>
@@ -688,7 +630,8 @@ onMounted(() => { if (props.characterId) void run(load) })
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
             <div class="account-summary">
               <div class="workspace-actions">
-              <NewbiAccountLabel v-if="account.newbiProfile" :profile="account.newbiProfile" />
+              <component v-if="connectorFor(account.platform)?.plugin.labelProps(account)" :is="connectorFor(account.platform)?.plugin.Label"
+                v-bind="connectorFor(account.platform)?.plugin.labelProps(account)" />
               <strong v-else>{{ boundAccountLabel(account) }}</strong>
               <NTag size="small">{{ status(account.status) }}</NTag>
               </div>
@@ -696,16 +639,15 @@ onMounted(() => { if (props.characterId) void run(load) })
                 identities.find(item => item.id === account.identityId)?.profile?.displayName
                   || identities.find(item => item.id === account.identityId)?.slug || '身份不可用'
               }}</span>
-              <p v-if="accountCheckLabel(account)" class="workspace-muted account-check" role="status">{{ accountCheckLabel(account) }}</p>
+              <p v-if="connectorFor(account.platform)?.state.accountCheckLabel(account)" class="workspace-muted account-check" role="status">{{ connectorFor(account.platform)?.state.accountCheckLabel(account) }}</p>
             </div>
             <div class="workspace-actions">
-              <NButton v-if="admin && account.platform === 'newbi' && account.status !== 'REVOKED' &&
-                newbiRegistrationAvailable && account.instanceKey === newbiEndpoint"
-                size="small" secondary :disabled="busy" :loading="checkingAccount === account.id"
-                @click="checkNewbiConnection(account)">核验连接</NButton>
-              <NButton v-if="inspectConnector && account.platform === 'newbi'" size="small"
+              <NButton v-if="admin && connectorFor(account.platform)?.state.canCheck(account)"
+                size="small" secondary :disabled="busy" :loading="connectorFor(account.platform)?.state.checkingAccount.value === account.id"
+                @click="connectorFor(account.platform)?.state.check(account)">核验连接</NButton>
+              <NButton v-if="inspectConnector && connectorFor(account.platform)" size="small"
                 @click="emit('account', account.id)">查看读取状态</NButton>
-              <NButton v-if="admin && ['mock-a', 'mock-b', 'newbi'].includes(account.platform) && ['ACTIVE', 'PAUSED'].includes(account.status)"
+              <NButton v-if="admin && (connectorFor(account.platform) || isSimulationPlatform(account.platform)) && ['ACTIVE', 'PAUSED'].includes(account.status)"
                 size="small" :type="account.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="accountControl(account)">
                 {{ account.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
               </NButton>
@@ -717,11 +659,11 @@ onMounted(() => { if (props.characterId) void run(load) })
           </li>
         </ul>
       </section>
-      <ConnectorAccountStatus v-if="connector && inspectConnector" :key="connector.id + '/' + connector.version"
+      <component v-if="connector && connectorDetails && inspectConnector" :is="connectorDetails.plugin.Details" :key="connector.id + '/' + connector.version"
         :character-id="characterId" :account-id="connector.id" :account-status="connector.status" :can-review="!!admin"
         :account-label="boundAccountLabel(connector)" :identity-label="connectorIdentity ? identityName(connectorIdentity) : '身份不可用'"
         :can-propose="canProposeConnectorReply"
-        @expired="emit('expired')" @proposals="(accountId, proposalId) => emit('proposals', accountId, proposalId)" />
+        @expired="emit('expired')" @proposals="(accountId: string, proposalId?: string) => emit('proposals', connector!.platform, accountId, proposalId)" />
       <NAlert v-else-if="accountDetail" type="warning">找不到当前角色的连接器账号。</NAlert>
     </template>
   </div>

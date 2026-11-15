@@ -293,6 +293,9 @@ importers:
 
   plugins/hosted-models:
     dependencies:
+      '@hono/zod-openapi':
+        specifier: ^1.6.3
+        version: 1.6.3(hono@4.13.16)(zod@4.6.7)
       '@rica/console-shared':
         specifier: workspace:*
         version: link:../../packages/console-shared

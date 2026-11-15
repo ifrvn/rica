@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis'
 import { newbiCatalog } from '@rica/plugin-newbi/catalog'
-import { pluginDiagnostic, pluginReport, pluginServices, type PluginDiagnostic, type PluginMetadata,
+import { pluginDiagnostic, pluginReport, type PluginDiagnostic, type PluginMetadata,
   type PluginReport, type PluginService } from '../packages/contracts/plugin-status.js'
 import { PluginHostError } from '@rica/plugin-host'
 import { cognitionCatalog, simulationPlatformCatalog } from './runtime-plugins.js'
@@ -11,6 +11,8 @@ const catalog: Record<PluginService, PluginMetadata[]> = {
   'simulation-executor': simulationPlatformCatalog,
   ...newbiCatalog,
 }
+const pluginServices = Object.keys(catalog)
+const commandServices = new Set(Object.keys(newbiCatalog))
 const heartbeatSeconds = 20
 const recentCommandSeconds = 3600
 type Status = Omit<PluginReport, 'observedAt'>
@@ -64,15 +66,15 @@ export async function reportPluginResult(
   try {
     await redis.connect()
     const status: Status = diagnostic ? { status: 'FAILED', plugins: [], diagnostic }
-      : { status: 'COMPLETED', plugins: catalog[service] }
-    await publish(redis, service, status, service.startsWith('connector-') ? recentCommandSeconds : heartbeatSeconds)
+      : { status: 'COMPLETED', plugins: catalog[service] ?? [] }
+    await publish(redis, service, status, commandServices.has(service) ? recentCommandSeconds : heartbeatSeconds)
   } catch { /* Diagnostic failures never change the command result. */ }
   finally { redis.disconnect() }
 }
 
-export async function readPluginStatus(redis?: Pick<Redis, 'mget'>, newbiRegistrationAvailable = false) {
+export async function readPluginStatus(redis?: Pick<Redis, 'mget'>) {
   const snapshots = await redis?.mget(...pluginServices.map(key)).catch(() => undefined)
-  return { newbiRegistrationAvailable, services: pluginServices.map((service, index) => {
+  return { services: pluginServices.map((service, index) => {
     const expected = catalog[service]
     let report: PluginReport | null = null
     try {

@@ -7,5 +7,6 @@
     "plugins/**/*.ts",
     "scripts/**/*.ts",
     "prisma.config.ts"
-  ]
+  ],
+  "exclude": ["plugins/*/console/**"]
 }

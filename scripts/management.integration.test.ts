@@ -22,6 +22,8 @@ import { actorId, loadManagementConfig, localIssuer } from '../apps/api/admin-au
 import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
+import { createNewbiManagement, type NewbiManagementOptions } from '@rica/plugin-newbi/management'
+import { connectNewbiSettings } from '@rica/plugin-newbi/settings'
 import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
@@ -46,18 +48,18 @@ const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'thread-auditor'])
 let connectorEndpoint: string | undefined
 const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>,
-  pollConnector?: Parameters<typeof createManagementApp>[0]['pollConnector'],
-  sendConnector?: Parameters<typeof createManagementApp>[0]['sendConnector'],
-  readConnectorThread?: Parameters<typeof createManagementApp>[0]['readConnectorThread']) =>
+  pollConnector?: NewbiManagementOptions['pollConnector'],
+  sendConnector?: NewbiManagementOptions['sendConnector'],
+  readConnectorThread?: NewbiManagementOptions['readConnectorThread']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
-    identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
-      ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
     deploymentPlugins,
-    pollConnector,
-    sendConnector,
-    readConnectorThread,
+    plugins: [createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
+      identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
+      ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
+      pollConnector, sendConnector, readConnectorThread,
+    })],
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
       return subject && subjects.has(subject) ? {
@@ -2759,11 +2761,11 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   const executorDb = scopedNewbiDatabase(runtime, 'executor')
   const readerDb = scopedNewbiDatabase(runtime, 'reader')
   const sendApp = testApp(settings, undefined, async (id, retry) => {
-    const host = await openSavedNewbiExecutor(executorDb, settings, id)
+    const host = await openSavedNewbiExecutor(executorDb, connectNewbiSettings(settings.readConfiguration), id)
     if (!host) return { status: 'UNAVAILABLE' }
     try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
     finally { await host.stop() }
-  }, (target) => readSavedNewbiThread(readerDb, settings, target))
+  }, (target) => readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target))
   t.after(() => runtime.$disconnect())
   try {
     const identityId = await reflectionIdentity()
@@ -3179,7 +3181,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal((await request('GET', character + inbox)).body.readError, 'CREDENTIAL_INVALID')
     assert.deepEqual(cursors, [])
     const target = testApp(settings, async (id) => {
-      const host = await openSavedNewbiReader(db, settings, id)
+      const host = await openSavedNewbiReader(db, connectNewbiSettings(settings.readConfiguration), id)
       if (!host) return
       try { return await pollNewbiEvents(db, host.plugin.implementation, id) }
       finally { await host.stop() }

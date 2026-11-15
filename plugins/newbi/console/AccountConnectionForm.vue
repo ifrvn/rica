@@ -3,14 +3,13 @@ import { NButton, NFormItem, NInput, NTag } from 'naive-ui'
 import type { AccountPreview } from './accounts.js'
 const credential = defineModel<string>('credential', { required: true })
 defineProps<{ busy: boolean; preview?: AccountPreview }>()
-const emit = defineEmits<{ changed: []; test: [] }>()
+const emit = defineEmits<{ test: [] }>()
 </script>
 
 <template>
   <NFormItem label="Agent Key" :label-props="{ for: 'workspace-newbi-key' }">
     <NInput v-model:value="credential" type="password" :disabled="busy"
-      :input-props="{ id: 'workspace-newbi-key', autocomplete: 'new-password' }"
-      @update:value="emit('changed')" />
+      :input-props="{ id: 'workspace-newbi-key', autocomplete: 'new-password' }" />
   </NFormItem>
   <NButton attr-type="button" secondary :disabled="busy || !credential.trim()" @click="emit('test')">测试连接</NButton>
   <div v-if="preview" class="newbi-preview" role="status">

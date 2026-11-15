@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import type { ModelSettingsInput } from '@rica/contracts/model-settings'
-import type { ModelProvider } from '@rica/contracts/model-provider'
+import type { ModelSettingsInput } from './contracts.js'
+import { ModelProviderError, type ModelProvider } from '@rica/contracts/model-provider'
 import type { PluginDefinition } from '@rica/plugin-host'
 import { simulatedModel } from '@rica/plugin-simulated-model'
 
@@ -30,11 +30,7 @@ export function hostedModelConfig({ provider, model, apiKey, baseUrl }: ModelSet
   }
 }
 
-export class HostedModelError extends Error {
-  constructor(readonly code: 'HTTP_ERROR' | 'REQUEST_FAILED' | 'INVALID_OUTPUT', readonly status?: number) {
-    super(code)
-  }
-}
+export class HostedModelError extends ModelProviderError {}
 
 const chatResult = z.object({
   choices: z.array(z.object({

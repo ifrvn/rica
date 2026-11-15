@@ -1,3 +1,4 @@
+import { simulationPlatformId } from './simulation-platform.js'
 import { z } from '@hono/zod-openapi'
 
 export const resourceId = z.uuid().transform((value) => value.toLowerCase())
@@ -63,7 +64,7 @@ export const coreInput = optionalReasonInput.extend({ coreProfile })
 export const identityInput = z.strictObject({ slug, roleProfile: identityProfile })
 export const identityUpdate = optionalReasonInput.extend({ roleProfile: identityProfile })
 export const simulationAccountRegistration = z.strictObject({
-  platform: z.enum(['mock-a', 'mock-b']),
+  platform: simulationPlatformId,
   instanceKey: shortText,
   remoteAccountId: text,
 })

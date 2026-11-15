@@ -3,13 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NTag } from 'naive-ui'
 import type { PluginService } from '../../../../../packages/contracts/plugin-status.js'
 import type { Readiness } from '../../../../../packages/contracts/health.js'
-import { deploymentPluginIds } from '../../../../deployment-plugin-contracts.js'
-import { newbiHealth, isNewbiReadNode, type HealthNode } from '@rica/plugin-newbi/console/health'
+import { platformHealth, hostedModelHealth, hasAccountHealthLink } from '../../app/plugin-integrations.js'
 import { formatTime } from '@rica/console-shared/console-data'
-import { modelCheckLabels } from '@rica/plugin-hosted-models/console/labels'
-import { pluginNames, usePluginStatus } from '../plugins/plugin-status.js'
+import { usePluginStatus } from '../plugins/plugin-status.js'
 
-type Node = HealthNode
+import type { HealthNode as Node } from '@rica/console-shared/health'
 const props = defineProps<{ characterId: string; readiness?: Readiness; checkedAt?: string; checking: boolean; initialNode?: string }>()
 const emit = defineEmits<{ expired: []; plugins: []; accounts: []; runs: []; check: [] }>()
 const { status, busy, error, refresh: refreshPlugins } = usePluginStatus(props.characterId, () => emit('expired'))
@@ -45,7 +43,6 @@ function dependency(id: keyof Readiness['checks'], label: string, description: s
 
 const layers = computed(() => {
   const services = status.value?.services
-  const deployment = status.value?.deployment
   const apiReport = services?.find(({ service }) => service === 'api')?.report
   const adapterCount = apiReport?.status === 'READY' ? apiReport.plugins.filter(({ kind }) => kind === 'platform').length : undefined
   const api: Node = {
@@ -57,15 +54,6 @@ const layers = computed(() => {
     state: adapterCount === undefined ? '载入状态未知' : '已载入 ' + adapterCount + ' 个',
     tone: adapterCount ? 'success' : 'default' }
   const worker = processNode('worker', '生成草稿', '认知 Worker 消费模拟任务并生成草稿。')
-  const loadedModel = services?.find(({ service }) => service === 'worker')?.report?.plugins.find(({ kind }) => kind === 'model')?.id
-  const enabledModels = deploymentPluginIds.filter((id) => id !== 'newbi' && deployment?.plugins[id] === 'ENABLED')
-  const models: Node[] = enabledModels
-    .map((id) => {
-      const configured = deployment?.configuredModel === id
-      return { id, label: pluginNames[id] + ' 写作', description: '由认知 Worker 在公开模拟草稿任务中使用。',
-        state: !configured ? '待配置' : loadedModel === id ? '已载入' : '已配置 · 等待载入',
-        tone: configured && loadedModel === id ? 'success' : 'default' }
-    })
   const approval: Node = { id: 'approval', label: '人工审批与发送许可', description: '管理 API 校验审批权限、回复目标和发送许可。',
     state: '由管理 API 提供', tone: 'default' }
   const dependencies = [
@@ -74,25 +62,13 @@ const layers = computed(() => {
   ]
   const external = (id: string, label: string, description: string, configured: boolean): Node =>
     ({ id, label, description, state: configured ? '暂无独立探测' : '待配置', tone: 'default' })
-  const connector = newbiHealth(status.value, processNode, external)
-  dependencies.push(...connector.dependencies)
-  for (const id of enabledModels) {
-    const configured = deployment?.configuredModel === id
-    const check = status.value?.modelCheck
-    const node = external('model-api-' + id, pluginNames[id] + ' API',
-      configured ? '在插件中心可用固定消息测试模型连接。' : '在插件中心保存模型 ID 和 API 密钥后即可测试。', configured)
-    if (configured && check?.provider === id) {
-      node.state = check.status === 'OK' ? '测试通过' : '测试失败'
-      node.tone = check.status === 'OK' ? 'success' : 'error'
-      node.at = check.checkedAt
-      node.description = modelCheckLabels[check.status]
-    }
-    dependencies.push(node)
-  }
+  const connector = platformHealth(status.value, processNode, external)
+  const modelHealth = hostedModelHealth(status.value, external)
+  dependencies.push(...connector.dependencies, ...modelHealth.dependencies)
   return [
     { label: '控制面', nodes: [api] },
     { label: '接收事件', nodes: [adapters, ...connector.readers] },
-    { label: '生成草稿', edge: '模拟事件入队', nodes: [worker, ...models] },
+    { label: '生成草稿', edge: '模拟事件入队', nodes: [worker, ...modelHealth.models] },
     { label: '审核动作', edge: '提案送审', nodes: [approval] },
     { label: '执行动作', edge: '按运行模式及许可分流', nodes: [
       processNode('simulation-executor', '写入模拟回执', '模拟执行器为已批准的提案申请许可，并把结果写入模拟账本。'),
@@ -145,7 +121,7 @@ const detail = computed(() => {
         <p v-else-if="detail.state === '无近期报告'">请确认模拟执行器已启动并连接到本部署的 Redis，再刷新状态。</p>
         <p v-else-if="detail.state === '已就绪'">仍在等待的提案可能受角色当地 22:00 至次日 08:00 的静默时段、账号额度或其他尚未结束的执行影响。</p>
       </template>
-      <NButton v-if="isNewbiReadNode(detail.id)" size="small" secondary
+      <NButton v-if="hasAccountHealthLink(detail.id)" size="small" secondary
         @click="emit('accounts')">查看平台账号池</NButton>
       <NButton v-if="detail.id.startsWith('model-api-')" size="small" secondary
         @click="detail.state === '待配置' ? emit('plugins') : emit('runs')">

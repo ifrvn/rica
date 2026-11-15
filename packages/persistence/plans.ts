@@ -1,3 +1,4 @@
+import { isSimulationPlatform } from '../contracts/simulation-platform.js'
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import type { planInput, planView } from '../contracts/plans.js'
@@ -64,7 +65,7 @@ export async function savePlan(tx: Tx, scope: Scope, input: Plan, edit?: { id: s
     }
     const platform = accountsById.get(accountId)!.platform
     let scheduleId: string | undefined
-    if (platform === 'mock-a' || platform === 'mock-b') {
+    if (isSimulationPlatform(platform)) {
       const [created] = await tx.$queryRaw<{ id: string | null }[]>`
         SELECT public.rica_create_plan_conversation(${characterId}::uuid, ${identityId}::uuid, ${accountId}::uuid) AS id
       `

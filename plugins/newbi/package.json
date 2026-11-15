@@ -24,7 +24,11 @@
     "./executor-identity": "./executor-identity.ts",
     "./persistence/events": "./persistence/events.ts",
     "./persistence/execution": "./persistence/execution.ts",
-    "./persistence/retention": "./persistence/retention.ts"
+    "./persistence/retention": "./persistence/retention.ts",
+    "./settings": "./settings.ts",
+    "./console/account-integration": "./console/account-integration.ts",
+    "./console/card": "./console/card.ts",
+    "./console/review": "./console/review.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",

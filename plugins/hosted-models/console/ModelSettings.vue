@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NSpin } from 'naive-ui'
-import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '@rica/contracts/model-settings'
+import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '../contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
 import { modelCheckLabels } from './labels.js'
@@ -74,13 +74,14 @@ function testModel() {
   }).finally(() => { checking.value = false })
 }
 
-onMounted(load)
+const heading = ref<HTMLElement>()
+onMounted(() => { heading.value?.focus(); void load() })
 </script>
 
 <template>
   <section class="model-settings" aria-labelledby="model-settings-heading">
     <div class="console-section-heading">
-      <h3 id="model-settings-heading" tabindex="-1">{{ name }} · AI API 设置</h3>
+      <h3 id="model-settings-heading" ref="heading" tabindex="-1">{{ name }} · AI API 设置</h3>
       <NButton size="small" quaternary :disabled="busy" @click="emit('close')">收起设置</NButton>
     </div>
     <NSpin v-if="busy && !current" aria-label="正在读取模型设置" />

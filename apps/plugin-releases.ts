@@ -1,5 +1,5 @@
 import { open } from 'node:fs/promises'
-import { deploymentPluginIds } from './deployment-plugin-contracts.js'
+import { deploymentPlugins } from './deployment-plugin-contracts.js'
 import { pluginReleaseManifest, type PluginMetadata, type PluginReleaseView, type PluginService } from '../packages/contracts/plugin-status.js'
 
 type ServiceCatalog = { service: PluginService; catalog: PluginMetadata[] }
@@ -28,10 +28,8 @@ export async function readPluginRelease(path: string | undefined, services: Serv
   if (!path) return { status: 'UNCONFIGURED' }
   try {
     const manifest = await readManifest(path)
-    const upgrades = deploymentPluginIds.flatMap((id) => {
-      const deployed = services.flatMap(({ service, catalog }) => catalog.filter((component) => id === 'newbi'
-        ? service === 'connector-reader' || service === 'connector-executor'
-        : service === 'worker' && component.kind === 'model' && component.id === id)
+    const upgrades = deploymentPlugins.flatMap(({ id, ownsComponent }) => {
+      const deployed = services.flatMap(({ service, catalog }) => catalog.filter((component) => ownsComponent(service, component))
         .map((current) => ({ service, current })))
       const components = deployed.map(({ service, current }) => {
         const target = manifest.components.find((item) => item.id === current.id && item.kind === current.kind) ?? null

@@ -6,10 +6,9 @@ import { scanIdentityReflections } from '../../packages/persistence/identity-ref
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
-import { sweepRuntimeRetention } from './runtime-retention.js'
+import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
-import type { ModelProvider } from '@rica/contracts/model-provider'
-import { HostedModelError } from '@rica/plugin-hosted-models'
+import { ModelProviderError, type ModelProvider } from '@rica/contracts/model-provider'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
 import type { Plugin } from '@rica/plugin-host'
 
@@ -27,6 +26,7 @@ export class WorkerDependencyUnavailable extends Error {
 export async function startOutboxWorker(
   databaseUrl: string, redisUrl: string, getModel: () => Plugin<ModelProvider> | Promise<Plugin<ModelProvider>>,
   resolveAdapter: ResolveSimulationAdapter,
+  sweepRetention: (db: ReturnType<typeof createDatabase>) => Promise<number> = sweepSimulationRetention,
 ) {
   const db = createDatabase(databaseUrl)
   const producer = new Redis(redisUrl, {
@@ -75,7 +75,7 @@ export async function startOutboxWorker(
         `
       }
     } catch (error) {
-      if (error instanceof HostedModelError) console.warn(JSON.stringify({
+      if (error instanceof ModelProviderError) console.warn(JSON.stringify({
         service: 'worker', event: 'model_request_failed', modelId, code: error.code, status: error.status,
       }))
       try {
@@ -179,7 +179,7 @@ export async function startOutboxWorker(
     while (!stop.signal.aborted) {
       let changed = 0
       try {
-        changed = await sweepRuntimeRetention(db)
+        changed = await sweepRetention(db)
       } catch {
         logError()
       }

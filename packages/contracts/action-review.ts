@@ -1,9 +1,10 @@
+import { simulationPlatformId } from './simulation-platform.js'
 import { z } from '@hono/zod-openapi'
 import { reasonInput } from './management.js'
 import { simulationFollowUp } from './simulation-follow-up.js'
 
 export const reviewTarget = z.object({
-  platform: z.enum(['mock-a', 'mock-b']),
+  platform: simulationPlatformId,
   instance: z.string(),
   accountId: z.uuid(),
   account: z.string(),

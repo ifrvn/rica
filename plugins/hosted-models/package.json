@@ -7,9 +7,16 @@
     ".": "./index.ts",
     "./console/ModelSettings.vue": "./console/ModelSettings.vue",
     "./console/labels": "./console/labels.ts",
-    "./check": "./check.ts"
+    "./check": "./check.ts",
+    "./catalog": "./catalog.ts",
+    "./console/cards": "./console/cards.ts",
+    "./contracts": "./contracts.ts",
+    "./settings": "./settings.ts",
+    "./management": "./management.ts",
+    "./console/health": "./console/health.ts"
   },
   "dependencies": {
+    "@hono/zod-openapi": "^1.6.3",
     "@rica/console-shared": "workspace:*",
     "@rica/contracts": "workspace:*",
     "@rica/plugin-host": "workspace:*",

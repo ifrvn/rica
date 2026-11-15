@@ -4,13 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
+import { createModelSettingsStore, enabledModelSettings } from '@rica/plugin-hosted-models/settings'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
+import { connectNewbiSettings } from '@rica/plugin-newbi/settings'
 import { createNewbiReplyExecutor } from '@rica/plugin-newbi/client'
-import { startConfiguredModel } from '../runtime-plugins.js'
+import { startConfiguredModel, startModelPlugin } from '../runtime-plugins.js'
 import { readPluginStatus } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
 import { localIssuer } from './admin-auth.js'
+import { createHostedModelManagement } from '@rica/plugin-hosted-models/management'
+import { denyPermission } from '../../packages/persistence/management.js'
 import { createManagementApp } from './management.js'
 
 const origin = 'http://localhost:5173'
@@ -23,11 +26,16 @@ async function fixture(t: TestContext, managePlugins = false) {
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = createModelSettingsStore(directory)
   const plugins = createDeploymentPluginStore(directory)
+  const activeModel = async () => (await store.status()).provider
   const app = createManagementApp({
     db: { $transaction: (work: (tx: object) => unknown) => work({
       managementMembership: { findMany: async () => [{ role: 'ADMIN' }] },
     }) } as unknown as PrismaClient,
-    origin, cookie: 'rica_session', resolveAdapter: () => undefined, modelSettings: store,
+    origin, cookie: 'rica_session', resolveAdapter: () => undefined, activeModel,
+    plugins: [createHostedModelManagement({ modelSettings: store, startModelPlugin,
+      authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
+      isEnabled: (id) => managePlugins ? plugins.isEnabled(id, activeModel) : Promise.resolve(true),
+    })],
     deploymentPlugins: managePlugins ? plugins : undefined,
     authenticate: async (request) => {
       const subject = request.headers.get('X-Test-User')
@@ -96,7 +104,7 @@ test('a running Worker model loader uses saved settings on the next draft', asyn
 
 test('only the deployment operator can install and enable models; stopping a model returns the worker to local drafting', async (t) => {
   const { pluginChange, plugins, put, store } = await fixture(t, true)
-  const model = await startConfiguredModel({ read: () => plugins.readModel(store) })
+  const model = await startConfiguredModel(enabledModelSettings(store, (provider) => plugins.isEnabled(provider, async () => provider)))
   t.after(model.stop)
   const change = (action: string, version: number) => pluginChange({ action, id: 'openai' }, version)
   assert.equal((await pluginChange({ action: 'INSTALL', id: 'openai' }, 0, 'role-admin')).status, 403)
@@ -159,6 +167,7 @@ test('model checks use the saved configuration and disclose only a redacted repl
 
 test('Newbi settings accept only the endpoint and disabling fences existing clients', async (t) => {
   const { pluginChange, plugins } = await fixture(t, true)
+  const newbi = connectNewbiSettings(plugins.readConfiguration)
   const credential = 'nbi_agent_' + 'x'.repeat(43)
   const endpoint = 'http://127.0.0.1:5000/agent-api/v1'
   const config = { action: 'CONFIGURE_NEWBI', endpoint }
@@ -170,13 +179,13 @@ test('Newbi settings accept only the endpoint and disabling fences existing clie
   const view = await saved.json()
   assert.deepEqual(view.newbi, { endpoint })
   assert.equal(JSON.stringify(view).includes(credential), false)
-  assert.deepEqual(await plugins.readNewbi(), { endpoint })
-  const opened = await plugins.openNewbi(credential)
+  assert.deepEqual(await newbi.readNewbi(), { endpoint })
+  const opened = await newbi.openNewbi(credential)
   assert.ok(opened)
   const oldExecutor = createNewbiReplyExecutor(endpoint, credential, undefined, opened.beforeRequest)
   assert.equal((await pluginChange({ ...config, credential }, 3)).status, 422)
   assert.equal((await pluginChange({ action: 'DISABLE', id: 'newbi' }, 3)).status, 200)
-  assert.equal(await plugins.readNewbi(), undefined)
+  assert.equal(await newbi.readNewbi(), undefined)
   await assert.rejects(oldExecutor.verify(), /Newbi configuration changed/)
 })
 

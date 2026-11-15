@@ -1,3 +1,4 @@
+import { simulationPlatformId } from '../contracts/simulation-platform.js'
 import type { z } from '@hono/zod-openapi'
 import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '../contracts/simulation-observability.js'
 import type { ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
@@ -8,7 +9,7 @@ export async function startConsoleSimulation(
   tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof consoleSimulationInput>, resolveAdapter: ResolveSimulationAdapter,
 ) {
   const account = await tx.platformAccount.findFirst({
-    where: { characterId: scope.characterId, id: input.accountId, platform: { in: ['mock-a', 'mock-b'] } },
+    where: { characterId: scope.characterId, id: input.accountId, platform: { in: simulationPlatformId.options } },
     select: { platform: true },
   })
   if (!account) throw new ManagementError(404, 'NOT_FOUND', 'Simulation account not found')

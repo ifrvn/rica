@@ -1,3 +1,4 @@
+import { simulationPlatformId } from '@rica/contracts/simulation-platform'
 import { z } from '@hono/zod-openapi'
 import { accountRegistrationView, accountView, characterWorkspaceView, listQuery, resourceId } from '@rica/contracts/management'
 
@@ -84,10 +85,10 @@ export const newbiInboxView = z.object({
   })).nullable(),
 })
 
-const newbiAccountProfile = z.object({ agentId: resourceId, username: z.string().nullable(), avatarUrl: z.string().nullable() })
+export const newbiAccountProfile = z.object({ agentId: resourceId, username: z.string().nullable(), avatarUrl: z.string().nullable() })
 export const newbiAccountView = accountView.extend({ newbiProfile: newbiAccountProfile.optional() })
 export const newbiAccountRegistrationView = accountRegistrationView.extend({
-  platform: z.enum(['mock-a', 'mock-b', 'newbi']),
+  platform: z.enum([...simulationPlatformId.options, 'newbi']),
   newbiProfile: newbiAccountProfile.optional(),
 })
 export const newbiCharacterWorkspaceView = characterWorkspaceView.extend({ newbiInstalled: z.boolean() })
@@ -101,3 +102,6 @@ export const newbiConnectionsView = z.object({
 })
 
 export const newbiDeploymentChange = z.strictObject({ action: z.literal('CONFIGURE_NEWBI'), endpoint: newbiEndpoint })
+
+export const newbiStoredConfig = z.object({ endpoint: newbiEndpoint })
+export const newbiConfigView = z.object({ endpoint: z.string().nullable() })

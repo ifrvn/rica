@@ -16,41 +16,27 @@ import { decideReviewAction, listReviewActions } from '../../packages/persistenc
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { consolePluginStatusView } from '../plugin-status-view.js'
-import { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@rica/plugin-newbi/contracts'
+import { pluginStatusView } from '../../packages/contracts/plugin-status.js'
 import type { PluginReleaseView } from '../../packages/contracts/plugin-status.js'
 import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
-import { modelCheckInput, modelCheckResult, modelSettingsInput, modelSettingsView, type ModelCheckStatus } from '../../packages/contracts/model-settings.js'
-import { checkModel } from '@rica/plugin-hosted-models/check'
-import { startModelPlugin } from '../runtime-plugins.js'
-import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
-import { deploymentPluginChange, deploymentPluginsView } from '../deployment-plugin-contracts.js'
+import { deploymentChangeOwner, deploymentPluginChange, deploymentPluginsView } from '../deployment-plugin-contracts.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../deployment-plugins.js'
 
-import { body, character, characterParams, error, errors, failure, security, success, type ManagementEnvironment } from '../../packages/runtime/management-http.js'
-import { createNewbiManagement, type NewbiManagementOptions } from '@rica/plugin-newbi/management'
+import { body, character, characterParams, error, errors, extensionFields, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin } from '../../packages/runtime/management-http.js'
 
 type Options = {
   db: PrismaClient; authenticate: Authenticate; origin: string; cookie: string; resolveAdapter: ResolveSimulationAdapter
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
   pluginRelease?: (services: Awaited<ReturnType<typeof readPluginStatus>>['services']) => Promise<PluginReleaseView>
-  modelSettings?: ReturnType<typeof createModelSettingsStore>
+  activeModel?: () => Promise<string>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
-} & NewbiManagementOptions
+  plugins?: readonly ManagementPlugin[]
+}
 
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
 const grantParams = characterParams.extend({ grantId: schema.resourceId })
 const actionParams = characterParams.extend({ actionId: schema.resourceId })
-
-function version(headers: z.infer<typeof schema.versionHeader>) {
-  const header = headers['if-match']
-  const value = Number(/^"(0|[1-9][0-9]{0,9})"$/.exec(header)?.[1])
-  if (!Number.isInteger(value) || value >= 2_147_483_647) {
-    throw new management.ManagementError(422, 'INVALID_VERSION', 'Expected a quoted resource version')
-  }
-  return value
-}
 
 function runVersion(header: string) {
   const value = Number(/^"run-v([1-9][0-9]{0,9})"$/.exec(header)?.[1])
@@ -61,7 +47,7 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  modelSettings, deploymentPlugins, identifyConnector, pollConnector, sendConnector, readConnectorThread }: Options) {
+  activeModel = async () => 'simulated', deploymentPlugins, plugins = [] }: Options) {
   const app = new OpenAPIHono<ManagementEnvironment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -111,16 +97,27 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     return c.json(error(requestId, 'INTERNAL_ERROR', 'Request could not be completed'), 500)
   })
 
-  function deploymentModelSettings(actor: Principal) {
-    if (actor.issuer !== localIssuer || !actor.canCreate) management.denyPermission()
-    if (!modelSettings) throw new management.ManagementError(404, 'MODEL_SETTINGS_UNAVAILABLE', 'Model settings are unavailable')
-    return modelSettings
-  }
-
-  const modelProvider = async () => (await modelSettings?.status())?.provider ?? 'simulated'
-  let checkingModel = false
-  let latestModelCheck: { version: number; result: ModelCheckStatus } | undefined
-  const newbi = createNewbiManagement(db, deploymentPlugins, { identifyConnector, pollConnector, sendConnector, readConnectorThread })
+  const accountHooks = plugins.flatMap(({ account, accountFields }) => {
+    if (!account) return []
+    const fields = z.object(accountFields ?? {})
+    return [{ ...account, async profiles(...args: Parameters<typeof account.profiles>) {
+      const project = await account.profiles(...args)
+      return (row: Parameters<typeof project>[0]) => fields.parse(project(row))
+    } }]
+  })
+  if (new Set(plugins.map(({ id }) => id)).size !== plugins.length) throw new Error('Duplicate management plugin')
+  const platformIds = [...schema.simulationAccountRegistration.shape.platform.options, ...accountHooks.map(({ platform }) => platform)]
+  if (new Set(platformIds).size !== platformIds.length) throw new Error('Duplicate account platform')
+  const registration = z.union([schema.simulationAccountRegistration, ...accountHooks.map(({ registration }) => registration)])
+  const accountFields = extensionFields({ ...schema.accountView.shape, ...schema.accountRegistrationView.shape },
+    plugins.map((plugin) => plugin.accountFields))
+  const workspaceFields = extensionFields(schema.characterWorkspaceView.shape, plugins.map((plugin) => plugin.workspace?.fields))
+  const baseStatusView = pluginStatusView.extend({ deployment: deploymentPluginsView.optional() })
+  const statusFields = extensionFields(baseStatusView.shape, plugins.map((plugin) => plugin.status?.fields))
+  const workspaceView = schema.characterWorkspaceView.extend(workspaceFields)
+  const accountView = schema.accountView.extend(accountFields)
+  const accountPoolView = schema.pageView(schema.accountRegistrationView.extend(accountFields))
+  const statusView = baseStatusView.extend(statusFields)
 
   app.openapi(createRoute({
     method: 'put', path: '/deployment-plugins', security,
@@ -132,75 +129,14 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     if (!deploymentPlugins) throw new management.ManagementError(404, 'PLUGINS_UNAVAILABLE', 'Plugin settings are unavailable')
     const change = c.req.valid('json')
     try {
-      const saved = await deploymentPlugins.save(change, version(c.req.valid('header')), modelProvider)
+      const saved = await deploymentPlugins.save(change, version(c.req.valid('header')), activeModel)
       console.info(JSON.stringify({ service: 'api', event: 'deployment_plugin_changed', actorId: actor.id,
-        requestId: c.get('requestId'), action: change.action, plugin: 'id' in change ? change.id : 'newbi', version: saved.version }))
+        requestId: c.get('requestId'), action: change.action, plugin: deploymentChangeOwner(change), version: saved.version }))
       return c.json(saved, 200)
     } catch (cause) {
       if (!(cause instanceof DeploymentPluginError)) throw cause
       const status = cause.code === 'VERSION_CONFLICT' ? 412 : 409
       throw new management.ManagementError(status, cause.code, 'Check plugin state, version and credentials')
-    }
-  })
-
-  app.openapi(createRoute({
-    method: 'get', path: '/model-settings', security,
-    responses: { ...errors, 200: success(modelSettingsView) },
-  }), async (c) => {
-    const store = deploymentModelSettings(c.get('actor'))
-    return c.json(await store.status(), 200)
-  })
-
-  app.openapi(createRoute({
-    method: 'put', path: '/model-settings', security,
-    request: { headers: schema.versionHeader, body: body(modelSettingsInput) },
-    responses: { ...errors, 200: success(modelSettingsView) },
-  }), async (c) => {
-    const actor = c.get('actor')
-    const store = deploymentModelSettings(actor)
-    const input = c.req.valid('json')
-    if (deploymentPlugins && input.provider !== 'simulated'
-      && (await deploymentPlugins.status(await modelProvider())).plugins[input.provider] !== 'ENABLED') {
-      throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable the model plugin first')
-    }
-    try {
-      const saved = await store.save(input, version(c.req.valid('header')))
-      console.info(JSON.stringify({ service: 'api', event: 'model_settings_updated', actorId: actor.id,
-        requestId: c.get('requestId'), version: saved.version, provider: saved.provider }))
-      return c.json(saved, 200)
-    } catch (cause) {
-      if (cause instanceof ModelSettingsError) {
-        if (cause.code === 'VERSION_CONFLICT') throw new management.ManagementError(412, cause.code, 'Model settings have changed')
-        throw new management.ManagementError(422, cause.code, 'An API key is required for this provider and endpoint')
-      }
-      throw cause
-    }
-  })
-
-  app.openapi(createRoute({
-    method: 'post', path: '/model-settings/check', security,
-    request: { body: body(modelCheckInput) },
-    responses: { ...errors, 200: success(modelCheckResult) },
-  }), async (c) => {
-    const store = deploymentModelSettings(c.get('actor'))
-    const expected = c.req.valid('json').version
-    if (checkingModel) throw new management.ManagementError(409, 'MODEL_CHECK_BUSY', 'A model check is in progress')
-    checkingModel = true
-    try {
-      const saved = await store.read()
-      if (saved.version !== expected) throw new management.ManagementError(412, 'VERSION_CONFLICT', 'Model settings have changed')
-      const { configuration } = saved
-      const { provider } = configuration
-      if (provider === 'simulated'
-        || (deploymentPlugins && (await deploymentPlugins.status(provider)).plugins[provider] !== 'ENABLED')) {
-        throw new management.ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable and configure the model plugin first')
-      }
-      const result = await checkModel({ ...configuration, provider }, startModelPlugin)
-      const { reply: _reply, ...status } = result
-      latestModelCheck = { version: expected, result: status }
-      return c.json(result, 200)
-    } finally {
-      checkingModel = false
     }
   })
 
@@ -228,14 +164,14 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: character, security, request: { params: characterParams },
-    responses: { ...errors, 200: success(newbiCharacterWorkspaceView) },
+    responses: { ...errors, 200: success(workspaceView) },
   }), async (c) => {
     const result = await management.getCharacter(db, { ...c.req.valid('param'), actor: c.get('actor') })
     c.header('ETag', `"${result.version ?? 0}"`)
     const platforms = schema.accountInput.shape.platform.options
     const simulationPlatforms = result.roles.includes('ADMIN') ? platforms.filter((id) => resolveAdapter(id)) : []
-    const deployment = await deploymentPlugins?.status('simulated')
-    return c.json({ ...result, simulationPlatforms, newbiInstalled: newbi.isInstalled(deployment) }, 200)
+    const fields = await Promise.all(plugins.map(async ({ workspace }) => workspace && z.object(workspace.fields).parse(await workspace.read())))
+    return c.json({ ...result, simulationPlatforms, ...Object.assign({}, ...fields) }, 200)
   })
 
   app.openapi(createRoute({
@@ -295,43 +231,42 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   app.openapi(createRoute({
     method: 'get', path: `${character}/plugins`, security,
     request: { params: characterParams },
-    responses: { ...errors, 200: success(consolePluginStatusView) },
+    responses: { ...errors, 200: success(statusView) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
     const current = await pluginStatus()
-    if (!deploymentPlugins) return c.json(current, 200)
-    const [settings, release] = await Promise.all([
-      modelSettings?.status(),
+    const fields = Object.assign({}, ...await Promise.all(plugins.map(async ({ status }) =>
+      status && z.object(status.fields).parse(await status.read(scope.characterId)))))
+    if (!deploymentPlugins) return c.json({ ...current, ...fields }, 200)
+    const [provider, release] = await Promise.all([
+      activeModel(),
       pluginRelease?.(current.services),
     ])
-    const deployment = await deploymentPlugins.status(settings?.provider ?? 'simulated')
-    const modelCheck = latestModelCheck && latestModelCheck.version === settings?.version
-      && latestModelCheck.result.provider === deployment.configuredModel
-      && deployment.plugins[latestModelCheck.result.provider] === 'ENABLED' ? latestModelCheck.result : undefined
-    return c.json({ ...current, deployment, release, modelCheck, ...await newbi.status(scope.characterId, deployment) }, 200)
+    const deployment = await deploymentPlugins.status(provider)
+    return c.json({ ...current, deployment, release, ...fields }, 200)
   })
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/accounts`, security,
     request: { params: characterParams, query: schema.listQuery },
-    responses: { ...errors, 200: success(schema.pageView(newbiAccountView)) },
-  }), async (c) => c.json(await management.listAccounts(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')), newbi.accountHooks,
-  ), 200))
+    responses: { ...errors, 200: success(schema.pageView(accountView)) },
+  }), async (c) => c.json(schema.pageView(accountView).parse(await management.listAccounts(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')), accountHooks,
+  )), 200))
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/account-pool`, security,
     request: { params: characterParams, query: schema.listQuery },
-    responses: { ...errors, 200: success(schema.pageView(newbiAccountRegistrationView)) },
-  }), async (c) => c.json(schema.pageView(newbiAccountRegistrationView).parse(await management.listAccountPool(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')), newbi.accountHooks,
+    responses: { ...errors, 200: success(accountPoolView) },
+  }), async (c) => c.json(accountPoolView.parse(await management.listAccountPool(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')), accountHooks,
   )), 200))
 
   app.openapi(createRoute({
     method: 'post', path: `${character}/account-pool`, security,
     request: { params: characterParams, headers: schema.idempotencyHeader,
-      body: body(z.union([schema.simulationAccountRegistration, newbi.registrationSchema])) },
+      body: body(registration) },
     responses: { ...errors, 201: success(schema.commandResponse) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
@@ -341,8 +276,9 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       ...scope, operation: 'account.register', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
     }, async (tx) => {
-      return input.platform === newbi.registrationSchema.shape.platform.value
-        ? newbi.registerAccount(tx, scope, input) : management.registerAccount(tx, scope, input)
+      const account = accountHooks.find(({ platform }) => platform === input.platform)
+      return account ? account.register(tx, scope, input)
+        : management.registerAccount(tx, scope, schema.simulationAccountRegistration.parse(input))
     })
     return c.json({ ...result, requestId }, 201)
   })
@@ -358,7 +294,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'account.remove', targetScope: registrationId, input: { registrationId }, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.removeAccountRegistration(tx, scope, registrationId, newbi.accountHooks))
+    }, (tx) => management.removeAccountRegistration(tx, scope, registrationId, accountHooks))
     return c.json({ ...result, requestId }, 200)
   })
 
@@ -413,7 +349,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'control.apply', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.control(tx, scope, input, newbi.accountHooks))
+    }, (tx) => management.control(tx, scope, input, accountHooks))
     return c.json({ ...result, requestId }, 200)
   })
 
@@ -1052,7 +988,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     db, { ...c.req.valid('param'), actor: c.get('actor') },
   ), 200))
 
-  newbi.registerRoutes(app)
+  for (const plugin of plugins) plugin.registerRoutes(app)
 
   app.doc31('/openapi.json', {
     openapi: '3.1.0', info: { title: 'Rica Management API', version: '1.0.0' }, servers: [{ url: '/v1' }],

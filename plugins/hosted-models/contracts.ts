@@ -1,6 +1,7 @@
-import { z } from '@hono/zod-openapi'
+import { z } from 'zod'
+import { hostedModelIds } from './catalog.js'
 
-export const modelProviders = ['simulated', 'openai', 'anthropic', 'gemini', 'openai-compatible'] as const
+export const modelProviders = ['simulated', ...hostedModelIds] as const
 const provider = z.enum(modelProviders)
 const model = z.string().trim().min(1).max(160).regex(/^[\w./:-]+$/)
 const apiKey = z.string().trim().min(1).max(4096).regex(/^[\x21-\x7e]+$/)

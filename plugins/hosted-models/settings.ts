@@ -1,10 +1,8 @@
-import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from '../contracts/model-settings.js'
-import { writeSettings } from './write-settings.js'
+import { modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from './contracts.js'
+import { writeSettings } from '../../packages/runtime/write-settings.js'
 
 const recordSchema = z.strictObject({
   version: z.number().int().positive(),
@@ -14,13 +12,6 @@ type Record = z.infer<typeof recordSchema>
 
 export class ModelSettingsError extends Error {
   constructor(readonly code: 'VERSION_CONFLICT' | 'KEY_REQUIRED') { super(code) }
-}
-
-export function modelSettingsDirectory(databaseUrl: string, override = process.env.RICA_MODEL_SETTINGS_DIR) {
-  if (override) return override
-  const db = new URL(databaseUrl)
-  const deployment = createHash('sha256').update(db.host + db.pathname).digest('hex').slice(0, 24)
-  return join(homedir(), '.rica', 'model-settings', deployment)
 }
 
 function view({ version, configuration }: Record): ModelSettingsView {
@@ -59,4 +50,14 @@ export function createModelSettingsStore(directory: string) {
   }
 
   return { read, async status() { return view(await read()) }, save }
+}
+
+export function enabledModelSettings(store: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>,
+  isEnabled: (provider: string) => Promise<boolean>) {
+  return { async read(): Promise<Record> {
+    const current = await store.read()
+    const { provider } = current.configuration
+    return provider === 'simulated' || await isEnabled(provider) ? current
+      : { ...current, configuration: { provider: 'simulated' } }
+  } }
 }

@@ -2,13 +2,18 @@ import { serve } from '@hono/node-server'
 import { Redis } from 'ioredis'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { loadConfig } from '../../packages/runtime/config.js'
-import { loadManagementConfig } from './admin-auth.js'
+import { localIssuer, loadManagementConfig } from './admin-auth.js'
 import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
+import { createHostedModelManagement } from '@rica/plugin-hosted-models/management'
+import { denyPermission } from '../../packages/persistence/management.js'
+import { createNewbiManagement } from '@rica/plugin-newbi/management'
 import { createNewbiOperations } from '@rica/plugin-newbi/operations'
-import { startSimulationPlatforms } from '../runtime-plugins.js'
-import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
+import { connectNewbiSettings } from '@rica/plugin-newbi/settings'
+import { startModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
+import { createModelSettingsStore } from '@rica/plugin-hosted-models/settings'
+import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
@@ -34,14 +39,23 @@ void redis.connect().catch(() => {})
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
+const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
+const modelSettings = createModelSettingsStore(settingsDirectory)
+const activeModel = async () => (await modelSettings.status()).provider
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
   pluginStatus: () => readPluginStatus(redis),
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
-  modelSettings: createModelSettingsStore(settingsDirectory),
+  activeModel,
   deploymentPlugins,
-  ...createNewbiOperations(db, deploymentPlugins),
+  plugins: [
+    createNewbiManagement(managementDb, newbi, createNewbiOperations(db, newbi)),
+    createHostedModelManagement({ modelSettings, startModelPlugin,
+      authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
+      isEnabled: (provider) => deploymentPlugins.isEnabled(provider, activeModel),
+    }),
+  ],
 }) : undefined
 
 const app = createApp({

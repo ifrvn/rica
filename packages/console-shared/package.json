@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./request": "./request.ts",
-    "./console-data": "./console-data.ts"
+    "./console-data": "./console-data.ts",
+    "./health": "./health.ts"
   },
   "dependencies": {
     "vue": "^3.5.45"

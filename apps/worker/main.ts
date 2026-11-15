@@ -1,7 +1,9 @@
 import { startOutboxWorker, WorkerDependencyUnavailable } from './outbox.js'
+import { sweepRuntimeRetention } from './runtime-retention.js'
 import { loadConfig } from '../../packages/runtime/config.js'
 import { startConfiguredModel, startSimulationPlatforms } from '../runtime-plugins.js'
-import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
+import { createModelSettingsStore, enabledModelSettings } from '@rica/plugin-hosted-models/settings'
+import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
@@ -10,7 +12,8 @@ async function main() {
   const directory = modelSettingsDirectory(config.databaseUrl)
   const settings = createModelSettingsStore(directory)
   const plugins = createDeploymentPluginStore(directory)
-  const selected = await startConfiguredModel({ read: () => plugins.readModel(settings) }, 'worker').catch(async (error: unknown) => {
+  const activeSettings = enabledModelSettings(settings, (provider) => plugins.isEnabled(provider, async () => provider))
+  const selected = await startConfiguredModel(activeSettings, 'worker').catch(async (error: unknown) => {
     await reportPluginResult(config.redisUrl, 'worker', observationError(error, 'START_FAILED'))
     throw error
   })
@@ -37,7 +40,7 @@ async function main() {
 
   let worker: Awaited<ReturnType<typeof startOutboxWorker>>
   try {
-    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, getModel, platforms.resolveAdapter)
+    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, getModel, platforms.resolveAdapter, sweepRuntimeRetention)
   } catch (error) {
     await Promise.all([selected.stop(), platforms.stop()])
     await reportPluginResult(config.redisUrl, 'worker',

@@ -4,30 +4,20 @@ import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
 import { deploymentPluginChange, deploymentPluginIds, type DeploymentPluginId, type DeploymentPluginsView } from '../../../../deployment-plugin-contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
+import { pluginCards as cards, pluginServiceNames, registrationAvailable } from '../../app/plugin-integrations.js'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
-import NewbiSettings from '@rica/plugin-newbi/console/NewbiSettings.vue'
-import { newbiConsole } from '@rica/plugin-newbi/console/labels'
-import ModelSettings from '@rica/plugin-hosted-models/console/ModelSettings.vue'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean }>()
-const emit = defineEmits<{ expired: []; accounts: []; health: []; simulate: []; newbi: [installed: boolean] }>()
+const emit = defineEmits<{ expired: []; accounts: []; health: []; simulate: []; deploymentChanged: [deployment: DeploymentPluginsView] }>()
 const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
 const deployment = computed(() => status.value?.deployment)
 const editing = ref<DeploymentPluginId>()
-const modelEditor = computed(() => {
-  const id = editing.value
-  return id && id !== 'newbi' && deployment.value?.plugins[id] === 'ENABLED' ? id : undefined
-})
 const changedPlugin = ref<DeploymentPluginId>()
 const releasePreview = ref<DeploymentPluginId>()
 const stages = { NOT_INSTALLED: '未安装', INSTALLED: '已安装 · 未启用', ENABLED: '已启用' } as const
 const operations = { NOT_INSTALLED: 'INSTALL', INSTALLED: 'ENABLE', ENABLED: 'DISABLE' } as const
-const newbiComponents = computed(() => status.value?.services.flatMap(({ catalog }) =>
-  catalog.filter(({ kind }) => kind === 'platform-reader' || kind === 'platform-reply-executor')) ?? [])
-const modelVersions = computed(() => new Map(status.value?.services.find(({ service }) => service === 'worker')
-  ?.catalog.filter(({ kind }) => kind === 'model').map(({ id, version }) => [id, version])))
 const release = computed(() => status.value?.release)
 const upgrades = computed(() => new Map(release.value?.status === 'AVAILABLE'
   ? release.value.upgrades.map((item) => [item.id, item] as const) : []))
@@ -38,10 +28,7 @@ const upgradeProblems = {
   INCOMPATIBLE_CONTRACT: '宿主契约版本不兼容',
   DOWNGRADE: '目标发布会降级此组件',
 }
-const serviceNames = {
-  api: '管理 API', worker: '认知 Worker', 'simulation-executor': '模拟执行器',
-  ...newbiConsole.serviceNames,
-}
+const serviceNames: Record<string, string> = { api: '管理 API', worker: '认知 Worker', 'simulation-executor': '模拟执行器', ...pluginServiceNames }
 
 function toggleRelease(id: DeploymentPluginId) {
   releasePreview.value = releasePreview.value === id ? undefined : id
@@ -57,7 +44,6 @@ function toggleEditor(id: DeploymentPluginId) {
   }
   editing.value = id
   error.value = ''
-  if (id !== 'newbi') void nextTick(() => document.getElementById('model-settings-heading')?.focus())
 }
 
 function update(id: DeploymentPluginId, data: unknown) {
@@ -65,7 +51,7 @@ function update(id: DeploymentPluginId, data: unknown) {
   changedPlugin.value = id
   const parsed = deploymentPluginChange.safeParse(data)
   if (!parsed.success) {
-    error.value = '请核对本机 API 地址。'
+    error.value = cards[id].invalidSettings ?? '请检查插件配置。'
     return
   }
   const version = deployment.value.version
@@ -77,13 +63,18 @@ function update(id: DeploymentPluginId, data: unknown) {
     })
     if (!active() || !status.value) return
     status.value = { ...status.value, deployment: updated,
-      newbiRegistrationAvailable: updated.plugins.newbi === 'ENABLED' && !!updated.newbi.endpoint }
-    emit('newbi', updated.plugins.newbi !== 'NOT_INSTALLED')
-    if (parsed.data.action === 'CONFIGURE_NEWBI' || (parsed.data.action === 'DISABLE' && editing.value === id)) {
+      ...registrationAvailable(updated) }
+    emit('deploymentChanged', updated)
+    if ((cards[id].inlineEditor || parsed.data.action === 'DISABLE') && editing.value === id) {
       editing.value = undefined
       void nextTick(() => document.getElementById('plugin-heading-' + id)?.focus())
     }
   })
+}
+
+function saveSettings(id: DeploymentPluginId, value: string) {
+  const change = cards[id].settingsChange?.(value)
+  if (change) update(id, change)
 }
 
 function changeStage(id: DeploymentPluginId) {
@@ -111,43 +102,29 @@ function changeStage(id: DeploymentPluginId) {
         <div class="console-section-heading plugin-title">
           <div>
             <h3 :id="'plugin-heading-' + id" tabindex="-1">{{ labels[id] }}</h3>
-            <p>{{ id === newbiConsole.id ? newbiConsole.description : '模型提供方 · 用于公开模拟草稿' }}</p>
+            <p>{{ cards[id].description }}</p>
           </div>
           <NTag size="small" :bordered="false" :type="deployment.plugins[id] === 'ENABLED' ? 'success' : 'default'">
             {{ stages[deployment.plugins[id]] }}
           </NTag>
         </div>
 
-        <ul v-if="id === 'newbi'" class="plugin-components">
-          <li v-for="component in newbiComponents" :key="component.id">
-            <strong>{{ component.kind === 'platform-reader' ? newbiConsole.capabilityNames['platform-reader']
-              : newbiConsole.capabilityNames['platform-reply-executor'] }}</strong>
-            <code>{{ component.id }}<template v-if="deployment.plugins[id] !== 'NOT_INSTALLED'"> · v{{ component.version }}</template></code>
+        <ul class="plugin-components">
+          <li v-for="component in cards[id].components(status)" :key="component.id">
+            <strong>{{ component.label }}</strong>
+            <small>{{ component.detail }}<template v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && component.version"> · v{{ component.version }}</template></small>
           </li>
         </ul>
-        <div v-else class="plugin-component">
-          <strong>生成回复草稿</strong>
-          <small>认知 Worker · {{ labels[id] }}<template v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && modelVersions.has(id)"> · v{{ modelVersions.get(id) }}</template></small>
-        </div>
 
         <div v-if="deployment.plugins[id] === 'ENABLED'" class="plugin-integration">
-          <template v-if="id === 'newbi'">
-            <span>{{ deployment.newbi.endpoint ? '可接入账号' : '等待配置 Agent API' }}</span>
-            <div class="console-actions">
-              <NButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" secondary
-                :aria-expanded="editing === id" :disabled="busy || loading" @click="toggleEditor(id)">
-                {{ deployment.newbi.endpoint ? '查看 Agent API 设置' : '配置 Agent API' }}
-              </NButton>
-              <NButton v-if="status?.newbiRegistrationAvailable" size="small" secondary @click="emit('accounts')">前往平台账号池</NButton>
-            </div>
-          </template>
-          <template v-else>
-            <span>{{ deployment.configuredModel === id ? '已选为草稿模型' : '已注册到认知 Worker · 待配置' }}</span>
+          <span>{{ cards[id].summary(deployment) }}</span>
+          <div class="console-actions">
             <NButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" secondary
               :aria-expanded="editing === id" :disabled="busy || loading" @click="toggleEditor(id)">
-              {{ deployment.configuredModel === id ? '查看 AI API 设置' : '配置 AI API' }}
+              {{ cards[id].configureLabel(deployment) }}
             </NButton>
-          </template>
+            <NButton v-if="cards[id].accountLink?.(status)" size="small" secondary @click="emit('accounts')">前往平台账号池</NButton>
+          </div>
         </div>
 
         <div v-if="canConfigureModel || (deployment.plugins[id] !== 'NOT_INSTALLED' && upgrades.has(id))" class="console-actions">
@@ -172,7 +149,7 @@ function changeStage(id: DeploymentPluginId) {
           </div>
           <ul class="console-record-list">
             <li v-for="entry in upgrades.get(id)?.components" :key="entry.service + '/' + entry.current.id">
-              <strong>{{ serviceNames[entry.service] }} · {{ entry.current.id }}</strong>
+              <strong>{{ serviceNames[entry.service] ?? entry.service }} · {{ entry.current.id }}</strong>
               <span class="plugin-release-note">
                 当前 v{{ entry.current.version }} · 契约 {{ entry.current.contractVersion }}
                 <template v-if="entry.target"> → 目标 v{{ entry.target.version }} · 契约 {{ entry.target.contractVersion }}</template>
@@ -186,7 +163,7 @@ function changeStage(id: DeploymentPluginId) {
           <template v-else>
             <h4>升级步骤</h4>
             <ol class="plugin-release-steps">
-              <li v-if="id === newbiConsole.id">{{ newbiConsole.upgradeStep }}</li>
+              <li v-if="cards[id].upgradeStep">{{ cards[id].upgradeStep }}</li>
               <li>请部署维护者按发布说明更新 Rica 至 {{ release.ricaVersion }}，并重启相关进程。</li>
               <li>部署完成后刷新插件，核对组件版本，并到系统运行状况确认相关进程的最新报告。</li>
             </ol>
@@ -203,14 +180,14 @@ function changeStage(id: DeploymentPluginId) {
         </section>
 
         <NAlert v-if="error && changedPlugin === id" type="error" role="alert">{{ error }}</NAlert>
-        <NewbiSettings v-if="editing === 'newbi' && id === 'newbi' && deployment.plugins[id] === 'ENABLED'"
-          class="plugin-config" :value="deployment.newbi.endpoint ?? ''" :busy="busy" @close="toggleEditor(id)"
-          @save="update(id, { action: 'CONFIGURE_NEWBI', endpoint: $event })" />
+        <component v-if="editing === id && deployment.plugins[id] === 'ENABLED' && cards[id].inlineEditor"
+          :is="cards[id].editor" class="plugin-config" v-bind="cards[id].editorProps(deployment)"
+          :busy="busy" @close="toggleEditor(id)" @save="saveSettings(id, $event)" />
       </article>
-      <ModelSettings v-if="modelEditor" :key="modelEditor"
-        class="console-record-workspace" :provider="modelEditor" :name="labels[modelEditor]"
-        :can-start-simulation="canStartSimulation"
-        @expired="expired" @close="modelEditor && toggleEditor(modelEditor)" @saved="refresh" @simulate="emit('simulate')" />
+      <component v-if="editing && deployment.plugins[editing] === 'ENABLED' && !cards[editing].inlineEditor"
+        :is="cards[editing].editor" :key="editing" class="console-record-workspace" v-bind="cards[editing].editorProps(deployment)"
+        :can-start-simulation="canStartSimulation" @expired="expired" @close="editing && toggleEditor(editing)"
+        @saved="refresh" @simulate="emit('simulate')" />
     </template>
   </div>
 </template>

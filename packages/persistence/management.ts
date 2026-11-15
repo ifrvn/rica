@@ -1,3 +1,4 @@
+import { isSimulationPlatform, simulationPlatformId } from '../contracts/simulation-platform.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentReceiptView, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
@@ -193,6 +194,14 @@ export type PlatformAccountHooks = {
   verifyResume(tx: Tx, account: PlatformAccountRef): Promise<void>
 }
 
+async function accountProfiles(tx: Tx, accounts: PlatformAccountRef[], hooks: readonly PlatformAccountHooks[]) {
+  const profiles = new Map(await Promise.all(hooks.map(async ({ platform, profiles }) => {
+    const owned = accounts.filter((account) => account.platform === platform)
+    return [platform, owned.length ? await profiles(tx, owned) : undefined] as const
+  })))
+  return (account: PlatformAccountRef) => profiles.get(account.platform)?.(account)
+}
+
 export async function registerAccount(tx: Tx, scope: Scope, input: AccountRegistration) {
   if (await tx.platformAccount.findUnique({ where: { platform_instanceKey_remoteAccountId: input }, select: { id: true } })) {
     throw new ManagementError(409, 'ACCOUNT_REGISTERED', 'Platform account already registered')
@@ -221,12 +230,12 @@ export async function associateAccount(tx: Tx, scope: Scope, input: Input<typeof
   return { id: account.id, status: account.status, version: account.bindingVersion }
 }
 
-export async function removeAccountRegistration(tx: Tx, scope: Scope, id: string, hooks?: PlatformAccountHooks) {
+export async function removeAccountRegistration(tx: Tx, scope: Scope, id: string, hooks: readonly PlatformAccountHooks[] = []) {
   const registration = await tx.platformAccountRegistration.findFirst({ where: { id, characterId: scope.characterId } })
   if (!registration) unavailable()
   const removed = await tx.platformAccountRegistration.deleteMany({ where: { id, characterId: scope.characterId, boundAt: null } })
   if (!removed.count) throw new ManagementError(409, 'ACCOUNT_ALREADY_BOUND', 'Platform account already associated')
-  if (registration.platform === hooks?.platform) await hooks.remove(tx, registration)
+  await hooks.find(({ platform }) => platform === registration.platform)?.remove(tx, registration)
   return { id }
 }
 
@@ -235,7 +244,7 @@ export async function createAccount(tx: Tx, scope: Scope, { identityId, ...input
   return associateAccount(tx, scope, { registrationId: id, identityId })
 }
 
-export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page, hooks?: PlatformAccountHooks) {
+export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page, hooks: readonly PlatformAccountHooks[] = []) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
     const where = { characterId: scope.characterId, boundAt: null }
@@ -245,12 +254,12 @@ export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page
     const rows = await tx.platformAccountRegistration.findMany({
       ...args, where, select: { id: true, platform: true, instanceKey: true, remoteAccountId: true },
     })
-    const profile = await hooks?.profiles(tx, rows)
-    return makePage(rows, page, (row) => ({ ...row, ...profile?.(row) }))
+    const profile = await accountProfiles(tx, rows, hooks)
+    return makePage(rows, page, (row) => ({ ...profile(row), ...row }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>, hooks?: PlatformAccountHooks) {
+export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>, hooks: readonly PlatformAccountHooks[] = []) {
   const { characterId } = scope
   const { scopeId: id, operation } = input
   const entityStatus = operation === 'RESUME' ? 'ACTIVE' : 'PAUSED'
@@ -260,11 +269,12 @@ export async function control(tx: Tx, scope: Scope, input: Input<typeof contract
     if (account.status === 'REVOKED' || (operation === 'RESUME' && account.status !== 'PAUSED' && account.status !== 'ACTIVE')) {
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account cannot perform this transition')
     }
-    if (operation === 'RESUME' && account.platform !== 'mock-a' && account.platform !== 'mock-b') {
-      if (account.platform !== hooks?.platform) {
+    if (operation === 'RESUME' && !isSimulationPlatform(account.platform)) {
+      const connector = hooks.find(({ platform }) => platform === account.platform)
+      if (!connector) {
         throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
       }
-      await hooks.verifyResume(tx, account)
+      await connector.verifyResume(tx, account)
     }
     // Pausing a reauthentication or pending account must not make it eligible for activation.
     if (operation === 'PAUSE' && account.status !== 'ACTIVE' && account.status !== 'PAUSED') {
@@ -439,7 +449,7 @@ export async function listIdentities(db: PrismaClient, scope: Scope, page: Page)
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function listAccounts(db: PrismaClient, scope: Scope, page: Page, hooks?: PlatformAccountHooks) {
+export async function listAccounts(db: PrismaClient, scope: Scope, page: Page, hooks: readonly PlatformAccountHooks[] = []) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
     const where = { characterId: scope.characterId }
@@ -448,9 +458,11 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page, h
       ...args, where,
       select: { id: true, identityId: true, platform: true, instanceKey: true, remoteAccountId: true, status: true, bindingVersion: true, createdAt: true },
     })
-    const profile = await hooks?.profiles(tx, rows)
-    return makePage(rows, page, ({ bindingVersion, createdAt: _, remoteAccountId, ...view }) =>
-      ({ ...view, ...profile?.({ ...view, remoteAccountId }), version: bindingVersion }))
+    const profile = await accountProfiles(tx, rows, hooks)
+    return makePage(rows, page, (row) => {
+      const { bindingVersion, createdAt: _, remoteAccountId: __, ...view } = row
+      return { ...profile(row), ...view, version: bindingVersion }
+    })
   }, { isolationLevel: 'RepeatableRead' })
 }
 
@@ -467,7 +479,7 @@ export async function readAutomationEligibility(db: PrismaClient, scope: Scope, 
     const { identity } = account
     const active = account.status === 'ACTIVE' && identity.status === 'ACTIVE' && identity.activeVersion !== null
       && identity.character.status === 'ACTIVE' && identity.character.activeCoreVersion !== null
-    const simulated = account.platform === 'mock-a' || account.platform === 'mock-b'
+    const simulated = isSimulationPlatform(account.platform)
     return {
       accountId: account.id, identityId: account.identityId, bindingVersion: account.bindingVersion, eligible: false,
       reasons: [
@@ -709,7 +721,7 @@ export async function createSchedule(tx: Tx, scope: Scope, input: Input<typeof s
   const { characterId } = scope
   const { accountId, conversationId, contactId, scheduleKey } = input
   const account = await tx.platformAccount.findFirst({
-    where: { id: accountId, characterId, platform: { in: ['mock-a', 'mock-b'] } },
+    where: { id: accountId, characterId, platform: { in: simulationPlatformId.options } },
     select: { identityId: true },
   })
   if (!account) unavailable()

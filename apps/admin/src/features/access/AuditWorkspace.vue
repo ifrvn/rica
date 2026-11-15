@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { auditView } from '../../../../../packages/contracts/management.js'
-import { newbiAuditLabels } from '@rica/plugin-newbi/console/labels'
+import { pluginAuditLabels } from '../../app/plugin-integrations.js'
 import { request, RequestError } from '@rica/console-shared/request'
 
 type Entry = z.infer<typeof auditView>
@@ -32,7 +32,7 @@ const labels: Record<string, string> = {
   'memory.grant.create': '授予记忆访问权限', 'memory.grant.revoke': '撤销记忆访问权限',
   'schedule.create': '新增模拟计划', 'schedule.update': '更新模拟计划',
   'commitment.create': '登记模拟承诺', 'commitment.update': '处理模拟承诺',
-  ...newbiAuditLabels,
+  ...pluginAuditLabels,
 }
 
 async function load(append = false) {

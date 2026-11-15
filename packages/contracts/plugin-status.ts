@@ -1,8 +1,7 @@
 import { z } from '@hono/zod-openapi'
-import { modelCheckStatus } from './model-settings.js'
 
-export const pluginServices = ['api', 'worker', 'simulation-executor', 'connector-reader', 'connector-executor'] as const
-export type PluginService = typeof pluginServices[number]
+const pluginService = z.string().regex(/^[a-z0-9-]{1,80}$/)
+export type PluginService = z.infer<typeof pluginService>
 
 const pluginIdentity = z.strictObject({
   id: z.string().regex(/^[a-z0-9-]{1,80}$/),
@@ -29,7 +28,7 @@ export const pluginReleaseManifest = z.strictObject({
 const pluginUpgrade = z.object({
   id: pluginIdentity.shape.id,
   components: z.array(z.object({
-    service: z.enum(pluginServices),
+    service: pluginService,
     current: pluginIdentity,
     target: releaseComponent.nullable(),
     problem: z.enum(['MISSING_COMPONENT', 'INCOMPATIBLE_CONTRACT', 'DOWNGRADE']).nullable(),
@@ -57,9 +56,8 @@ export type PluginReport = z.infer<typeof pluginReport>
 
 export const pluginStatusView = z.object({
   release: pluginReleaseView.optional(),
-  modelCheck: modelCheckStatus.optional(),
   services: z.array(z.object({
-    service: z.enum(pluginServices),
+    service: pluginService,
     catalog: z.array(pluginIdentity),
     report: pluginReport.nullable(),
   })),

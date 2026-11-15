@@ -1,9 +1,9 @@
 <script setup lang="ts">
-defineProps<{ profile: { agentId: string; username: string | null; avatarUrl: string | null } }>()
+defineProps<{ profile?: { agentId: string; username: string | null; avatarUrl: string | null } }>()
 </script>
 
 <template>
-  <div class="newbi-account-label">
+  <div v-if="profile" class="newbi-account-label">
     <div class="newbi-account-name">
       <span>Newbi</span>
       <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="" referrerpolicy="no-referrer" />
