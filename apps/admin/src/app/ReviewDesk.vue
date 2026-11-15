@@ -3,6 +3,8 @@ import { platformReviews, type ConsoleWorkspace } from './plugin-integrations.js
 import type { DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
+import { DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger } from 'reka-ui'
+import ConsoleNavigation from './ConsoleNavigation.vue'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
@@ -41,6 +43,10 @@ const showPasskeyForm = ref(false)
 const accountMenuOpen = ref(false)
 const localUsersOpen = ref(false)
 let localUsersTrigger: HTMLElement | undefined
+const navigationBreakpoint = window.matchMedia('(max-width: 46rem)')
+const narrowNavigation = ref(navigationBreakpoint.matches)
+const navigationOpen = ref(false)
+let focusPageAfterNavigation = false
 const pageHeading = ref<HTMLElement>()
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
@@ -278,11 +284,33 @@ function changeTab(page: ConsolePage) {
   if (characterId.value) navigate({ characterId: characterId.value, page })
 }
 
+function selectDrawerPage(page: ConsolePage) {
+  focusPageAfterNavigation = page !== tab.value && !!characterId.value
+  navigationOpen.value = false
+  changeTab(page)
+}
+
+function restoreNavigationFocus(event: Event) {
+  if (!focusPageAfterNavigation) return
+  event.preventDefault()
+  focusPageAfterNavigation = false
+  pageHeading.value?.focus()
+}
+
+function syncNavigation(event: MediaQueryListEvent) {
+  narrowNavigation.value = event.matches
+  if (event.matches || !navigationOpen.value) return
+  navigationOpen.value = false
+  void nextTick(() => pageHeading.value?.focus())
+}
+
 onBeforeUnmount(() => {
+  navigationBreakpoint.removeEventListener('change', syncNavigation)
   ++revision
   window.removeEventListener('hashchange', restoreLocation)
 })
 onMounted(() => {
+  navigationBreakpoint.addEventListener('change', syncNavigation)
   window.addEventListener('hashchange', restoreLocation)
   void run(async () => {
     const session = await request<Session>('/v1/auth/session').catch((cause: unknown) => {
@@ -335,6 +363,8 @@ async function disconnect() {
 }
 
 function resetSession() {
+  navigationOpen.value = false
+  focusPageAfterNavigation = false
   ++revision
   routing.value = false
   detailId.value = undefined
@@ -463,6 +493,26 @@ async function decide(decision: Decision) {
     </NCard>
 
     <template v-else>
+      <DialogRoot v-if="characters.length && narrowNavigation" v-model:open="navigationOpen">
+        <Teleport to="#masthead-navigation">
+          <DialogTrigger type="button" class="navigation-icon" aria-label="打开导航">
+            <span class="i-lucide-menu" aria-hidden="true" />
+          </DialogTrigger>
+        </Teleport>
+        <DialogPortal>
+          <DialogOverlay class="navigation-overlay" />
+          <DialogContent class="navigation-drawer" :aria-describedby="undefined" @close-auto-focus="restoreNavigationFocus">
+            <div class="navigation-drawer-heading">
+              <DialogTitle>导航</DialogTitle>
+              <DialogClose type="button" class="navigation-icon" aria-label="关闭导航">
+                <span class="i-lucide-x" aria-hidden="true" />
+              </DialogClose>
+            </div>
+            <ConsoleNavigation :has-character="!!characterId" :main-page="mainPage" :disabled="busy || routing"
+              @select="selectDrawerPage" />
+          </DialogContent>
+        </DialogPortal>
+      </DialogRoot>
       <Teleport v-if="characters.length" to="#masthead-role">
         <div class="role-picker">
           <label for="review-character">角色</label>
@@ -501,32 +551,8 @@ async function decide(decision: Decision) {
       <LocalUsers v-if="canCreate && localUsersOpen" @close="closeLocalUsers" @expired="resetSession" />
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
-      <nav v-if="characters.length" class="console-navigation" aria-label="控制台导航">
-        <button v-if="characterId" type="button" :aria-current="mainPage === 'home' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('home')"><span class="i-lucide-layout-dashboard" aria-hidden="true" />工作台</button>
-        <button v-if="characterId" type="button" :aria-current="mainPage === 'review' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('review')"><span class="i-lucide-clipboard-check" aria-hidden="true" />审批</button>
-        <button v-if="characterId" type="button" :aria-current="mainPage === 'runs' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('runs')"><span class="i-lucide-activity" aria-hidden="true" />运行记录</button>
-        <span class="console-nav-label">角色管理</span>
-        <button type="button" :aria-current="mainPage === 'character' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('character')"><span class="i-lucide-users" aria-hidden="true" />角色与身份</button>
-        <template v-if="characterId">
-          <button type="button" :aria-current="mainPage === 'accounts' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('accounts')"><span class="i-lucide-contact" aria-hidden="true" />平台账号池</button>
-          <button type="button" :aria-current="mainPage === 'knowledge' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('knowledge')"><span class="i-lucide-book-open" aria-hidden="true" />记忆与身份成长</button>
-          <button type="button" :aria-current="mainPage === 'planning' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('planning')"><span class="i-lucide-calendar-days" aria-hidden="true" />计划与承诺</button>
-          <button type="button" :aria-current="mainPage === 'audit' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('members')"><span class="i-lucide-history" aria-hidden="true" />成员与审计</button>
-          <span class="console-nav-label">部署管理</span>
-          <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件中心</button>
-          <button type="button" :aria-current="mainPage === 'health' ? 'page' : undefined" :disabled="busy || routing"
-            @click="changeTab('health')"><span class="i-lucide-server" aria-hidden="true" />系统运行状况</button>
-        </template>
-      </nav>
+      <ConsoleNavigation v-if="characters.length && !narrowNavigation" :has-character="!!characterId" :main-page="mainPage"
+        :disabled="busy || routing" @select="changeTab" />
       <div class="workspace-content">
       <div class="workspace-header">
         <h2 id="review-heading" ref="pageHeading" tabindex="-1">
@@ -740,17 +766,20 @@ async function decide(decision: Decision) {
 .workspace-shell { display: grid; min-height: calc(100vh - 3.75rem); }
 .workspace-shell--with-nav { grid-template-columns: 10.25rem minmax(0, 1fr); }
 .workspace-content { display: grid; align-content: start; gap: 1rem; min-width: 0; padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 2rem; }
-.console-navigation { display: flex; flex-direction: column; gap: .1875rem; padding: 1rem .625rem; min-width: 0;
-  border-inline-end: 1px solid var(--console-line); background: var(--console-nav); }
-.console-navigation button { display: flex; align-items: center; gap: .5rem; border: 0; border-radius: 3px; background: transparent;
-  min-height: 2.25rem; padding: .4375rem .625rem; font: inherit; font-size: .8125rem;
-  text-align: start; color: var(--console-muted); white-space: nowrap; cursor: pointer; }
-.console-navigation button > span { flex: none; }
-.console-navigation button:enabled:hover { background: var(--console-hover); }
-.console-navigation button[aria-current] { color: var(--console-accent-text); background: var(--console-selected); font-weight: 650; }
-.console-nav-label { color: var(--console-muted); padding: .625rem .625rem .125rem; font-size: .75rem; }
-.console-navigation button:disabled { opacity: .65; cursor: default; }
-.console-navigation button:focus-visible { outline-offset: -2px; }
+
+.navigation-icon { display: grid; place-items: center; inline-size: 2.75rem; block-size: 2.75rem; padding: 0;
+  border: 0; border-radius: 5px; background: transparent; color: var(--console-text); font-size: 1.25rem; cursor: pointer; }
+.navigation-icon:hover, .navigation-icon[data-state="open"] { background: var(--console-hover); }
+.navigation-overlay { position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / .38); }
+.navigation-drawer { position: fixed; inset-block: 0; inset-inline-start: 0; z-index: 41;
+  width: min(18rem, calc(100vw - 2rem)); box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom); background: var(--console-nav); color: var(--console-text);
+  border-inline-end: 1px solid var(--console-line); box-shadow: 0 .5rem 2rem rgb(0 0 0 / .2); }
+.navigation-drawer-heading { display: flex; align-items: center; justify-content: space-between; padding: .5rem .75rem;
+  border-bottom: 1px solid var(--console-line); }
+.navigation-drawer-heading h2 { margin: 0; font-size: 1rem; font-weight: 650; }
+.navigation-drawer :deep(.console-navigation) { border: 0; padding-block: .625rem; }
+.navigation-drawer :deep(.console-navigation button) { min-height: 2.75rem; }
 .run-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.125rem; }
 .run-navigation [aria-current] { font-weight: 650; }
 .access-navigation { gap: .5rem; }
@@ -772,14 +801,9 @@ async function decide(decision: Decision) {
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) {
   .workspace-shell--with-nav { grid-template-columns: minmax(0, 1fr); }
-  .console-navigation { flex-direction: row; flex-wrap: wrap; border-inline-end: 0; border-bottom: 1px solid var(--console-line); padding: .5rem .625rem; }
-  .console-nav-label { display: none; }
 }
 @media (max-width: 30rem) {
   .account-name { max-width: 7rem; }
   .metadata { grid-template-columns: minmax(0, 1fr); }
-}
-@media (pointer: coarse) {
-  .console-navigation button { min-height: 2.75rem; }
 }
 </style>

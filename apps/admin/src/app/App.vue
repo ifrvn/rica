@@ -111,6 +111,7 @@ onBeforeUnmount(() => systemPreference.removeEventListener('change', updateSyste
       <header class="masthead">
         <div class="masthead-inner">
           <div class="brand">
+            <div id="masthead-navigation" />
             <span class="brand-mark" aria-hidden="true">R</span>
             <h1>Rica 控制台</h1>
           </div>
@@ -181,7 +182,7 @@ body { margin: 0; }
 .brand h1 { margin: 0; font-size: 1rem; font-weight: 650; }
 .brand-mark { color: var(--console-accent-text); font-size: 1.5rem; font-weight: 760; line-height: 1; }
 .masthead-actions { margin-inline-start: auto; min-width: 0; }
-#masthead-role:empty, #masthead-account:empty { display: none; }
+#masthead-navigation:empty, #masthead-role:empty, #masthead-account:empty { display: none; }
 .appearance-icon, .service-trigger {
   font: inherit; color: var(--console-text); background: var(--console-surface); border: 1px solid var(--console-field);
   border-radius: 5px; min-height: 2rem; padding-inline: .5rem;
