@@ -29,7 +29,7 @@ async function fixture(t: TestContext, managePlugins = false) {
   const activeModel = async () => (await store.status()).provider
   const app = createManagementApp({
     db: { $transaction: (work: (tx: object) => unknown) => work({
-      managementMembership: { findMany: async () => [{ role: 'ADMIN' }] },
+      managementMembership: { findUnique: async () => ({ subject: 'admin' }) },
     }) } as unknown as PrismaClient,
     origin, cookie: 'rica_session', resolveAdapter: () => undefined, activeModel,
     plugins: [createHostedModelManagement({ modelSettings: store, startModelPlugin,

@@ -83,7 +83,7 @@ export async function savePlan(tx: Tx, scope: Scope, input: Plan, edit?: { id: s
 
 export async function listPlans(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId }
     const args = await pageArgs(page, (id) => tx.simulationPlan.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.simulationPlan.findMany({

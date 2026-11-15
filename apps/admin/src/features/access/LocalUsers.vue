@@ -78,7 +78,7 @@ function save() {
     }
     if (!active()) return
     clearEditor()
-    notice.value = kind === 'create' ? '已创建 ' + name + '。可在成员列表授予角色权限。' : '已重置 ' + name + ' 的密码。'
+    notice.value = kind === 'create' ? '已创建 ' + name + '。可在角色管理员列表中添加该账号。' : '已重置 ' + name + ' 的密码。'
     if (kind === 'create') await load()
   })
 }

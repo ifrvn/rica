@@ -52,7 +52,7 @@ export function useConsoleTask(expired: () => void) {
       if (cause.status === 401) { expired(); return }
       error.value = ({
         LAST_ADMIN: '角色必须保留至少一名管理员。',
-        UNKNOWN_USER: '请先通过命令行创建该本地账号。',
+        UNKNOWN_USER: '请先由部署管理员创建该本地账号。',
         COMMITMENT_COLLABORATOR_CHANGED: '协作账号绑定已变化，请重新读取并选择。',
         COMMITMENT_CLOSED: '承诺已关闭，请重新读取。',
       } as Record<string, string>)[cause.code ?? ''] ?? ({

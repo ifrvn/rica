@@ -23,7 +23,7 @@ const props = defineProps<{
   characters: Character[]; moreCharacters: boolean;
 }>()
 const emit = defineEmits<{
-  created: [character: Workspace]; updated: [character: Workspace]; expired: []; roles: [roles: Workspace['roles']];
+  created: [character: Workspace]; updated: [character: Workspace]; expired: [];
   account: [id?: string]; proposals: [platform: string, accountId: string, proposalId?: string]; selectCharacter: [id: string]; loadCharacters: [];
 }>()
 const workspace = ref<Workspace>()
@@ -52,8 +52,7 @@ const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
   registrationId: null as string | null, platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
-const admin = computed(() => workspace.value?.roles.includes('ADMIN'))
-const inspectConnector = computed(() => admin.value || workspace.value?.roles.includes('AUDITOR'))
+const admin = computed(() => !!workspace.value)
 const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && connectorFor(platform)))
 const connectorDetails = computed(() => connectorFor(connector.value?.platform))
 const connectorIdentity = computed(() => identities.value.find(({ id }) => id === connector.value?.identityId))
@@ -221,8 +220,8 @@ async function load() {
   const current = await request<Workspace>(base.value)
   const [nextIdentities, nextAccounts, pool, pluginStatus] = await Promise.all([
     all<Identity>(base.value + '/identities'), all<Account>(base.value + '/accounts'),
-    current.roles.some((role) => role === 'ADMIN' || role === 'AUDITOR') ? all<Registration>(base.value + '/account-pool') : [],
-    props.accountsOnly && current.roles.includes('ADMIN')
+    all<Registration>(base.value + '/account-pool'),
+    props.accountsOnly
       ? request<PluginStatus>(base.value + '/plugins').catch((cause) => {
         if (cause instanceof RequestError && cause.status === 401) throw cause
         return undefined
@@ -235,7 +234,6 @@ async function load() {
   accounts.value = nextAccounts
   accountPool.value = pool
   connectors.forEach(({ state }) => state.sync(pluginStatus))
-  emit('roles', current.roles)
   emit('updated', current)
 }
 
@@ -645,7 +643,7 @@ onMounted(() => { if (props.characterId) void run(load) })
               <NButton v-if="admin && connectorFor(account.platform)?.state.canCheck(account)"
                 size="small" secondary :disabled="busy" :loading="connectorFor(account.platform)?.state.checkingAccount.value === account.id"
                 @click="connectorFor(account.platform)?.state.check(account)">核验连接</NButton>
-              <NButton v-if="inspectConnector && connectorFor(account.platform)" size="small"
+              <NButton v-if="admin && connectorFor(account.platform)" size="small"
                 @click="emit('account', account.id)">查看读取状态</NButton>
               <NButton v-if="admin && (connectorFor(account.platform) || isSimulationPlatform(account.platform)) && ['ACTIVE', 'PAUSED'].includes(account.status)"
                 size="small" :type="account.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="accountControl(account)">
@@ -659,7 +657,7 @@ onMounted(() => { if (props.characterId) void run(load) })
           </li>
         </ul>
       </section>
-      <component v-if="connector && connectorDetails && inspectConnector" :is="connectorDetails.plugin.Details" :key="connector.id + '/' + connector.version"
+      <component v-if="connector && connectorDetails && admin" :is="connectorDetails.plugin.Details" :key="connector.id + '/' + connector.version"
         :character-id="characterId" :account-id="connector.id" :account-status="connector.status" :can-review="!!admin"
         :account-label="boundAccountLabel(connector)" :identity-label="connectorIdentity ? identityName(connectorIdentity) : '身份不可用'"
         :can-propose="canProposeConnectorReply"

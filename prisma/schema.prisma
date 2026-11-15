@@ -706,21 +706,13 @@ model AdminPasskey {
   @@map("admin_passkeys")
 }
 
-enum ManagementRole {
-  ADMIN
-  OPERATOR
-  REVIEWER
-  AUDITOR
-}
-
 model ManagementMembership {
-  characterId String         @map("character_id") @db.Uuid
+  characterId String    @map("character_id") @db.Uuid
   issuer      String
   subject     String
-  role        ManagementRole
-  character   Character      @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@id([characterId, issuer, subject, role])
+  @@id([characterId, issuer, subject])
   @@index([issuer, subject, characterId])
   @@map("management_memberships")
 }

@@ -272,10 +272,7 @@ MVP 使用两个模拟平台适配器验证多平台绑定及差异。真实平�
 
 | 角色 | 允许的管理命令 |
 | --- | --- |
-| ADMIN | 配置硬档案、政策、账号、授权及停机，分配角色。包含同一虚拟角色的 OPERATOR、REVIEWER 和 AUDITOR 权限。人工提案仍由提交人以外的有权成员审批。 |
-| OPERATOR | 在授予范围内创建任务、提交提案与查看脱敏运行。不能赋权或审批自己的提案。 |
-| REVIEWER | 可查看分配范围内的待审批必要资料，提交批准或拒绝。审查与资料访问分别授权。 |
-| AUDITOR | 只读审计、版本及脱敏轨迹。无法查看凭据和未获授权原文。 |
+| ADMIN | 管理已获授权的虚拟角色，包括配置、账号、成员、审批、审计与停机。人工提案须由提交人以外的管理员审批。 |
 | SERVICE | 分配给认知、执行与维护进程，各自使用专用服务凭据。执行进程才可获取平台写令牌。 |
 
 判定顺序为停机与绑定 → 平台能力和账号动作授权 → 数据来源和受众 → 退出互动边界与硬规则 → 风险、时段与配额 → 审批模式。任何硬失败优先于允许。外部内容、工具结果和模型输出均为不可信输入，使用结构化 schema、长度上限、纯文本隔离和参数校验。审批前扫描敏感内容、冒名、注入外带、目标和 AI 披露。写作输入隔离负责首道防泄露，输出扫描用于补充拦截。
@@ -336,13 +333,13 @@ SIMULATION 与 LIVE 使用不同部署凭据、队列命名空间和运行标识
 | GET /c/memories · POST /c/memories/{id}/revoke | 读取授权范围内元数据。ADMIN 可撤销来源可用性，返回 authEpoch 和清理任务 ID。 |
 | POST /c/memory-grants · POST /c/memory-grants/{id}/revoke | ADMIN 输入记忆、接收身份及可选账号、用途、受众、开始结束时间、依据。撤销需 reason。 |
 | POST /c/memory-promotions · POST /c/memory-promotions/{id}/decisions | 提交来源与候选摘要。ADMIN 审查并输入决定、reason、If-Match。 |
-| POST /c/runs · GET /c/runs/{id} | OPERATOR 提交 mode、trigger、允许的账号提示及 intent。后端校验与绑定，返回 202 和 Location。详情返回状态、版本、快照摘要与提案引用。 |
-| GET /c/actions · POST /c/actions/{id}/decisions | 待办列表与审批。REVIEWER 提交 APPROVE 或 REJECT、reviewDigest、reason 及 If-Match 对应运行版本，返回新状态。 |
+| POST /c/runs · GET /c/runs/{id} | ADMIN 提交 mode、trigger、允许的账号提示及 intent。后端校验与绑定，返回 202 和 Location。详情返回状态、版本、快照摘要与提案引用。 |
+| GET /c/actions · POST /c/actions/{id}/decisions | 待办列表与审批。ADMIN 提交 APPROVE 或 REJECT、reviewDigest、reason 及 If-Match 对应运行版本，返回新状态。 |
 | POST /c/actions/{id}/reconciliation | 有相应权限的 ADMIN 提交已送达或确认未送达的证据引用及原因。系统核验并推进对账。 |
 | GET /c/audit · GET /c/events | 对象级授权的审计列表与运行事件流。事件流用 SSE，断线后按 Last-Event-ID 续读。 |
-| GET /c/identities/{i}/reflections/{day} | ADMIN 或 AUDITOR 查看指定身份与 UTC 日的反思摘要和偏好候选引用。 |
+| GET /c/identities/{i}/reflections/{day} | ADMIN 查看指定身份与 UTC 日的反思摘要和偏好候选引用。 |
 | GET /c/identities/{i}/goals · POST /c/identities/{i}/goals | 列出该身份的手工和自主目标。ADMIN 可配置手工目标，或在身份版本中授权自主目标的主题、期限和预算。 |
-| GET /c/accounts/{a}/automation-eligibility | ADMIN 或 AUDITOR 查看指定账号的低风险外部自动执行资格。M3 模拟阶段关闭外部 AUTO。 |
+| GET /c/accounts/{a}/automation-eligibility | ADMIN 查看指定账号的低风险外部自动执行资格。M3 模拟阶段关闭外部 AUTO。 |
 | POST /c/identities/{i}/beliefs/{id}/restore | ADMIN 输入 restoreVersion、reason 及 If-Match，证据复核通过后追加新版本。 |
 | POST /v1/webhooks/{platform}/{routeKey} | 原始负载、平台签名和时间字段。验签后持久化。重复已接收事件返回相同语义的 2xx。 |
 

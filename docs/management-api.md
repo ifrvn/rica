@@ -14,11 +14,11 @@
 
 ```powershell
 Read-Host -MaskInput 'Rica password' | pnpm run admin:user add admin --creator
-Read-Host -MaskInput 'Reviewer password' | pnpm run admin:user add reviewer
+Read-Host -MaskInput 'Second administrator password' | pnpm run admin:user add reviewer
 Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 ```
 
-部署管理员可在右上角账号菜单或「成员与审计」打开「管理本地账号」，确认自己的密码后创建或重置普通账号。使用上面的 CLI 初始化和维护部署管理员。新增账号后，在成员列表将角色权限授予其本地用户名。重设密码会使该账号的所有会话失效并移除已登记的 Passkey，角色授权保留。
+部署管理员可在右上角账号菜单或「成员与审计」打开「管理本地账号」，确认自己的密码后创建或重置普通账号。使用上面的 CLI 初始化和维护部署管理员。新增账号后，在「成员与审计」将该本地用户名添加为角色管理员。重设密码会使该账号的所有会话失效并移除已登记的 Passkey，角色授权保留。
 
 ### 网页账号管理接口
 
@@ -36,7 +36,9 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 ## 已开放的入口
 
-角色权限按虚拟角色分别授予。ADMIN 自动拥有该角色的 REVIEWER、AUDITOR 和 OPERATOR 权限，成员列表只显示实际授予的权限。人工提案的提交人不能审批自己的提案。部署级权限仍由本地账号配置授予。
+每个虚拟角色单独维护一份管理员列表。角色管理员可配置角色、管理成员、审批和查看运行及审计记录。人工提案须由提交人以外的管理员审批。创建角色、管理本地登录账号和配置部署插件要求部署级权限。
+
+从旧版本迁移时，现有管理员授权保留，旧的操作员、审批员和审计员授权会撤销。原登录账号与审计记录保留。
 
 以下 `/c` 表示 `/v1/characters/{characterId}`。
 
@@ -44,54 +46,54 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 | 入口 | 权限与操作 |
 | --- | --- |
-| `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。角色详情附当前主体的权限，ADMIN 还可读取已启用的模拟适配器选项。 |
+| `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。角色详情包含已启用的模拟适配器选项。 |
 | `POST /v1/characters`、`PUT /c/core` | 指定主体创建初始暂停角色。ADMIN 提交新核心版本，可省略 `reason`。 |
-| `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | 成员读取。ADMIN 创建初始暂停身份或提交新身份版本，修改时可省略 `reason`。可选字段 `roleProfile.writingPrompt` 最多 4000 个字符，仅 ADMIN 可读。提交新版本时省略该字段即可清除。 |
-| `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 或 AUDITOR 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
-| `GET /c/plugins` | ADMIN 或 AUDITOR 查看部署插件状态、配置是否存在、各进程的脱敏报告，以及可选发布清单的升级预览。预览标出目标组件缺失、降级和契约不兼容。 |
+| `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | ADMIN 读取。ADMIN 创建初始暂停身份或提交新身份版本，修改时可省略 `reason`。可选字段 `roleProfile.writingPrompt` 最多 4000 个字符，仅 ADMIN 可读。提交新版本时省略该字段即可清除。 |
+| `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
+| `GET /c/plugins` | ADMIN 查看部署插件状态、配置是否存在、各进程的脱敏报告，以及可选发布清单的升级预览。预览标出目标组件缺失、降级和契约不兼容。 |
 | `GET /c/plans`、`POST /c/plans`、`PUT /c/plans/{planId}` | ADMIN 浏览、创建和编辑跨身份计划。每个参与项包含同角色下当前绑定的身份、账号和执行事项。创建使用幂等键，编辑使用计划版本。 |
 | `PUT /c/plans/{planId}/state` | ADMIN 按版本暂停或恢复计划。暂停取消尚未执行的模拟运行，恢复前核对参与账号绑定。 |
 | `PUT /v1/deployment-plugins` | 具有创建角色权限的本地部署操作者提交 `INSTALL`、`ENABLE`、`DISABLE` 或已登记的插件配置动作。使用 `If-Match` 指定 `deployment.version`。返回更新后的版本与脱敏设置。 |
-| `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |
+| `GET /c/account-pool` | ADMIN 查询该角色尚未关联身份的账号。 |
 | `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。其他平台的请求体由对应插件定义。 |
 | `POST /c/account-pool/associations` | ADMIN 提交 `registrationId` 和 `identityId`。两者须属于当前角色，关联后初始为暂停。身份已有未撤销账号时返回 `409 IDENTITY_ALREADY_BOUND`。撤销原账号后可关联另一个账号，历史记录保留原绑定。 |
 | `DELETE /c/account-pool/{registrationId}` | ADMIN 提供 `Idempotency-Key` 移除当前角色的未关联账号，并在同一事务调用已登记的平台清理回调。 |
-| `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
-| `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
+| `GET /c/accounts`、`POST /c/accounts` | ADMIN 读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
+| `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 查询指定账号的低风险外部自动执行资格与原因。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。可省略 `reason`。 |
-| `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 或 AUDITOR 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
+| `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
 | `GET /c/memory-grants` | ADMIN 读取共享授权和接收绑定，可按 `memoryId` 筛选。 |
 | `GET /c/identities/{identityId}/conversations` | ADMIN 按当前身份、指定账号与公开或私聊类型分页获取授权选项。私聊选项含会话绑定的联系人。 |
-| `GET /c/memories/{memoryId}/provenance`、`PUT /c/memories/{memoryId}/correction` | ADMIN 或 AUDITOR 读取来源与修订元数据。ADMIN 用修订号作为 If-Match 提交纠错。原授权和派生正文失效。 |
+| `GET /c/memories/{memoryId}/provenance`、`PUT /c/memories/{memoryId}/correction` | ADMIN 读取来源与修订元数据。ADMIN 用修订号作为 If-Match 提交纠错。原授权和派生正文失效。 |
 | `POST /c/memory-grants`、`POST /c/memory-grants/{grantId}/revoke` | ADMIN 创建或撤销用途授权。公开引用绑定指定会话，私聊回复绑定确切的会话与联系人。 |
-| `GET /c/identities/{identityId}/contacts` | ADMIN 或 AUDITOR 分页查看该身份的联系人和联系边界摘要。 |
-| `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 或 AUDITOR 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
-| `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 或 AUDITOR 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
-| `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 或 AUDITOR 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 修改手工目标或取消自主目标。 |
-| `GET /c/identities/{identityId}/reflections/{utcDay}` | ADMIN 或 AUDITOR 查看该身份指定 UTC 日的反思和候选引用。 |
-| `GET /c/identities/{identityId}/beliefs`、`POST /c/identities/{identityId}/beliefs` | ADMIN 或 AUDITOR 分页查看当前观点版本的摘要。ADMIN 使用幂等键提交观点或偏好及其证据。 |
-| `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 或 AUDITOR 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
+| `GET /c/identities/{identityId}/contacts` | ADMIN 分页查看该身份的联系人和联系边界摘要。 |
+| `GET /c/contacts/{contactId}/boundary`、`PUT /c/contacts/{contactId}/boundary` | ADMIN 读取联系人边界。ADMIN 提供理由和 If-Match 修改。受信入站的明确拒绝指令立即阻断该账号下的联系人，解除后仅新运行可行动。 |
+| `GET /c/identities/{identityId}/goals`、`POST /c/identities/{identityId}/goals` | ADMIN 列出该身份的目标。ADMIN 用幂等键创建手工目标。 |
+| `GET /c/identities/{identityId}/goals/{goalId}`、`PUT /c/identities/{identityId}/goals/{goalId}` | ADMIN 读取目标。查询参数 `revision` 可读指定历史版本。ADMIN 用 If-Match 修改手工目标或取消自主目标。 |
+| `GET /c/identities/{identityId}/reflections/{utcDay}` | ADMIN 查看该身份指定 UTC 日的反思和候选引用。 |
+| `GET /c/identities/{identityId}/beliefs`、`POST /c/identities/{identityId}/beliefs` | ADMIN 分页查看当前观点版本的摘要。ADMIN 使用幂等键提交观点或偏好及其证据。 |
+| `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
 | `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
-| `GET /c/memberships`、`POST /c/memberships` | ADMIN 或 AUDITOR 按用户名分页查看当前角色的成员及权限。ADMIN 授予或撤销现有本地账号权限。必须保留至少一名 ADMIN。 |
+| `GET /c/memberships`、`POST /c/memberships` | GET 使用 `after` 按用户名分页，返回 `{ items: [{ subject }], nextCursor }`。POST 带幂等键提交 `{ subject, action, reason }`，`action` 为 `GRANT` 或 `REVOKE`。角色必须保留至少一名管理员。 |
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitment-receipts` | ADMIN 查询当前角色尚未登记承诺的已确认模拟回执，可用 `runId` 筛选。响应包含负责身份、平台、对象和回执时间。 |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记和编辑承诺事项、截止时间和协作身份，也可延期或关闭。负责人和提醒范围由已确认模拟回执确定。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
-| `GET /c/runs`、`POST /c/runs` | ADMIN 与 AUDITOR 按最近运行分页。ADMIN 用幂等键提交 `accountId` 和 `message`，在独立公开模拟会话中排队。角色、身份与账号须启用，账号须匹配已启用的模拟适配器。 |
-| `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 与 AUDITOR 查询脱敏运行轨迹和当前角色的积压。 |
-| `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 或 AUDITOR 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
-| `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 或 AUDITOR 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
-| `GET /c/audit` | ADMIN 和 AUDITOR 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
-| `GET /c/actions`、`GET /c/actions/{actionId}` | REVIEWER 读取模拟待办和经复核的提案预览。列表不含正文。 |
-| `POST /c/actions/{actionId}/decisions` | REVIEWER 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
+| `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。ADMIN 用幂等键提交 `accountId` 和 `message`，在独立公开模拟会话中排队。角色、身份与账号须启用，账号须匹配已启用的模拟适配器。 |
+| `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 查询脱敏运行轨迹和当前角色的积压。 |
+| `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
+| `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
+| `GET /c/audit` | ADMIN 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
+| `GET /c/actions`、`GET /c/actions/{actionId}` | ADMIN 读取模拟待办和经复核的提案预览。列表不含正文。 |
+| `POST /c/actions/{actionId}/decisions` | ADMIN 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
 
-声明幂等键的 POST 请求带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无会话或会话无效返回 401，成员权限不足返回 403，跨角色资源返回 404。
+声明幂等键的 POST 请求带 `Idempotency-Key`。同一主体在同一路径使用相同键和相同输入，24 小时内会得到相同业务结果。键相同但输入不同返回 409。PUT 带强版本头，例如 `If-Match: "1"`。旧数据尚无生效版本时使用 `If-Match: "0"`。缺少版本返回 428，版本过时返回 412。无会话或会话无效返回 401，缺少角色管理员授权或请求跨角色资源返回 404。
 
 分页列表默认 25 条，最多 100 条。目标列表按单个身份返回当前版本。后续请求通常把响应的 `nextCursor` 作为 `cursor` 传回。成员列表按用户名分页，使用 `after`。审计记录、状态修改和幂等结果一起提交，审计中保留摘要哈希及请求 ID。授权变化推进角色授权纪元，并沿用旧草稿清理规则。
 
 ## 身份状态规则与每日精力
 
-ADMIN 可在身份档案的 `roleProfile.stateRule` 配置动机和模拟情绪。`motivationHalfLifeHours` 与 `affectHalfLifeHours` 可在 1 至 168 小时之间设置。`deltas.POST`、`deltas.MENTION` 和 `deltas.REPLY` 各含七个数，依次为探索、表达、社交、休息、愉悦度、唤醒度和精力，每项范围为 −0.15 至 0.15。ADMIN 和 AUDITOR 可在身份列表读取规则。省略规则时采用内置 v1。
+ADMIN 可在身份档案的 `roleProfile.stateRule` 配置动机和模拟情绪。`motivationHalfLifeHours` 与 `affectHalfLifeHours` 可在 1 至 168 小时之间设置。`deltas.POST`、`deltas.MENTION` 和 `deltas.REPLY` 各含七个数，依次为探索、表达、社交、休息、愉悦度、唤醒度和精力，每项范围为 −0.15 至 0.15。ADMIN 可在身份列表读取规则。省略规则时采用内置 v1。
 
 每个事件固定使用其身份版本的配置。重放以当前折叠的事件规则计算前一事件至该事件的衰减和增量。读取状态时使用最后折叠事件的半衰期，已保存的修订保持原值。
 
@@ -142,7 +144,7 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 ## 出箱隔离与恢复
 
-在控制台打开「运行 → 失败任务」。管理员可打开关联运行并填写理由恢复隔离事件，审计员可查看。若代次发生变化，先重新核对事件再提交。
+在控制台打开「运行 → 失败任务」。管理员可打开关联运行并填写理由恢复隔离事件。若代次发生变化，先重新核对事件再提交。
 
 每个出箱代次最多尝试四次，含首次和三次重试。Worker 在开始处理前以 PostgreSQL 记录一次尝试并取得 30 秒租约。进程崩溃后，过期租约不会返还尝试次数。耗尽后隔离事件，保留原运行和事件。监控中的 `outbox.quarantined` 单独计数，`outbox.count` 包含所有未完成事件。
 

@@ -86,7 +86,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
       responses: { ...errors, 200: success(newbiAccountPreview) },
     }), async (c) => {
       const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-      await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN']))
+      await db.$transaction((tx) => management.authorize(tx, scope))
       c.header('Cache-Control', 'no-store')
       return c.json(newbiAccountPreview.parse(await identifyNewbi(c.req.valid('json').credential)), 200)
     })
@@ -171,7 +171,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
       const requestId = c.get('requestId')
       const result = await management.executeManagementCommand(db, {
         ...scope, operation: 'newbi.reply.review', targetScope: characterId + '/' + replyId, input, requestId,
-        key: c.req.valid('header')['idempotency-key'], roles: ['REVIEWER'],
+        key: c.req.valid('header')['idempotency-key'],
       }, (tx) => decideNewbiReply(tx, scope, replyId, input, requireNewbi))
       return c.json({ ...result, requestId }, 200)
     })
@@ -183,7 +183,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
     }), async (c) => {
       const { characterId, replyId } = c.req.valid('param')
       const { retry } = c.req.valid('json')
-      const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId, ['ADMIN'])
+      const reply = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
       const eligible = retry ? ['UNKNOWN', 'IN_FLIGHT'].includes(reply.status) : reply.status === 'READY'
       if (!eligible) throw new management.ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is not eligible to send')
       await requireNewbi(reply.endpoint)
@@ -243,7 +243,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
     }), async (c) => {
       const { characterId, accountId } = c.req.valid('param')
       await db.$transaction(async (tx) => {
-        await management.authorize(tx, { characterId, actor: c.get('actor') }, ['ADMIN'])
+        await management.authorize(tx, { characterId, actor: c.get('actor') })
         const account = await tx.platformAccount.findFirst({
           where: { id: accountId, characterId, platform: 'newbi' },
           select: { status: true, instanceKey: true, identity: { select: { status: true, character: { select: { status: true } } } } },

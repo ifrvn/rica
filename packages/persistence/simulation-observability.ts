@@ -27,7 +27,7 @@ type RunListQuery = Omit<z.infer<typeof simulationRunQuery>, 'limit'> & { limit:
 
 export async function listSimulationRuns(db: PrismaClient, scope: Scope, { limit, cursor, state, identityId, accountId, from, through }: RunListQuery) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const rows = await tx.$queryRaw<(Omit<z.infer<typeof simulationRunSummary>, 'createdAt'> & { createdAt: Date })[]>`
       SELECT * FROM public.rica_console_simulation_runs(
         ${scope.characterId}::uuid, ${cursor ?? null}::uuid, ${limit + 1}::int,
@@ -42,12 +42,10 @@ export async function listSimulationRuns(db: PrismaClient, scope: Scope, { limit
 
 export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId: string) {
   return db.$transaction(async (tx) => {
-    const roles = await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
-    const canReadTranscript = roles.some(({ role }) => role === 'ADMIN')
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_replay_run_with_time(${scope.characterId}::uuid, ${runId}::uuid) ||
-        jsonb_build_object('transcript', CASE WHEN ${canReadTranscript}
-          THEN public.rica_console_simulation_transcript(${scope.characterId}::uuid, ${runId}::uuid) END) AS view
+        jsonb_build_object('transcript', public.rica_console_simulation_transcript(${scope.characterId}::uuid, ${runId}::uuid)) AS view
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
     return runReplayView.parse(row.view)
@@ -56,7 +54,7 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
 
 export async function readSimulationDailyMetrics(db: PrismaClient, scope: Scope, { from, through }: { from: string; through: string }) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ days: unknown; today: string }[]>`
       SELECT public.rica_simulation_daily_metrics(${scope.characterId}::uuid, ${from}::date, ${through}::date) AS days,
         (statement_timestamp() AT TIME ZONE 'UTC')::date::text AS today
@@ -87,7 +85,7 @@ export async function readSimulationDailyMetrics(db: PrismaClient, scope: Scope,
 
 export async function readQuarantinedOutbox(db: PrismaClient, scope: Scope, after?: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ events: unknown }[]>`
       SELECT public.rica_quarantined_outbox(${scope.characterId}::uuid, ${after ?? null}::uuid) AS events
     `
@@ -109,7 +107,7 @@ export async function retryQuarantinedOutbox(tx: Prisma.TransactionClient, scope
 
 export async function readSimulationBacklog(db: PrismaClient, scope: Scope) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_simulation_backlog(${scope.characterId}::uuid) AS view
     `

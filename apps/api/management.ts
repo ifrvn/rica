@@ -169,7 +169,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.getCharacter(db, { ...c.req.valid('param'), actor: c.get('actor') })
     c.header('ETag', `"${result.version ?? 0}"`)
     const platforms = schema.accountInput.shape.platform.options
-    const simulationPlatforms = result.roles.includes('ADMIN') ? platforms.filter((id) => resolveAdapter(id)) : []
+    const simulationPlatforms = platforms.filter((id) => resolveAdapter(id))
     const fields = await Promise.all(plugins.map(async ({ workspace }) => workspace && z.object(workspace.fields).parse(await workspace.read())))
     return c.json({ ...result, simulationPlatforms, ...Object.assign({}, ...fields) }, 200)
   })
@@ -234,7 +234,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     responses: { ...errors, 200: success(statusView) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
+    await db.$transaction((tx) => management.authorize(tx, scope))
     const current = await pluginStatus()
     const fields = Object.assign({}, ...await Promise.all(plugins.map(async ({ status }) =>
       status && z.object(status.fields).parse(await status.read(scope.characterId)))))
@@ -726,7 +726,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const requestId = c.get('requestId')
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'action.review', targetScope: characterId + '/' + actionId,
-      input: { input, expected }, requestId, key: headers['idempotency-key'], roles: ['REVIEWER'],
+      input: { input, expected }, requestId, key: headers['idempotency-key'],
     }, (tx) => decideReviewAction(tx, scope, actionId, expected, input, resolveAdapter))
     if (result.status === 'CANCELED' || result.status === 'EXPIRED') {
       return c.json(error(requestId, 'STALE_REVIEW', 'Proposal is no longer eligible for review'), 409)

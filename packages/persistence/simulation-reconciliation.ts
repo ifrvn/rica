@@ -13,7 +13,7 @@ async function evidence(tx: Prisma.TransactionClient, characterId: string, actio
 
 export async function readSimulationReconciliation(db: PrismaClient, scope: Scope, actionId: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     return evidence(tx, scope.characterId, actionId)
   }, { isolationLevel: 'RepeatableRead' })
 }

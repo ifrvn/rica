@@ -46,7 +46,7 @@ const owner = createDatabase(config.databaseUrl)
 const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
-const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'thread-auditor'])
+const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'nonmember'])
 let connectorEndpoint: string | undefined
 const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>,
   pollConnector?: NewbiManagementOptions['pollConnector'],
@@ -122,7 +122,7 @@ before(async () => {
   assert.equal(account.status, 201, JSON.stringify(account.body))
   accountA = account.body.id
   const role = await request('POST', characterPath(a) + '/memberships', {
-    key: 'role-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Reviewer fixture' },
+    key: 'role-reviewer', data: { subject: 'reviewer', action: 'GRANT', reason: 'Reviewer fixture' },
   })
   assert.equal(role.status, 200, JSON.stringify(role.body))
 })
@@ -218,7 +218,7 @@ test('local authentication enforces origin, membership and session revocation', 
     assert.equal(user.actorId, actorId(localIssuer, username))
     assert.equal(user.canCreate, true)
     await owner.managementMembership.create({ data: {
-      characterId: b, issuer: localIssuer, subject: username, role: 'AUDITOR',
+      characterId: b, issuer: localIssuer, subject: username,
     } })
     assert.equal((await submit('login', { username, password: oldPassword }, '', 'https://foreign.example.test')).status, 403)
     assert.equal((await submit('login', { username, password: newPassword })).status, 401)
@@ -315,7 +315,7 @@ test('deployment account management leaves role grants scoped and revokes creden
     assert.equal(user.canCreate, false)
     const userCookie = await login(name, password)
     assert.equal((await call('GET', '/v1' + characterPath(a), userCookie)).status, 404)
-    await owner.managementMembership.create({ data: { characterId: a, issuer: localIssuer, subject: name, role: 'ADMIN' } })
+    await owner.managementMembership.create({ data: { characterId: a, issuer: localIssuer, subject: name } })
     assert.equal((await call('GET', '/v1' + characterPath(a), userCookie)).status, 200)
     assert.equal((await call('GET', users, userCookie)).status, 403)
     assert.equal((await call('PUT', reset, userCookie, { password: replacement, currentPassword: password })).status, 403)
@@ -361,40 +361,39 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
   assert.equal(catalog.status, 200)
   assert.equal(catalog.body.services.length, 5)
   assert.ok(catalog.body.services.every(({ report }: { report: unknown }) => report === null))
-  assert.equal((await request('GET', characterPath(a) + '/plugins', { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', characterPath(a) + '/plugins', { actor: 'nonmember' })).status, 404)
   assert.equal((await request('GET', characterPath(a) + '/plugins', { actor: 'admin-b' })).status, 404)
 
-  const reviewerWorkspace = await request('GET', characterPath(a), { actor: 'reviewer' })
-  assert.equal(reviewerWorkspace.status, 200)
-  assert.deepEqual(reviewerWorkspace.body.roles, ['REVIEWER'])
-  assert.deepEqual(reviewerWorkspace.body.simulationPlatforms, [])
   const adminWorkspace = await request('GET', characterPath(a))
   assert.equal(adminWorkspace.status, 200)
-  assert.deepEqual(adminWorkspace.body.roles, ['ADMIN'])
   assert.deepEqual(adminWorkspace.body.simulationPlatforms, ['mock-a', 'mock-b'])
   const membersPath = characterPath(a) + '/memberships'
   const firstMembers = await request('GET', membersPath + '?limit=1')
   assert.equal(firstMembers.status, 200, JSON.stringify(firstMembers.body))
-  assert.deepEqual(firstMembers.body.items, [{ subject: 'admin-a', roles: ['ADMIN'] }])
+  assert.deepEqual(firstMembers.body.items, [{ subject: 'admin-a' }])
   assert.equal(firstMembers.body.nextCursor, 'admin-a')
   assert.deepEqual((await request('GET', membersPath + '?limit=1&after=admin-a')).body.items,
-    [{ subject: 'reviewer', roles: ['REVIEWER'] }])
-  assert.equal((await request('GET', membersPath, { actor: 'reviewer' })).status, 403)
+    [{ subject: 'reviewer' }])
+  assert.equal((await request('GET', membersPath, { actor: 'reviewer' })).status, 200)
   assert.equal((await request('GET', membersPath, { actor: 'admin-b' })).status, 404)
   assert.equal((await request('POST', characterPath(a) + '/identities', {
-    actor: 'reviewer', key: 'should-not-create', data: { slug: 'forbidden', roleProfile: {} },
-  })).status, 403)
+    actor: 'nonmember', key: 'should-not-create', data: { slug: 'forbidden', roleProfile: {} },
+  })).status, 404)
   assert.equal((await request('POST', characterPath(a) + '/accounts', {
     key: 'foreign-identity', data: {
       identityId: identityB, platform: 'mock-b', instanceKey: 'integration', remoteAccountId: 'foreign',
     },
   })).status, 404)
   assert.equal((await request('POST', characterPath(a) + '/memberships', {
-    key: 'last-admin', data: { subject: 'admin-a', role: 'ADMIN', action: 'REVOKE', reason: 'Attempt lockout' },
-  })).body.error.code, 'LAST_ADMIN')
-  assert.equal((await request('POST', characterPath(a) + '/memberships', {
-    key: 'remove-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'REVOKE', reason: 'Remove access' },
+    key: 'remove-reviewer', data: { subject: 'reviewer', action: 'REVOKE', reason: 'Remove access' },
   })).status, 200)
+  assert.equal((await request('POST', characterPath(a) + '/memberships', {
+    key: 'last-admin', data: { subject: 'admin-a', action: 'REVOKE', reason: 'Attempt lockout' },
+  })).body.error.code, 'LAST_ADMIN')
+  assert.equal((await request('GET', characterPath(a), { actor: 'reviewer' })).status, 404)
+  assert.equal((await request('POST', membersPath, {
+    key: 'reject-old-grant', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Old payload' },
+  })).status, 422)
   assert.equal((await request('GET', characterPath(a), { actor: 'reviewer' })).status, 404)
   assert.deepEqual((await request('GET', '/characters')).body.items.map(({ id }: { id: string }) => id), [a])
 })
@@ -490,12 +489,12 @@ async function proposeReview(accountId = accountA, contactId?: string, model = s
 
 function actionPath(id: string) { return characterPath(a) + '/actions/' + id }
 
-test('role administrators and reviewers can see the draft and concurrent approval has one effect', async () => {
+test('role administrators can see the draft and concurrent approval has one effect', async () => {
   await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
   await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
   await owner.platformAccount.update({ where: { id: accountA }, data: { status: 'ACTIVE' } })
   const role = await request('POST', characterPath(a) + '/memberships', {
-    key: 'enable-review', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Review fixture' },
+    key: 'enable-review', data: { subject: 'reviewer', action: 'GRANT', reason: 'Review fixture' },
   })
   assert.equal(role.status, 200)
   const { action, proposalText } = await proposeReview()
@@ -912,7 +911,7 @@ test('restart and adapter replacement reconcile in-flight attempts without repla
     assert.equal(unknown.body.proposal.receiptAt, null)
 
     const path = actionPath(lost.id) + '/reconciliation'
-    assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', path, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
     const pending = await request('GET', path)
     assert.equal(pending.body.evidenceRef, null)
@@ -1016,7 +1015,7 @@ test('parallel schedule scans catch up only the latest eligible slot and edits c
       scheduleKey: 'daily-fixture', accountId: accountA, conversationId: conversation.id, enabled: true,
       zone: 'UTC', rule: { kind: 'DAILY', localTime: '09:00' },
     }
-    assert.equal((await request('POST', path, { actor: 'reviewer', key: 'forbidden-schedule', data: plan })).status, 403)
+    assert.equal((await request('POST', path, { actor: 'nonmember', key: 'forbidden-schedule', data: plan })).status, 404)
     const created = await request('POST', path, { key: 'daily-fixture', data: plan })
     assert.equal(created.status, 201, JSON.stringify(created.body))
     const stale = await request('POST', path, {
@@ -1281,13 +1280,13 @@ test('commitments require a confirmed receipt and preserve its recipient across 
   assert.equal((await request('POST', path, { key: 'unconfirmed-commitment', data })).status, 404)
   assert.deepEqual((await request('GET', candidates)).body.items, [])
   await confirmCommitmentReceipt(action.id)
-  assert.equal((await request('GET', candidates, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', candidates, { actor: 'nonmember' })).status, 404)
   const choices = await request('GET', candidates)
   assert.equal(choices.status, 200, JSON.stringify(choices.body))
   assert.deepEqual(choices.body.items.map(({ id, identityId, contactId: recipient }: { id: string; identityId: string; contactId: string }) =>
     ({ id, identityId, recipient })), [{ id: action.id, identityId: identityA, recipient: contactId }])
   assert.deepEqual((await request('GET', characterPath(b) + '/commitment-receipts?runId=' + runId, { actor: 'admin-b' })).body.items, [])
-  assert.equal((await request('POST', path, { actor: 'reviewer', key: 'reviewer-commitment', data })).status, 403)
+  assert.equal((await request('POST', path, { actor: 'nonmember', key: 'reviewer-commitment', data })).status, 404)
   assert.equal((await request('POST', characterPath(b) + '/commitments', {
     actor: 'admin-b', key: 'foreign-commitment', data,
   })).status, 404)
@@ -1409,11 +1408,11 @@ test('run replay masks expired and revoked evidence and keeps the original trace
   const root = characterPath(a)
   const path = root + '/runs/' + action.runId + '/replay'
   const membership = await request('POST', root + '/memberships', {
-    key: 'observability-auditor', data: { subject: 'auditor', role: 'AUDITOR', action: 'GRANT', reason: 'Audit fixture' },
+    key: 'observability-auditor', data: { subject: 'auditor', action: 'GRANT', reason: 'Audit fixture' },
   })
   assert.equal(membership.status, 200)
   assert.equal((await request('GET', path, { actor: null })).status, 401)
-  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path, { actor: 'nonmember' })).status, 404)
   assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
   assert.equal((await request('GET', characterPath(b) + '/runs/' + action.runId + '/replay', { actor: 'admin-b' })).status, 404)
 
@@ -1452,7 +1451,7 @@ test('monitoring reports only the current character’s backlog without triggeri
   await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
   const before = await request('GET', path, { actor: 'auditor' })
   assert.equal(before.status, 200, JSON.stringify(before.body))
-  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path, { actor: 'nonmember' })).status, 404)
   assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
   const otherBefore = await request('GET', characterPath(b) + '/monitoring', { actor: 'admin-b' })
   assert.equal(otherBefore.status, 200)
@@ -1538,7 +1537,7 @@ test('grant and account management enforce bound references and revoke access wi
   })
   assert.ok(choices.body.items.every((item: { channel: string }) => item.channel === 'PRIVATE'))
   assert.equal((await request('GET', options + '&cursor=' + audience.id)).status, 422)
-  assert.equal((await request('GET', options, { actor: 'auditor' })).status, 403)
+  assert.equal((await request('GET', options, { actor: 'nonmember' })).status, 404)
   const wrongIdentity = path + '/identities/' + identityB + '/conversations?accountId=' + accountA
   assert.equal((await request('GET', wrongIdentity)).status, 404)
   const privateData = { ...data, purpose: 'PRIVATE_REPLY', audience: undefined,
@@ -1608,11 +1607,11 @@ test('memory correction revokes old citations and descendants and keeps a metada
   assert.equal(detail.body.memory.id, memoryId)
   assert.equal(detail.body.memory.createdAt, (await owner.memory.findUniqueOrThrow({ where: { id: memoryId } })).createdAt.toISOString())
   assert.equal('content' in detail.body.memory, false)
-  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path, { actor: 'nonmember' })).status, 404)
   assert.equal((await request('GET', characterPath(b) + '/memories/' + memoryId, { actor: 'admin-b' })).status, 404)
   assert.equal((await request('GET', characterPath(b) + '/memories/' + memoryId + '/provenance', { actor: 'admin-b' })).status, 404)
   const options = { ifMatch: '"1"', data: { content: 'Corrected claim', reason: 'Check source' } }
-  assert.equal((await request('PUT', path + '/correction', { ...options, actor: 'reviewer' })).status, 403)
+  assert.equal((await request('PUT', path + '/correction', { ...options, actor: 'nonmember' })).status, 404)
   const outcomes = await Promise.all([request('PUT', path + '/correction', options), request('PUT', path + '/correction', options)])
   assert.deepEqual(outcomes.map(({ status }) => status).sort(), [200, 412])
   assert.equal((await owner.memory.findUniqueOrThrow({ where: { id: memoryId } })).content, 'Corrected claim')
@@ -1677,12 +1676,12 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
     assert.equal(contactList.status, 200, JSON.stringify(contactList.body))
     const contactRow = contactList.body.items.find((item: { id: string }) => item.id === contact.id)
     assert.deepEqual(contactRow, { id: contact.id, accountId, version: 1, blocked: true, label: contact.displayLabel })
-    assert.equal((await request('GET', contactPath, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', contactPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await owner.contact.findUniqueOrThrow({ where: { id: otherContact.id } })).noContactAt, null)
     assert.equal(await owner.managementAudit.count({ where: { targetId: contact.id, operation: 'contact.opt_out' } }), 1)
 
     const options = { ifMatch: '"1"', data: { blocked: false, reason: 'Verified renewed consent' } }
-    assert.equal((await request('PUT', path, { ...options, actor: 'reviewer' })).status, 403)
+    assert.equal((await request('PUT', path, { ...options, actor: 'nonmember' })).status, 404)
     assert.equal((await request('PUT', path, { ...options, ifMatch: '"0"' })).status, 412)
     assert.equal((await request('PUT', path, options)).status, 200)
     await executeSimulation(executor, old.id, simulationPlatforms.resolveAdapter, async () => assert.fail('Old approval was revived'))
@@ -1786,7 +1785,7 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
   assert.deepEqual(summaries.body.items.find((item: { id: string }) => item.id === initial.body.id),
     { id: initial.body.id, kind: 'PREFERENCE', version: 3 })
   assert.equal((await request('GET', beliefCollection(identityB))).status, 404)
-  assert.equal((await request('GET', collection, { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', collection, { actor: 'nonmember' })).status, 404)
 
   assert.equal(await revokeMemoryAccess(owner, { kind: 'SOURCE', characterId: a, id: first.sourceId }), true)
   for (const url of [path, path + '?revision=1']) {
@@ -1959,7 +1958,7 @@ test('external low-risk automation is assessed per account without enabling a si
   const paused = await newSimulationAccount(identityId)
   await owner.platformAccount.update({ where: { id: paused }, data: { status: 'PAUSED' } })
   const path = (id: string) => characterPath(a) + '/accounts/' + id + '/automation-eligibility'
-  assert.equal((await request('GET', path(active), { actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', path(active), { actor: 'nonmember' })).status, 404)
   assert.equal((await request('GET', path(active), { actor: 'admin-b' })).status, 404)
   const activeView = await request('GET', path(active))
   const pausedView = await request('GET', path(paused))
@@ -2086,7 +2085,7 @@ test('manual goal cap is atomic and replay pins the identity version of active g
   assert.equal((await request('GET', foreign, { actor: 'admin-b' })).status, 404)
   const otherIdentity = await owner.identity.findFirstOrThrow({ where: { characterId: a, id: { not: identityA } } })
   assert.equal((await request('GET', characterPath(a) + '/identities/' + otherIdentity.id + '/goals/' + id)).status, 404)
-  assert.equal((await request('PUT', goalPath, { ifMatch: '"1"', data, actor: 'reviewer' })).status, 403)
+  assert.equal((await request('PUT', goalPath, { ifMatch: '"1"', data, actor: 'nonmember' })).status, 404)
 
   const { action } = await proposeReview(await newSimulationAccount())
   const replayPath = characterPath(a) + '/runs/' + action.runId + '/replay'
@@ -2147,7 +2146,7 @@ test('late state inputs replay with the rule configuration pinned to each event'
       deltas: { POST: [0.10, 0, 0, 0, 0, 0, 0], MENTION: zero, REPLY: zero },
     }
     const options = { ifMatch: '"1"', data: { roleProfile: { stateRule }, reason: 'Tune simulation rules' } }
-    assert.equal((await request('PUT', path, { ...options, actor: 'reviewer' })).status, 403)
+    assert.equal((await request('PUT', path, { ...options, actor: 'nonmember' })).status, 404)
     assert.equal((await request('PUT', path, {
       ...options, data: { ...options.data, roleProfile: { stateRule: { ...stateRule,
         deltas: { ...stateRule.deltas, POST: [0.16, 0, 0, 0, 0, 0, 0] },
@@ -2173,7 +2172,7 @@ test('late state inputs replay with the rule configuration pinned to each event'
     const find = (result: Awaited<ReturnType<typeof request>>) =>
       result.body.items.find(({ id }: { id: string }) => id === account.identityId).profile
     assert.deepEqual(find(await request('GET', profilePath)).stateRule, stateRule)
-    assert.ok(!('stateRule' in find(await request('GET', profilePath, { actor: 'reviewer' }))))
+    assert.equal((await request('GET', profilePath, { actor: 'nonmember' })).status, 404)
   } finally {
     await runtime.$disconnect()
   }
@@ -2188,7 +2187,7 @@ test('approved energy is immutable and visible only within its character and UTC
   const path = characterPath(a) + '/daily-energy'
   const input = { utcDay, energy: 'HIGH', reason: 'Approved abstract projection' }
   const options = { key: 'daily-energy-fixture', data: input }
-  assert.equal((await request('POST', path, { ...options, actor: 'reviewer' })).status, 403)
+  assert.equal((await request('POST', path, { ...options, actor: 'nonmember' })).status, 404)
   assert.equal((await request('POST', path, { ...options, data: { ...input, utcDay: clock.day } })).status, 422)
   const approved = await request('POST', path, options)
   assert.equal(approved.status, 201)
@@ -2332,7 +2331,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
 
     const suffix = '/outbox/' + eventId + '/retry'
     const options = { ifMatch: '"0"', data: { reason: 'Model provider recovered' } }
-    assert.equal((await request('POST', characterPath(a) + suffix, { ...options, actor: 'reviewer' })).status, 403)
+    assert.equal((await request('POST', characterPath(a) + suffix, { ...options, actor: 'nonmember' })).status, 404)
     assert.equal((await request('POST', characterPath(b) + suffix, { ...options, actor: 'admin-b' })).status, 404)
     const retried = await Promise.all(Array.from({ length: 2 }, () => request('POST', characterPath(a) + suffix, options)))
     assert.deepEqual(retried.map(({ status }) => status).sort(), [200, 412])
@@ -2563,7 +2562,7 @@ test('M4 evaluates fourteen simulated days of scope, duplicate reviews, frequenc
   const characterId: string = created.body.id
   characterIds.push(characterId)
   const role = await request('POST', characterPath(characterId) + '/memberships', {
-    key: 'history-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'History fixture' },
+    key: 'history-reviewer', data: { subject: 'reviewer', action: 'GRANT', reason: 'History fixture' },
   })
   assert.equal(role.status, 200, JSON.stringify(role.body))
   const identityId = await reflectionIdentity({ duplicateReview }, characterId)
@@ -2724,10 +2723,10 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   characterIds.push(characterId)
   const base = characterPath(characterId)
   assert.equal((await request('POST', base + '/memberships', {
-    key: 'newbi-lifecycle-reviewer', data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Review fixture' },
+    key: 'newbi-lifecycle-reviewer', data: { subject: 'reviewer', action: 'GRANT', reason: 'Review fixture' },
   })).status, 200)
   assert.equal((await request('POST', base + '/memberships', {
-    key: 'newbi-lifecycle-admin', data: { subject: 'admin-b', role: 'ADMIN', action: 'GRANT', reason: 'Admin review fixture' },
+    key: 'newbi-lifecycle-admin', data: { subject: 'admin-b', action: 'GRANT', reason: 'Admin review fixture' },
   })).status, 200)
   const { id: accountId } = await owner.platformAccount.create({ data: {
     characterId, identityId: await reflectionIdentity({}, characterId), status: 'ACTIVE',
@@ -2753,7 +2752,7 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   assert.equal(observed.status, 200, JSON.stringify(observed.body))
   assert.deepEqual(observed.body.newbiConnections, { activeAccounts: 1, readFailures: 1, lastReadAt: checkedAt.toISOString(),
     hasReceipt: false, hasUnknown: false })
-  assert.equal((await connectionStatus(characterId, 'reviewer')).status, 403)
+  assert.equal((await connectionStatus(characterId, 'nonmember')).status, 404)
   assert.deepEqual((await connectionStatus(b, 'admin-b')).body.newbiConnections,
     { activeAccounts: 0, readFailures: 0, lastReadAt: null, hasReceipt: false, hasUnknown: false })
   const proposal = await propose()
@@ -2872,9 +2871,9 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const resume = (key: string, actor = 'admin-a') => request('POST', characterPath(a) + '/controls', { actor, key,
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
     const checkPath = prefix + '/accounts/' + accountId + '/check'
-    assert.equal((await request('POST', checkPath, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('POST', checkPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('POST', characterPath(b) + '/newbi/accounts/' + accountId + '/check', { actor: 'admin-b' })).status, 404)
-    assert.equal((await resume('newbi-reviewer-resume', 'reviewer')).status, 403)
+    assert.equal((await resume('newbi-unassigned-resume', 'nonmember')).status, 404)
     currentAgent = randomUUID()
     assert.equal((await request('POST', checkPath)).body.verified, false)
     const unverified = await resume('newbi-test-resume')
@@ -2932,13 +2931,9 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     await assert.rejects(executor.newbiReply.count(), /permission denied/i)
 
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
-    const auditAccess = await request('POST', characterPath(a) + '/memberships', {
-      key: 'newbi-thread-auditor', data: { subject: 'thread-auditor', role: 'AUDITOR', action: 'GRANT', reason: 'Thread visibility fixture' },
-    })
-    assert.equal(auditAccess.status, 200)
     const threadPath = approved.path + '/thread'
     const readsBeforeThread = reads
-    assert.equal((await request('GET', threadPath, { target: sendApp, actor: 'thread-auditor' })).status, 403)
+    assert.equal((await request('GET', threadPath, { target: sendApp, actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(b) + '/newbi/replies/' + approved.id + '/thread', { target: sendApp, actor: 'admin-b' })).status, 404)
     assert.equal(reads, readsBeforeThread)
     currentAgent = randomUUID()
@@ -2974,7 +2969,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid
     `, /Approval must bind the reply executor/)
     assert.equal((await approved.decide('APPROVE')).status, 200)
-    assert.equal((await sendFromConsole(approved.path, 'reviewer')).status, 403)
+    assert.equal((await sendFromConsole(approved.path, 'nonmember')).status, 404)
     assert.equal((await sendFromConsole(characterPath(b) + '/newbi/replies/' + approved.id, 'admin-b')).status, 404)
     assert.equal((await sendFromConsole(approved.path, 'admin-a', true)).status, 409)
     assert.deepEqual(sendReports, [])
@@ -3060,7 +3055,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       ['newbi.reply.send', lost.id, actorId(issuer, 'admin-a')],
       ['newbi.reply.retry', lost.id, actorId(issuer, 'admin-a')],
     ])
-    assert.equal((await request('GET', auditPath, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', auditPath, { actor: 'nonmember' })).status, 404)
     assert.deepEqual((await request('GET', characterPath(b) + '/audit?targetId=' + lost.id, { actor: 'admin-b' })).body,
       { items: [], nextCursor: null })
 
@@ -3119,7 +3114,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const closeReason = 'Checked the discussion and ended delivery attempts'
     const close = (actor: string, key: string, path = limited.path) => request('POST', path + '/close',
       { actor, key, data: { reason: closeReason } })
-    assert.equal((await close('reviewer', 'newbi-close-reviewer')).status, 403)
+    assert.equal((await close('nonmember', 'newbi-close-unassigned')).status, 404)
     assert.equal((await close('admin-a', 'newbi-close-ready', unrelated.path)).status, 409)
     assert.equal((await close('admin-a', 'newbi-close')).status, 200)
     assert.equal((await close('admin-a', 'newbi-close')).status, 200)
@@ -3230,7 +3225,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal((await request('POST', pool, { key: 'newbi-events-mismatch', data: { ...data, agentId: otherAgentId } })).status, 409)
     assert.equal((await request('POST', pool, { key: 'newbi-events-register', data: { ...data, credential: 'nbi_agent_' + 'x'.repeat(43) } })).body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
     connectorEndpoint = endpoint
-    assert.equal((await request('POST', pool, { actor: 'reviewer', key: 'newbi-events-forbidden', data })).status, 403)
+    assert.equal((await request('POST', pool, { actor: 'nonmember', key: 'newbi-events-forbidden', data })).status, 404)
     assert.equal((await request('POST', pool, { key: 'newbi-events-spoof', data: { ...data, agentId, endpoint } })).status, 422)
     const registered = await request('POST', pool, { key: 'newbi-events-register', data })
     assert.equal(registered.status, 201, JSON.stringify(registered.body))
@@ -3251,7 +3246,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.deepEqual(refreshed.newbiProfile, row.newbiProfile)
     assert.equal(entries.find(({ id }: { id: string }) => id === other.body.id).remoteAccountId, otherAgentId)
     const removePath = pool + '/' + other.body.id
-    assert.equal((await request('DELETE', removePath, { key: 'remove-other', actor: 'reviewer' })).status, 403)
+    assert.equal((await request('DELETE', removePath, { key: 'remove-other', actor: 'nonmember' })).status, 404)
     assert.equal((await request('DELETE', characterPath(b) + '/account-pool/' + other.body.id, {
       key: 'remove-foreign', actor: 'admin-b',
     })).status, 404)
@@ -3318,7 +3313,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const readerReport = async () => (await readPluginStatus(statusRedis)).services.find(({ service }) => service === 'connector-reader')?.report
     const previousReport = await readerReport()
     const pollPath = character + inbox + '/poll'
-    assert.equal((await request('POST', pollPath, { target, actor: 'auditor' })).status, 403)
+    assert.equal((await request('POST', pollPath, { target, actor: 'nonmember' })).status, 404)
     assert.equal((await request('POST', characterPath(b) + inbox + '/poll', { target, actor: 'admin-b' })).status, 404)
     assert.equal(reports.length, 0)
     assert.deepEqual(await readerReport(), previousReport)
@@ -3362,13 +3357,10 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(firstInbox.body.readError, null)
     assert.equal(firstInbox.body.agentId, agentId)
     assert.equal(Date.parse(firstInbox.body.lastSucceededAt), caughtUp.lastSucceededAt?.getTime())
-    const auditorInbox = await request('GET', character + inbox, { actor: 'auditor' })
-    assert.equal(auditorInbox.status, 200, JSON.stringify(auditorInbox.body))
-    assert.equal(auditorInbox.body.lastSucceededAt, firstInbox.body.lastSucceededAt)
-    assert.equal(auditorInbox.body.items, null)
+
     assert.equal(JSON.stringify(firstInbox.body).includes(secret), false)
     await assert.rejects(management.$queryRaw`SELECT cursor FROM public.newbi_event_checkpoints`, /permission denied/i)
-    assert.equal((await request('GET', character + inbox, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', character + inbox, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(b) + inbox, { actor: 'admin-b' })).status, 404)
     await assert.rejects(db.newbiEvent.count(), /permission denied/i)
     await assert.rejects(db.$queryRaw`SELECT public.rica_claim_newbi_reply(null,false,null,null,null)`, /permission denied/i)
@@ -3503,12 +3495,7 @@ test('three identities on two platforms reach separate approved simulation recei
     for (const [style, prompt] of prompts) {
       assert.equal(adminProfiles.body.items.find(({ slug }: { slug: string }) => slug === 'e2e-' + style).profile.writingPrompt, prompt)
     }
-    for (const actor of ['auditor', 'reviewer']) {
-      const view = await request('GET', identitiesPath, { actor })
-      assert.equal(view.status, 200)
-      assert.ok(view.body.items.some(({ slug }: { slug: string }) => slug === 'e2e-formal'))
-      assert.ok(!view.body.items.some(({ profile }: { profile?: { writingPrompt?: string } }) => profile?.writingPrompt !== undefined))
-    }
+    assert.equal((await request('GET', identitiesPath, { actor: 'nonmember' })).status, 404)
 
     const ids = runs.map(({ id }) => id)
     const observedPrompts = new Map<string, string | undefined>()
@@ -3598,16 +3585,13 @@ test('console simulation runs use an isolated conversation, one approval and one
   assert.equal(identity.status, 201, JSON.stringify(identity.body))
   const identityId: string = identity.body.id
   assert.equal((await request('POST', character + '/memberships', {
-    key: randomUUID(), data: { subject: 'reviewer', role: 'REVIEWER', action: 'GRANT', reason: 'Console fixture' },
-  })).status, 200)
-  assert.equal((await request('POST', character + '/memberships', {
-    key: randomUUID(), data: { subject: 'auditor', role: 'AUDITOR', action: 'GRANT', reason: 'Console fixture' },
+    key: randomUUID(), data: { subject: 'reviewer', action: 'GRANT', reason: 'Console fixture' },
   })).status, 200)
   const path = character + '/runs'
   const input = { accountId: accountA, message: 'Console simulation fixture for an isolated public discussion' }
-  const denied = await request('POST', path, { actor: 'reviewer', key: randomUUID(), data: input })
-  assert.equal(denied.status, 403)
-  assert.equal((await request('GET', path, { actor: 'reviewer' })).status, 403)
+  const denied = await request('POST', path, { actor: 'nonmember', key: randomUUID(), data: input })
+  assert.equal(denied.status, 404)
+  assert.equal((await request('GET', path, { actor: 'nonmember' })).status, 404)
   assert.equal((await request('GET', characterPath(b) + '/runs')).status, 404)
   const foreign = await request('POST', characterPath(b) + '/runs', { actor: 'admin-b', key: randomUUID(), data: input })
   assert.equal(foreign.status, 404)
@@ -3680,11 +3664,11 @@ test('console simulation runs use an isolated conversation, one approval and one
     const preview = await request('GET', actionPath)
     assert.equal(preview.status, 200)
     assert.ok(preview.body.content.startsWith(generatedReply + '\n\nAI 披露：'))
-    const denyAuditor = await request('POST', actionPath + '/decisions', {
-      actor: 'auditor', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
-      data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Audit fixture cannot approve' },
+    const denyNonmember = await request('POST', actionPath + '/decisions', {
+      actor: 'nonmember', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
+      data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Caller lacks character access' },
     })
-    assert.equal(denyAuditor.status, 403)
+    assert.equal(denyNonmember.status, 404)
     const decision = await request('POST', actionPath + '/decisions', {
       key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
       data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Console fixture checked' },
@@ -3712,10 +3696,10 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.deepEqual(replay.body.transcript, {
       message: input.message, draft: preview.body.content, reviewReason: 'Console fixture checked',
     })
-    const auditReplay = await request('GET', replayPath, { actor: 'auditor' })
+    const auditReplay = await request('GET', replayPath, { actor: 'reviewer' })
     assert.equal(auditReplay.status, 200)
-    assert.equal(auditReplay.body.transcript, null)
-    assert.equal((await request('GET', replayPath, { actor: 'reviewer' })).status, 403)
+    assert.deepEqual(auditReplay.body.transcript, replay.body.transcript)
+    assert.equal((await request('GET', replayPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', replayPath, { actor: 'admin-b' })).status, 404)
     await owner.inboundEvent.update({ where: { id: run.inboundEventId }, data: {
       receivedAt: new Date(await databaseNow() - 31 * 86_400_000),
@@ -3760,7 +3744,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.deepEqual((await request('GET', characterPath(a) + '/runs?' + filters)).body, { items: [], nextCursor: null })
 
     const audit = character + '/audit?runId=' + id
-    assert.equal((await request('GET', audit, { actor: 'reviewer' })).status, 403)
+    assert.equal((await request('GET', audit, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(a) + '/audit?runId=' + id)).status, 404)
     const newestAudit = await request('GET', audit + '&order=desc&limit=1')
     assert.equal(newestAudit.status, 200, JSON.stringify(newestAudit.body))

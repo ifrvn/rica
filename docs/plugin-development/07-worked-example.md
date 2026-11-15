@@ -49,7 +49,7 @@ export function createDemoEcho(db: PrismaClient): ManagementPlugin {
         responses: { ...errors, 200: success(previewOutput) },
       }), async (c) => {
         const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-        await db.$transaction((tx) => authorize(tx, scope, ['ADMIN']))
+        await db.$transaction((tx) => authorize(tx, scope))
         return c.json({ preview: c.req.valid('json').text }, 200)
       })
     },
@@ -72,7 +72,7 @@ Invoke-Rica Post "$ricaCharacter/demo-echo/preview" -Body @{ text = '  活动报
 (Invoke-Rica Get "$ricaCharacter/plugins").demoEchoReady
 ```
 
-第一条响应为 HTTP 200 和 `{ "preview": "活动报名已开放。" }`。第二条读到 `true`。`text` 缺失、去空白后为空、长度超过 200 或出现额外字段时返回 422。角色外的调用者收到 404。角色内不具备 ADMIN 权限的成员收到 403。
+第一条响应为 HTTP 200 和 `{ "preview": "活动报名已开放。" }`。第二条读到 `true`。`text` 缺失、去空白后为空、长度超过 200 或出现额外字段时返回 422。缺少该角色管理员授权的调用者收到 404。
 
 ## 加一条接入测试
 
@@ -92,8 +92,8 @@ test('echo preview requires an authenticated role administrator', async () => {
     $transaction(read: (tx: object) => unknown) {
       return read({
         managementMembership: {
-          async findMany({ where }: { where: { subject: string } }) {
-            return [{ role: where.subject === 'admin' ? 'ADMIN' : 'AUDITOR' }]
+          async findUnique({ where }: { where: { characterId_issuer_subject: { subject: string } } }) {
+            return where.characterId_issuer_subject.subject === 'admin' ? { subject: 'admin' } : null
           },
         },
       })
@@ -118,7 +118,7 @@ test('echo preview requires an authenticated role administrator', async () => {
   })
 
   assert.equal((await preview('hi')).status, 401)
-  assert.equal((await preview('hi', 'auditor')).status, 403)
+  assert.equal((await preview('hi', 'nonmember')).status, 404)
   assert.equal((await preview('  ', 'admin')).status, 422)
   const response = await preview('  hi  ', 'admin')
   assert.equal(response.status, 200)

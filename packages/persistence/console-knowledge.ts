@@ -1,20 +1,20 @@
 import type { z } from '@hono/zod-openapi'
 import type { conversationListQuery, memberListQuery } from '../contracts/management.js'
-import type { ManagementRole, Prisma, PrismaClient } from './generated/client.js'
+import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, makePage, ManagementError, pageArgs, parsePage, type Page, type Scope } from './management.js'
 
 function missing(): never { throw new ManagementError(404, 'NOT_FOUND', 'Resource not found') }
 
 export async function listMembers(db: PrismaClient, scope: Scope, query: z.infer<typeof memberListQuery>) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const { limit } = parsePage(query)
-    const rows = await tx.$queryRaw<{ subject: string; roles: ManagementRole[] }[]>`
-      SELECT subject, array_agg(role::text ORDER BY role) AS roles
+    const rows = await tx.$queryRaw<{ subject: string }[]>`
+      SELECT subject
       FROM public.management_memberships
       WHERE character_id = ${scope.characterId}::uuid AND issuer = ${scope.actor.issuer}
         AND (${query.after ?? null}::text IS NULL OR subject > ${query.after ?? null}::text)
-      GROUP BY subject ORDER BY subject
+      ORDER BY subject
       LIMIT ${limit + 1}
     `
     const items = rows.slice(0, limit)
@@ -28,7 +28,7 @@ async function requireIdentity(tx: Prisma.TransactionClient, characterId: string
 
 export async function listConversationOptions(db: PrismaClient, scope: Scope, identityId: string, query: z.infer<typeof conversationListQuery>) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const { characterId } = scope
     const { accountId, channel } = query
     if (!await tx.platformAccount.findFirst({ where: { id: accountId, characterId, identityId }, select: { id: true } })) missing()
@@ -47,7 +47,7 @@ export async function listConversationOptions(db: PrismaClient, scope: Scope, id
 
 export async function listIdentityContacts(db: PrismaClient, scope: Scope, identityId: string, page: Page) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     await requireIdentity(tx, scope.characterId, identityId)
     const where = { characterId: scope.characterId, identityId }
     const args = await pageArgs(page, (id) => tx.contact.findFirst({ where: { ...where, id }, select: { id: true } }))
@@ -62,7 +62,7 @@ export async function listIdentityContacts(db: PrismaClient, scope: Scope, ident
 
 export async function listIdentityBeliefs(db: PrismaClient, scope: Scope, identityId: string, page: Page) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     await requireIdentity(tx, scope.characterId, identityId)
     const { cursor, limit } = page
     const rows = await tx.$queryRaw<{ id: string; version: number; kind: 'OPINION' | 'PREFERENCE' }[]>`

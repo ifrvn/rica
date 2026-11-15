@@ -88,9 +88,8 @@ export const controlInput = optionalReasonInput.extend({
 })
 export const membershipInput = reasonInput.extend({
   subject: z.string().min(1).max(512).regex(/^[^\p{Cc}]+$/u),
-  role: z.enum(['ADMIN', 'OPERATOR', 'REVIEWER', 'AUDITOR']),
   action: z.enum(['GRANT', 'REVOKE']),
-})
+}).strict()
 export const identityReflectionView = z.object({
   identityId: resourceId, utcDay: z.iso.date(), coreVersion: z.number().int(), identityVersion: z.number().int(),
   createdAt: z.iso.datetime({ offset: true }), candidateBeliefId: resourceId.nullable(),
@@ -177,7 +176,7 @@ export const memoryListQuery = listQuery.extend({
 export const grantListQuery = listQuery.extend({ memoryId: resourceId.optional() })
 export const memberListQuery = listQuery.omit({ cursor: true }).extend({ after: membershipInput.shape.subject.optional() })
 export const memberPage = z.object({
-  items: z.array(z.object({ subject: membershipInput.shape.subject, roles: z.array(membershipInput.shape.role) })),
+  items: z.array(z.object({ subject: membershipInput.shape.subject })),
   nextCursor: membershipInput.shape.subject.nullable(),
 })
 export const conversationListQuery = listQuery.extend({
@@ -212,7 +211,6 @@ export const characterView = z.object({
   version: z.number().int().nullable(), profile: coreProfile.nullable(),
 })
 export const characterWorkspaceView = characterView.extend({
-  roles: z.array(membershipInput.shape.role),
   simulationPlatforms: z.array(accountInput.shape.platform),
 })
 export const identityView = z.object({

@@ -52,7 +52,7 @@ export async function createNewbiReply(
 
 export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Page, { status, accountId }: z.infer<typeof newbiReplyQuery>) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'REVIEWER'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId, status, accountId }
     const args = await pageArgs(page, (id) => tx.newbiReply.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.newbiReply.findMany({
@@ -66,9 +66,9 @@ export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Pag
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string, roles: readonly ('ADMIN' | 'REVIEWER')[] = ['ADMIN', 'REVIEWER']) {
+export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, roles)
+    await authorize(tx, scope)
     const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId },
       include: { account: { select: { instanceKey: true, remoteAccountId: true, identity: { select: { slug: true } } } } } })
     if (!reply) missing()
@@ -118,12 +118,11 @@ export async function closeNewbiReply(tx: Prisma.TransactionClient, scope: Scope
 
 export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) {
   return db.$transaction(async (tx) => {
-    const roles = await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
-    const canReadEvents = roles.some(({ role }) => role === 'ADMIN')
+    await authorize(tx, scope)
     const account = await tx.platformAccount.findFirst({ where: { id, characterId: scope.characterId, platform: 'newbi' },
       select: { remoteAccountId: true, newbiCheckpoint: { select: { nextPollAt: true, historyLostCount: true, lastHistoryLostAt: true, lastSucceededAt: true, readError: true } },
-        newbiEvents: canReadEvents ? { orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 50,
-          select: { seq: true, type: true, postId: true, commentId: true, occurredAt: true } } : false },
+        newbiEvents: { orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 50,
+          select: { seq: true, type: true, postId: true, commentId: true, occurredAt: true } } },
     })
     if (!account) missing()
     const checkpoint = account.newbiCheckpoint
@@ -134,7 +133,7 @@ export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) 
       nextPollAt: checkpoint?.nextPollAt.toISOString() ?? null,
       historyLostCount: checkpoint?.historyLostCount ?? 0,
       lastHistoryLostAt: checkpoint?.lastHistoryLostAt?.toISOString() ?? null,
-      items: canReadEvents ? account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })) : null,
+      items: account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })),
     })
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -172,7 +171,7 @@ export async function readPendingDeliveries(db: PrismaClient, characterId: strin
 
 export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: (endpoint: string, agentId: string) => Promise<boolean>) {
   const account = await db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const account = await tx.platformAccount.findFirst({
       where: { id: accountId, characterId: scope.characterId, platform: 'newbi', status: { not: 'REVOKED' } },
       select: { instanceKey: true, remoteAccountId: true },

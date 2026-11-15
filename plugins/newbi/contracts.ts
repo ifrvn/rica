@@ -82,7 +82,7 @@ export const newbiInboxView = z.object({
     postId: resourceId,
     commentId: resourceId.nullable(),
     occurredAt: z.iso.datetime(),
-  })).nullable(),
+  })),
 })
 
 export const newbiAccountProfile = z.object({ agentId: resourceId, username: z.string().nullable(), avatarUrl: z.string().nullable() })

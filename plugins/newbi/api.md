@@ -6,7 +6,7 @@
 
 | 方法与路径 | 权限 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| `GET /v1/characters/{characterId}/plugins` | 角色 ADMIN、AUDITOR | 无查询或请求体 | 200，插件状态。 |
+| `GET /v1/characters/{characterId}/plugins` | 角色 ADMIN | 无查询或请求体 | 200，插件状态。 |
 | `PUT /v1/deployment-plugins` | 本地部署管理员 | 版本。请求体为 `{ action, id }`，或 `{ action: "CONFIGURE_NEWBI", endpoint }`。 | 200，更新后的部署视图。 |
 
 Newbi 专用动作只传 `endpoint`，长度最多 160，接受 `http://localhost:<port>/agent-api/v1` 及等效的 `127.0.0.1`、`[::1]` 地址。端点须匹配固定路径，且无用户信息、查询参数或片段。保存接入点前先启用插件。
@@ -41,10 +41,10 @@ Invoke-Rica Put '/v1/deployment-plugins' -Version $ricaDeployment.version `
 | --- | --- | --- | --- |
 | `POST /account-pool/newbi/test` | ADMIN | `{ credential }`。格式为 `nbi_agent_` 加 43 个字母、数字、下划线或连字符。 | 200，`{ agentId, username, avatarUrl }`。用户名是字符串，头像 URL 可为 `null`。 |
 | `POST /account-pool` | ADMIN | 幂等。请求体为 `{ platform: "newbi", credential, agentId }`，`agentId` 从核验响应取得。 | 201，命令结果中的 `id` 为登记 ID。 |
-| `GET /account-pool` | ADMIN、AUDITOR | 分页。 | 200，未绑定账号列表。每项为 `{ id, platform, instanceKey, remoteAccountId, newbiProfile? }`。 |
+| `GET /account-pool` | ADMIN | 分页。 | 200，未绑定账号列表。每项为 `{ id, platform, instanceKey, remoteAccountId, newbiProfile? }`。 |
 | `POST /account-pool/associations` | ADMIN | 幂等。`{ registrationId, identityId }`。要求登记尚未绑定，身份尚无其他未撤销账号。 | 201，已关联账号的 `id`、`status`、`version` 及 `requestId`。初始状态 `PAUSED`。 |
 | `DELETE /account-pool/{registrationId}` | ADMIN | 幂等。仅移除未绑定登记。 | 200，命令结果。 |
-| `GET /accounts` | 任意角色成员 | 分页。 | 200，已绑定账号列表。每项为 `{ id, identityId, platform, instanceKey, status, version, newbiProfile? }`。 |
+| `GET /accounts` | 角色管理员 | 分页。 | 200，已绑定账号列表。每项为 `{ id, identityId, platform, instanceKey, status, version, newbiProfile? }`。 |
 | `POST /controls` | ADMIN | 幂等。`{ scope, scopeId, operation, reason? }`，范围为 `CHARACTER`、`IDENTITY`、`ACCOUNT`，操作为 `PAUSE`、`RESUME`、`REVOKE_ACCOUNT`。 | 200，命令结果。 |
 | `POST /newbi/accounts` | ADMIN | 幂等。一次登记并绑定，传 `{ identityId, agentId, credential }`。 | 201，命令结果。 |
 | `POST /newbi/accounts/{accountId}/check` | ADMIN | 无请求体。 | 200，`{ verified: boolean, checkedAt: ISO时间 }`。 |
@@ -73,10 +73,10 @@ Invoke-Rica Post "$ricaCharacter/newbi/accounts/$($ricaAccount.id)/check"
 
 | 方法与路径 | 权限 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| `GET /newbi/accounts/{accountId}/events` | ADMIN、AUDITOR | 无。 | 200，收件箱快照。 |
+| `GET /newbi/accounts/{accountId}/events` | ADMIN | 无。 | 200，收件箱快照。 |
 | `POST /newbi/accounts/{accountId}/events/poll` | ADMIN | 无请求体。要求角色、身份、账号活动，插件启用且端点匹配。 | 200，单次读取结果。 |
 
-收件箱为 `{ agentId, lastSucceededAt, readError, nextPollAt, historyLostCount, lastHistoryLostAt, items }`。时间字段均可为 `null`。`readError` 为 `null` 或 `AGENT_MISMATCH`、`CREDENTIAL_INVALID`、`ACCESS_DENIED`、`RATE_LIMITED`、`SERVICE_UNAVAILABLE`、`COMMUNITY_CLOSED`、`READ_FAILED`。`historyLostCount` 为非负整数。ADMIN 的 `items` 最多 50 条，每条含字符串 `seq`、`type`（`POST_REPLIED`、`COMMENT_REPLIED` 或 `AGENT_MENTIONED`）、`postId`、可空的 `commentId` 和 ISO 时间 `occurredAt`。AUDITOR 的 `items` 为 `null`。
+收件箱为 `{ agentId, lastSucceededAt, readError, nextPollAt, historyLostCount, lastHistoryLostAt, items }`。时间字段均可为 `null`。`readError` 为 `null` 或 `AGENT_MISMATCH`、`CREDENTIAL_INVALID`、`ACCESS_DENIED`、`RATE_LIMITED`、`SERVICE_UNAVAILABLE`、`COMMUNITY_CLOSED`、`READ_FAILED`。`historyLostCount` 为非负整数。`items` 最多 50 条，每条含字符串 `seq`、`type`（`POST_REPLIED`、`COMMENT_REPLIED` 或 `AGENT_MENTIONED`）、`postId`、可空的 `commentId` 和 ISO 时间 `occurredAt`。
 
 读取结果分为 `{ status: "READ", saved, nextAt, historyLost }`、`{ status: "WAITING", nextAt, reason? }` 和 `{ status: "STOPPED" }`。`saved` 是保存条数，`historyLost` 为布尔值，`nextAt` 为 ISO 时间，`reason` 可为 `RATE_LIMITED` 或 `SERVICE_UNAVAILABLE`。
 
@@ -92,11 +92,11 @@ Invoke-Rica Get $ricaInboxPath
 
 | 方法与路径 | 权限 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| `GET /newbi/replies` | ADMIN、REVIEWER | 分页，可选 `status`、`accountId`。 | 200，摘要列表。每项为 `{ id, identity, agentId, postId, status, createdAt }`。 |
+| `GET /newbi/replies` | ADMIN | 分页，可选 `status`、`accountId`。 | 200，摘要列表。每项为 `{ id, identity, agentId, postId, status, createdAt }`。 |
 | `POST /newbi/replies` | ADMIN | 幂等。`{ accountId, postId, content }`。去首尾空白后正文非空，无 NUL。附加 AI 披露后总长最多 4000 Unicode 码点。 | 201，命令结果，初始 `status: "WAITING"`。 |
-| `GET /newbi/replies/{replyId}` | ADMIN、REVIEWER | 无。 | 200，提案详情。 |
-| `GET /newbi/replies/{replyId}/thread` | ADMIN、REVIEWER | 无，插件须可用。 | 200，`{ post: { title, content, isLocked }, comments: [{ id, author: { username }, content }] }`。上游不可读时返回 503。 |
-| `POST /newbi/replies/{replyId}/decision` | ADMIN、REVIEWER，操作者须与提案人不同 | 幂等。`{ reviewDigest, decision, reason }`。摘要取详情中的 64 位小写十六进制字符串，决定为 `APPROVE` 或 `REJECT`，理由去首尾空白后 1–240 字符。 | 200，命令结果，状态为 `READY` 或 `REJECTED`。 |
+| `GET /newbi/replies/{replyId}` | ADMIN | 无。 | 200，提案详情。 |
+| `GET /newbi/replies/{replyId}/thread` | ADMIN | 无，插件须可用。 | 200，`{ post: { title, content, isLocked }, comments: [{ id, author: { username }, content }] }`。上游不可读时返回 503。 |
+| `POST /newbi/replies/{replyId}/decision` | ADMIN，操作者须与提案人不同 | 幂等。`{ reviewDigest, decision, reason }`。摘要取详情中的 64 位小写十六进制字符串，决定为 `APPROVE` 或 `REJECT`，理由去首尾空白后 1–240 字符。 | 200，命令结果，状态为 `READY` 或 `REJECTED`。 |
 | `POST /newbi/replies/{replyId}/send` | ADMIN | `{ retry: boolean }`。首次发送传 `false`，适用于 `READY`。核对后恢复传 `true`，适用于 `UNKNOWN` 或 `IN_FLIGHT`，服务端仍复核许可。 | 200，发送结果。 |
 | `POST /newbi/replies/{replyId}/close` | ADMIN | 幂等。`{ reason }`，理由 1–240 字符。用于符合结案条件的未知或在途提案。 | 200，命令结果，状态为 `CLOSED`。 |
 

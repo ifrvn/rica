@@ -6,9 +6,9 @@
 
 在插件包导出返回 [`ManagementPlugin`](../../packages/runtime/management-http.ts) 的工厂，由 [API 启动入口](../../apps/api/main.ts)传入已装配的数据库、连接配置和授权函数。工厂返回稳定的 `id` 与 `registerRoutes(app)`。插件使用 `app.openapi` 声明输入、响应和错误，路由路径以管理应用为根。宿主统一挂载在 `/v1` 下，运行时的接口描述见登录后的 `GET /v1/openapi.json`。新路径使用插件名作为命名空间，并确认方法与路径组合属于该插件。
 
-宿主提供会话、写请求 Origin 检查、请求大小限制和错误包络。路由继续验证该操作的权限及资源归属。角色作用域的管理接口先根据已认证的 `actor`、`characterId` 调用持久化层的 `authorize`，并在查询中绑定目标角色。角色内的 `ADMIN` 满足审核和审计所要求的管理权限。部署级操作使用本地部署管理员权限，参考 [API 启动入口](../../apps/api/main.ts)对 `localIssuer` 和 `canCreate` 的检查。
+宿主提供会话、写请求 Origin 检查、请求大小限制和错误包络。路由继续验证该操作的权限及资源归属。角色作用域的管理接口先根据已认证的 `actor`、`characterId` 调用持久化层的 `authorize`，并在查询中绑定目标角色。角色管理员可审批及查看审计记录。部署级操作使用本地部署管理员权限，参考 [API 启动入口](../../apps/api/main.ts)对 `localIssuer` 和 `canCreate` 的检查。
 
-对于角色内的变更，优先通过 [`executeManagementCommand`](../../packages/persistence/management.ts)执行，传入操作名、角色和目标范围、输入、请求 ID 及适用的幂等键或角色限制。它在事务内复核授权并写审计，使用相同键和输入重试时复用已提交的结果。带版本的更新使用现有 `versionHeader` 和 `version()` 解析 `If-Match`。权限规则见[管理 API](../management-api.md)。
+对于角色内的变更，优先通过 [`executeManagementCommand`](../../packages/persistence/management.ts)执行，传入操作名、角色和目标范围、输入、请求 ID 及适用的幂等键。它在事务内复核授权并写审计，使用相同键和输入重试时复用已提交的结果。带版本的更新使用现有 `versionHeader` 和 `version()` 解析 `If-Match`。权限规则见[管理 API](../management-api.md)。
 
 ## ManagementPlugin
 
@@ -68,12 +68,12 @@ type ManagementPlugin = {
 | `security` / `errors` / `failure` | 会话安全声明、通用错误映射及单个错误响应描述。 |
 | `error(requestId, code, message)` | 返回 `{ error: { requestId, code, message } }`。 |
 | `version(headers)` | 从经过 `versionHeader` 校验的头取带双引号的非负十进制版本。最大接受 `2147483646`，无效时抛 `422 INVALID_VERSION`。 |
-| `authorize(tx, scope, roles?)` | 以 `scope.actor.issuer`、`subject` 和 `scope.characterId` 查询成员资格。无成员资格返回 404，有成员资格但权限不足返回 403。空角色列表接受任意成员。`ADMIN` 满足其他角色要求。成功返回角色记录。 |
+| `authorize(tx, scope)` | 使用 `scope.actor.issuer`、`subject` 和 `scope.characterId` 核对角色管理员资格。缺少授权返回 404。 |
 | `executeManagementCommand(db, command, apply)` | 在事务内验证权限、串行化角色更新、执行 `apply(tx)` 并写入审计。使用 `key` 时按操作者、操作及 `targetScope` 处理幂等，结果返回给处理器。 |
 | `registerAccount(tx, scope, input)` | 使用 `{ platform, instanceKey, remoteAccountId }` 写入角色账号池。返回 `{ id }`。通过 `scope` 使用可信角色 ID。 |
 | `new ManagementError(status, code, message)` | 抛出已定义的业务错误，宿主用统一错误格式响应。未知异常转为通用 500。 |
 
-`command` 必填字段为 `actor`、`operation: string`、`requestId: string`、`input: unknown`、`targetScope: string`。可选 `characterId: string`、`key: string` 和 `roles`。角色变更传 `characterId`，默认要求 `ADMIN`。`apply` 返回包含 `id` 的命令结果。角色操作应在事务内继续限定目标资源归属。对外部不可逆请求，由执行账本持久化许可并管理重试。
+`command` 必填字段为 `actor`、`operation: string`、`requestId: string`、`input: unknown`、`targetScope: string`。可选 `characterId: string`、`key: string`。角色变更传 `characterId`，宿主校验角色管理员资格。`apply` 返回包含 `id` 的命令结果。角色操作应在事务内继续限定目标资源归属。对外部不可逆请求，由执行账本持久化许可并管理重试。
 
 ## 请求约定
 
@@ -178,7 +178,7 @@ export const acmeConfiguration = {
 
 | 方法与路径 | 权限 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| `GET /v1/characters/{characterId}/plugins` | 角色 ADMIN、AUDITOR | 无查询参数或请求体。 | 200，进程状态、部署信息和已注册的状态贡献。 |
+| `GET /v1/characters/{characterId}/plugins` | 角色 ADMIN | 无查询参数或请求体。 | 200，进程状态、部署信息和已注册的状态贡献。 |
 | `PUT /v1/deployment-plugins` | 本地部署管理员 | 版本。请求体为 `{ action, id }`，或者已注册的插件配置动作及其字段。 | 200，最新部署视图。 |
 
 通用动作 `action` 为 `INSTALL`、`ENABLE` 或 `DISABLE`，`id` 取当前部署目录中的插件 ID。状态依次为 `NOT_INSTALLED → INSTALLED → ENABLED`，停用回到 `INSTALLED`。非法状态转换返回 409，版本过期返回 412。
@@ -307,12 +307,12 @@ export function acmeAccounts(services: Services): Pick<ManagementPlugin, 'accoun
 
 | 方法与路径 | 权限 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| `GET /account-pool` | ADMIN、AUDITOR | 分页。 | 200，未绑定登记列表。每项含 `id`、`platform`、`instanceKey`、`remoteAccountId`，可含插件资料投影。 |
+| `GET /account-pool` | ADMIN | 分页。 | 200，未绑定登记列表。每项含 `id`、`platform`、`instanceKey`、`remoteAccountId`，可含插件资料投影。 |
 | `POST /account-pool` | ADMIN | 幂等。`platform` 用于选择登记 schema，其他字段由该平台声明。 | 201，命令结果，`id` 为登记 ID。 |
 | `POST /account-pool/associations` | ADMIN | 幂等。`{ registrationId, identityId }`。登记尚未绑定，身份尚无未撤销账号。 | 201，命令结果，返回关联账号 ID、版本和初始状态 `PAUSED`。 |
 | `DELETE /account-pool/{registrationId}` | ADMIN | 幂等，无请求体。仅限未绑定登记。 | 200，命令结果。 |
-| `GET /accounts` | 任意角色成员 | 分页。 | 200，已绑定账号列表。每项含 `id`、`identityId`、`platform`、`instanceKey`、`status`、`version`，可含插件资料投影。 |
-| `GET /accounts/{accountId}/automation-eligibility` | ADMIN、AUDITOR | 无。 | 200，`{ accountId, identityId, bindingVersion, eligible, reasons }`。 |
+| `GET /accounts` | 角色管理员 | 分页。 | 200，已绑定账号列表。每项含 `id`、`identityId`、`platform`、`instanceKey`、`status`、`version`，可含插件资料投影。 |
+| `GET /accounts/{accountId}/automation-eligibility` | ADMIN | 无。 | 200，`{ accountId, identityId, bindingVersion, eligible, reasons }`。 |
 | `POST /controls` | ADMIN | 幂等。`{ scope, scopeId, operation, reason? }`。 | 200，命令结果。 |
 
 `controls.scope` 为 `CHARACTER`、`IDENTITY` 或 `ACCOUNT`，`operation` 为 `PAUSE`、`RESUME` 或 `REVOKE_ACCOUNT`。撤销只适用于账号。理由可选，去首尾空白后为 1–240 字符，无控制字符。恢复外部账号会触发插件的 `verifyResume`。自动化资格当前返回 `eligible: false`，原因可包含 `BINDING_INACTIVE`、`SIMULATION_ONLY`、`UNSUPPORTED_ADAPTER` 或 `EXTERNAL_AUTO_DISABLED`。

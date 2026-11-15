@@ -4,10 +4,9 @@ import type { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitme
 import type { z } from '@hono/zod-openapi'
 import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
-import { hasManagementRole } from '../contracts/management-permissions.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
-import type { ManagementRole, Prisma, PrismaClient } from './generated/client.js'
+import type { Prisma, PrismaClient } from './generated/client.js'
 
 type Subject = Readonly<{ issuer: string; subject: string; id: string }>
 type Tx = Prisma.TransactionClient
@@ -38,14 +37,12 @@ export function denyPermission(): never {
 
 export type Scope = Readonly<{ actor: Subject; characterId: string }>
 
-export async function authorize(tx: Tx, scope: Scope, roles: readonly ManagementRole[] = []) {
-  const members = await tx.managementMembership.findMany({
-    where: { characterId: scope.characterId, issuer: scope.actor.issuer, subject: scope.actor.subject },
-    select: { role: true },
+export async function authorize(tx: Tx, scope: Scope) {
+  const membership = await tx.managementMembership.findUnique({
+    where: { characterId_issuer_subject: { characterId: scope.characterId, issuer: scope.actor.issuer, subject: scope.actor.subject } },
+    select: { subject: true },
   })
-  if (members.length === 0) unavailable()
-  if (roles.length && !hasManagementRole(members.map(({ role }) => role), roles)) denyPermission()
-  return members
+  if (!membership) unavailable()
 }
 
 async function lockCharacter(tx: Tx, characterId: string) {
@@ -63,13 +60,12 @@ type Command = {
   input: unknown
   targetScope: string
   key?: string
-  roles?: readonly ManagementRole[]
 }
 
 export async function executeManagementCommand(
   db: PrismaClient, command: Command, apply: (tx: Tx) => Promise<CommandResult>,
 ) {
-  const { actor, characterId, operation, requestId, input, key, targetScope, roles = ['ADMIN'] } = command
+  const { actor, characterId, operation, requestId, input, key, targetScope } = command
   const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex')
   const routeScope = operation + ':' + targetScope
 
@@ -80,10 +76,10 @@ export async function executeManagementCommand(
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lock}, 0))`
     }
     if (characterId) {
-      // Check membership again after taking the same lock as role provisioning and revocation.
-      await authorize(tx, { actor, characterId }, roles)
+      // Check membership again after taking the same lock as administrator grants and revocations.
+      await authorize(tx, { actor, characterId })
       await lockCharacter(tx, characterId)
-      await authorize(tx, { actor, characterId }, roles)
+      await authorize(tx, { actor, characterId })
     }
 
     const selector = key ? { principalId: actor.id, routeScope, key } : null
@@ -129,7 +125,7 @@ export async function createCharacter(tx: Tx, actor: Subject, input: Input<typeo
   })
   await tx.character.update({ where: { id }, data: { activeCoreVersion: 1 } })
   await tx.managementMembership.create({
-    data: { characterId: id, issuer: actor.issuer, subject: actor.subject, role: 'ADMIN' },
+    data: { characterId: id, issuer: actor.issuer, subject: actor.subject },
   })
   return { id, status, version: 1 }
 }
@@ -246,7 +242,7 @@ export async function createAccount(tx: Tx, scope: Scope, { identityId, ...input
 
 export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page, hooks: readonly PlatformAccountHooks[] = []) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId, boundAt: null }
     const args = await pageArgs(page, (id) => tx.platformAccountRegistration.findFirst({
       where: { id, characterId: scope.characterId }, select: { id: true },
@@ -305,19 +301,19 @@ export async function control(tx: Tx, scope: Scope, input: Input<typeof contract
 
 export async function changeMembership(tx: Tx, scope: Scope, input: Input<typeof contracts.membershipInput>) {
   const { characterId, actor } = scope
-  const where = { characterId, issuer: actor.issuer, subject: input.subject, role: input.role }
+  const where = { characterId, issuer: actor.issuer, subject: input.subject }
   if (input.action === 'GRANT') {
     await tx.managementMembership.create({ data: where })
   } else {
     const existing = await tx.managementMembership.findUnique({
-      where: { characterId_issuer_subject_role: where },
-      select: { role: true },
+      where: { characterId_issuer_subject: where },
+      select: { subject: true },
     })
     if (!existing) unavailable()
-    if (input.role === 'ADMIN' && await tx.managementMembership.count({ where: { characterId, issuer: actor.issuer, role: 'ADMIN' } }) <= 1) {
+    if (await tx.managementMembership.count({ where: { characterId, issuer: actor.issuer } }) <= 1) {
       throw new ManagementError(409, 'LAST_ADMIN', 'Character must retain an administrator')
     }
-    await tx.managementMembership.delete({ where: { characterId_issuer_subject_role: where } })
+    await tx.managementMembership.delete({ where: { characterId_issuer_subject: where } })
   }
   return { id: characterId }
 }
@@ -420,21 +416,17 @@ export async function listCharacters(db: PrismaClient, actor: Subject, page: Pag
 
 export async function getCharacter(db: PrismaClient, scope: Scope) {
   return db.$transaction(async (tx) => {
-    const members = await authorize(tx, scope)
+    await authorize(tx, scope)
     const row = await tx.character.findUnique({ where: { id: scope.characterId }, select: characterSelect })
     if (!row) unavailable()
-    return { ...characterView(row), roles: members.map(({ role }) => role) }
+    return characterView(row)
   })
 }
 
-const auditedIdentityProfile = identityProfile.omit({ writingPrompt: true }).strip()
-const publicIdentityProfile = auditedIdentityProfile.omit({ stateRule: true, autonomousGoal: true, duplicateReview: true })
-
 export async function listIdentities(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
-    const members = await authorize(tx, scope)
-    const profile = members.some(({ role }) => role === 'ADMIN') ? identityProfile.strip()
-      : members.some(({ role }) => role === 'AUDITOR') ? auditedIdentityProfile : publicIdentityProfile
+    await authorize(tx, scope)
+    const profile = identityProfile.strip()
     const where = { characterId: scope.characterId }
     const args = await pageArgs(page, (id) => tx.identity.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.identity.findMany({
@@ -468,7 +460,7 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page, h
 
 export async function readAutomationEligibility(db: PrismaClient, scope: Scope, accountId: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const account = await tx.platformAccount.findFirst({
       where: { id: accountId, characterId: scope.characterId },
       select: { id: true, identityId: true, bindingVersion: true, platform: true, status: true, identity: {
@@ -493,7 +485,7 @@ export async function readAutomationEligibility(db: PrismaClient, scope: Scope, 
 
 export async function readDailyEnergy(db: PrismaClient, scope: Scope, day: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_read_daily_energy(${scope.characterId}::uuid, ${day}::date) AS view
     `
@@ -514,7 +506,7 @@ export async function approveDailyEnergy(tx: Tx, scope: Scope, input: Input<type
 
 export async function readIdentityReflection(db: PrismaClient, scope: Scope, identityId: string, day: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_read_identity_reflection(${scope.characterId}::uuid, ${identityId}::uuid, ${day}::date) AS view
     `
@@ -525,7 +517,7 @@ export async function readIdentityReflection(db: PrismaClient, scope: Scope, ide
 
 export async function readBelief(db: PrismaClient, scope: Scope, identityId: string, beliefId: string, revision?: number) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_read_belief(${scope.characterId}::uuid, ${identityId}::uuid,
         ${beliefId}::uuid, ${revision ?? null}::int) AS view
@@ -555,7 +547,7 @@ export async function writeBelief(tx: Tx, scope: Scope, identityId: string, beli
 export async function readManualGoals(db: PrismaClient, scope: Scope, identityId: string,
   goalId?: string, revision?: number) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_read_manual_goals(${scope.characterId}::uuid, ${identityId}::uuid,
         ${goalId ?? null}::uuid, ${revision ?? null}::int) AS view
@@ -583,7 +575,7 @@ export async function writeManualGoal(tx: Tx, scope: Scope, identityId: string, 
 
 export async function readContactBoundary(db: PrismaClient, scope: Scope, contactId: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_read_contact_boundary(${scope.characterId}::uuid, ${contactId}::uuid) AS view
     `
@@ -620,7 +612,7 @@ async function memoryProvenance(tx: Tx, characterId: string, memoryId: string) {
 
 export async function readMemoryDetail(db: PrismaClient, scope: Scope, memoryId: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const memory = await tx.memory.findFirst({ where: { id: memoryId, characterId: scope.characterId }, select: memoryMetadata })
     if (!memory) unavailable()
     return { memory: memoryView(memory), provenance: await memoryProvenance(tx, scope.characterId, memoryId) }
@@ -629,7 +621,7 @@ export async function readMemoryDetail(db: PrismaClient, scope: Scope, memoryId:
 
 export async function readMemoryProvenance(db: PrismaClient, scope: Scope, memoryId: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     return memoryProvenance(tx, scope.characterId, memoryId)
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -649,7 +641,7 @@ export async function correctMemory(tx: Tx, scope: Scope, memoryId: string, expe
 export async function listMemories(db: PrismaClient, scope: Scope,
   page: Page, { identityId, scope: memoryScope, status }: Input<typeof contracts.memoryListQuery>) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId, identityId, scope: memoryScope, status }
     const args = await pageArgs(page, (id) => tx.memory.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.memory.findMany({
@@ -662,7 +654,7 @@ export async function listMemories(db: PrismaClient, scope: Scope,
 
 export async function listGrants(db: PrismaClient, scope: Scope, page: Page, memoryId?: string) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId, memoryId }
     const args = await pageArgs(page, (id) => tx.memoryGrant.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.memoryGrant.findMany({
@@ -679,7 +671,7 @@ export async function listGrants(db: PrismaClient, scope: Scope, page: Page, mem
 
 export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { runId?: string; targetId?: string; order?: 'asc' | 'desc' }) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
+    await authorize(tx, scope)
     const { runId, targetId, order = 'asc' } = page
     const where: Prisma.ManagementAuditWhereInput = { characterId: scope.characterId, targetId }
     if (runId) {
@@ -759,7 +751,7 @@ export async function updateSchedule(
 
 export async function listSchedules(db: PrismaClient, scope: Scope, page: Page) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId, planParticipant: null }
     const args = await pageArgs(page, (id) => tx.simulationSchedule.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.simulationSchedule.findMany({
@@ -863,7 +855,7 @@ export async function updateCommitment(
 export async function listCommitments(db: PrismaClient, scope: Scope, input: Input<typeof commitmentQuery>) {
   const page = parsePage(input)
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const where = { characterId: scope.characterId, schedule: { accountId: input.accountId, contactId: input.contactId } }
     const args = await pageArgs(page, (id) => tx.simulationCommitment.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.simulationCommitment.findMany({
@@ -887,7 +879,7 @@ export async function listCommitments(db: PrismaClient, scope: Scope, input: Inp
 export async function listCommitmentReceipts(db: PrismaClient, scope: Scope, input: Input<typeof commitmentReceiptQuery>) {
   const page = parsePage(input)
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['ADMIN'])
+    await authorize(tx, scope)
     const rows = await tx.$queryRaw<(Omit<Input<typeof commitmentReceiptView>, 'receiptAt'> & { receiptAt: Date })[]>`
       SELECT * FROM public.rica_available_commitment_receipts(
         ${scope.characterId}::uuid, ${input.runId ?? null}::uuid, ${page.cursor ?? null}::uuid, ${page.limit + 1}::int

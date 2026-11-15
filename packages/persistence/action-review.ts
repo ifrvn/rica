@@ -84,7 +84,7 @@ export async function listReviewActions(
   db: PrismaClient, scope: Scope, resolveAdapter: ResolveSimulationAdapter, actionId?: string, limit = 25, cursor?: string,
 ) {
   return db.$transaction(async (tx) => {
-    await authorize(tx, scope, ['REVIEWER'])
+    await authorize(tx, scope)
     const rows = await proposalRows(tx, scope.characterId, actionId ?? null, limit + 1, cursor ?? null)
     if (actionId && !rows.length) notFound()
     const actions: ActionView[] = []

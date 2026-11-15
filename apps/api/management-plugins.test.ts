@@ -18,7 +18,7 @@ const fixturePlugin = (id: string, field: string): ManagementPlugin => ({
 function fixture(plugins: ManagementPlugin[]) {
   return createManagementApp({
     db: { $transaction: (read: (tx: object) => unknown) => read({
-      managementMembership: { findMany: async () => [{ role: 'ADMIN' }] },
+      managementMembership: { findUnique: async () => ({ subject: 'admin' }) },
     }) } as unknown as PrismaClient,
     origin, cookie: 'session', resolveAdapter: () => undefined, plugins,
     authenticate: async (request) => request.headers.has('Cookie')

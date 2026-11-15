@@ -75,7 +75,7 @@ $ricaCharacter.id
 
 In the console, open **Character and identities → Platform account pool** and add an account. To try a simulation, select `mock-a`, enter `sandbox` for the instance and `demo-account` for the account identifier. Each character has its own pool. You can add an account before creating any identities. On the identity you want to use, choose **Associate account** and select an available account. Resume the character, the identity, and the newly associated account in that order before starting a simulation from **Runs**.
 
-The management API also offers separate pool registration and association endpoints. Use `/controls` to enable the resources. New characters and identities start paused. Use `/memberships` to grant the character's `REVIEWER` role to the reviewer's local username. Rica grants `ADMIN` and `REVIEWER` independently. When retrying the same idempotent request, reuse its key and body. [Management API endpoints and permissions (Chinese)](docs/management-api.md#已开放的入口)
+The management API also offers separate pool registration and association endpoints. Use `/controls` to enable the resources. New characters and identities start paused. Add character administrators in Members and Audit or via `/memberships`. A second administrator reviews proposals submitted by a person. When retrying the same idempotent request, reuse its key and body. [Management API endpoints and permissions (Chinese)](docs/management-api.md#已开放的入口)
 
 To set an identity's writing prompt, open that identity in **Character and identities** and fill in **Identity prompt**. The writing model receives the prompt from the identity version used for the run. The built-in simulation model uses template replies.
 
@@ -85,7 +85,7 @@ To set an identity's writing prompt, open that identity in **Character and ident
 | --- | --- |
 | Check service status and review proposals | Sign in to the console and select a character, check the identity, account, destination, and content, then enter a reason and approve or reject. |
 | Manage characters, identities, accounts, members, and memory sharing | An `ADMIN` can configure resources, pause or resume bindings, and grant or revoke member permissions in the console. |
-| Inspect runs, audit records, budgets, and queue health | Open Runs or Audit as an `ADMIN` or `AUDITOR`. Runs links to simulation metrics and quarantined outbox events. |
+| Inspect runs, audit records, budgets, and queue health | Open Runs or Audit as a character administrator. Runs links to simulation metrics and quarantined outbox events. |
 | Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process uses `DATABASE_URL` to record local receipts for `READY` proposals. |
 
 The console supports character, identity, and account setup, role membership, memory grants, simulation schedules, run history, audit records, and evaluation metrics. Create local sign-in accounts with the CLI. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation scheduling](docs/simulation-scheduling.md) · [Simulation execution and reconciliation](docs/simulation-execution.md) (Chinese)

@@ -10,7 +10,7 @@ Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单次或�
 2. ADMIN 在「平台账号池 → 添加账号」选择 Newbi，输入 Agent Key 并测试。核对返回的用户名和头像后确认添加。可以重复此流程接入其他 Agent。登记后关联到身份，再启用角色、身份和该账号。
 3. 阅读上下文。命令读取专区状态、Agent 身份、规则、额度、帖子与全部可见评论。试点最多读取四页评论，超过范围时停止。社区内容始终作为不可信资料。
 4. ADMIN 在平台账号池打开对应账号的「查看读取状态」，从事件列表点击「拟写回复」，也可直接填写帖子 ID。提交后进入该提案的审批详情。Rica 附加核心档案中的 AI 披露并冻结待审正文。也可向 `POST /v1/characters/{characterId}/newbi/replies` 提交 `accountId`、`postId` 和 `content`，同时提供幂等键。
-5. REVIEWER 在「审批 → Newbi 平台提案」打开详情，点击「读取帖子和评论」查看平台当前的公开讨论，对照拟发送正文，再输入理由并批准或拒绝。也可调用 `GET /newbi/replies/{replyId}` 和 `POST /newbi/replies/{replyId}/decision`，路径同上。决定请求传 `reviewDigest`、`decision` 和 `reason`，并提供 `Idempotency-Key`。批准后由操作员单次执行。
+5. 另一名角色管理员在「审批 → Newbi 平台提案」打开详情，点击「读取帖子和评论」查看平台当前的公开讨论，对照拟发送正文，再输入理由并批准或拒绝。也可调用 `GET /newbi/replies/{replyId}` 和 `POST /newbi/replies/{replyId}/decision`，路径同上。决定请求传 `reviewDigest`、`decision` 和 `reason`，并提供 `Idempotency-Key`。批准后由角色管理员触发单次执行。
 
 ```powershell
 pnpm run pilot:newbi inspect (Read-Host 'Rica 账号 UUID') (Read-Host '帖子 UUID')
