@@ -13,7 +13,7 @@ type Contact = z.infer<typeof contactSummary>
 type Boundary = z.infer<typeof contactBoundaryView>
 type Reflection = z.infer<typeof identityReflectionView>
 type Energy = z.infer<typeof dailyEnergyView>
-const props = defineProps<{ characterId: string; identityId: string; canEdit: boolean }>()
+const props = defineProps<{ characterId: string; identityId: string; identityName: string; canEdit: boolean }>()
 const emit = defineEmits<{ expired: [] }>()
 const { busy, error, notice, active, run, command } = useConsoleTask(() => emit('expired'))
 const base = characterPath(props.characterId)
@@ -152,11 +152,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="console-stack" aria-label="所选身份的成长记录">
+  <section class="console-stack growth-records" aria-label="所选身份的成长记录">
+    <h3 class="growth-title">{{ identityName }}的成长记录</h3>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
     <NSpin v-if="busy && !shownDate" />
-    <section class="console-panel" aria-labelledby="growth-reflection-heading">
+    <section class="console-card console-stack" aria-labelledby="growth-reflection-heading">
       <div class="console-section-heading"><h3 id="growth-reflection-heading">反思与精力</h3></div>
       <NForm @submit.prevent="run(loadDay)">
         <div class="console-form-grid">
@@ -166,7 +167,7 @@ onMounted(() => {
         </div>
         <NButton size="small" attr-type="submit" :disabled="busy || !date">查看当天</NButton>
       </NForm>
-      <ul v-if="shownDate" class="console-record-list">
+      <ul v-if="shownDate" class="console-group-list growth-list">
         <li><strong>{{ shownDate }} · 角色精力</strong><span>{{ energy ? energyLabels[energy.energy] : '暂无已批准记录' }}</span></li>
         <li><strong>身份反思</strong>
           <span v-if="reflection">模拟回执 {{ reflection.observedActivity.simulatedReceipts }} ·
@@ -177,25 +178,25 @@ onMounted(() => {
         </li>
       </ul>
     </section>
-    <section class="console-panel" aria-labelledby="growth-goals-heading">
+    <section class="console-card console-stack" aria-labelledby="growth-goals-heading">
       <div class="console-section-heading"><h3 id="growth-goals-heading">目标</h3></div>
       <NEmpty v-if="!goals.length && !busy && !error" description="暂无目标。" />
-      <ul v-if="goals.length" class="console-record-list">
+      <ul v-if="goals.length" class="console-group-list growth-list">
         <li v-for="goal in goals" :key="goal.id">
           <div class="console-actions"><strong>{{ goal.title }}</strong><NTag size="small">{{ goalStatus[goal.status] }}</NTag>
             <NTag size="small">{{ goal.origin === 'SELF' ? '自主' : '管理员' }}</NTag></div>
-          <span>优先级 {{ goal.priority }} · 预算 {{ goal.budget }} · 截止 {{ formatTime(goal.dueAt) }}</span>
+          <span class="console-group-meta">优先级 {{ goal.priority }} · 预算 {{ goal.budget }} · 截止 {{ formatTime(goal.dueAt) }}</span>
           <span v-if="goal.nextStep">{{ goal.nextStep }}</span>
         </li>
       </ul>
     </section>
-    <section class="console-panel" aria-labelledby="growth-beliefs-heading">
+    <section class="console-card console-stack" aria-labelledby="growth-beliefs-heading">
       <div class="console-section-heading"><h3 id="growth-beliefs-heading">观点与偏好</h3></div>
       <NEmpty v-if="!beliefs.length && !busy && !error" description="暂无观点或偏好。" />
-      <ul v-if="beliefs.length" class="console-record-list">
+      <ul v-if="beliefs.length" class="console-group-list growth-list">
         <li v-for="item in beliefs" :key="item.id">
           <div class="console-actions">
-            <NButton size="small" :disabled="busy" @click="openBelief(item.id)">{{ item.kind === 'OPINION' ? '观点' : '偏好' }} {{ item.id.slice(0, 8) }}</NButton>
+            <NButton size="small" secondary :disabled="busy" @click="openBelief(item.id)">{{ item.kind === 'OPINION' ? '观点' : '偏好' }} {{ item.id.slice(0, 8) }}</NButton>
             <NTag size="small">v{{ item.version }}</NTag>
           </div>
         </li>
@@ -205,7 +206,8 @@ onMounted(() => {
         <h4>观点详情</h4>
         <p>v{{ belief.version }} · {{ beliefStatus[belief.status] }}<template v-if="belief.confidence !== null">
           · 置信度 {{ Math.round(belief.confidence * 100) }}%</template></p>
-        <p>{{ belief.statement ?? '观点内容当前不可用。' }}</p>
+        <blockquote v-if="belief.statement" class="console-payload growth-quote">{{ belief.statement }}</blockquote>
+        <p v-else>观点内容当前不可用。</p>
         <NForm v-if="canEdit && belief.version > 1" @submit.prevent="restore">
           <NFormItem label="历史版本" :label-props="{ for: 'belief-version' }">
             <NInputNumber placeholder="输入要恢复的版本号" v-model:value="restoreVersion" :min="1" :max="belief.version - 1" :precision="0"
@@ -216,7 +218,9 @@ onMounted(() => {
             <NButton size="small" :disabled="busy" @click="run(() => readBelief(belief!.id))">重新读取当前版本</NButton>
           </div>
           <template v-if="historical">
-            <p>v{{ historical.version }} · {{ historical.statement ?? '此版本内容当前不可用。' }}</p>
+            <p class="console-group-meta">版本 {{ historical.version }}</p>
+            <blockquote v-if="historical.statement" class="console-payload growth-quote">{{ historical.statement }}</blockquote>
+            <p v-else>此版本内容当前不可用。</p>
             <NFormItem label="恢复理由" :label-props="{ for: 'belief-reason' }">
               <NInput placeholder="例如：恢复有来源支持的旧观点" v-model:value="restoreReason" maxlength="240" :disabled="busy" :input-props="{ id: 'belief-reason' }" />
             </NFormItem>
@@ -225,13 +229,13 @@ onMounted(() => {
         </NForm>
       </template>
     </section>
-    <section class="console-panel" aria-labelledby="growth-boundaries-heading">
+    <section class="console-card console-stack" aria-labelledby="growth-boundaries-heading">
       <div class="console-section-heading"><h3 id="growth-boundaries-heading">联系边界</h3></div>
       <NEmpty v-if="!contacts.length && !busy && !error" description="暂无联系人。" />
-      <ul v-if="contacts.length" class="console-record-list">
+      <ul v-if="contacts.length" class="console-group-list growth-list">
         <li v-for="item in contacts" :key="item.id">
           <div class="console-actions">
-            <NButton size="small" :disabled="busy" @click="openContact(item)">{{ item.label ?? item.id.slice(0, 8) }}</NButton>
+            <NButton size="small" secondary :disabled="busy" @click="openContact(item)">{{ item.label ?? item.id.slice(0, 8) }}</NButton>
             <NTag size="small">{{ item.blocked ? '已禁止联系' : '未禁止联系' }}</NTag>
           </div>
         </li>
@@ -246,7 +250,7 @@ onMounted(() => {
             <NInput placeholder="例如：联系人要求停止互动" v-model:value="boundaryReason" maxlength="240" :disabled="busy" :input-props="{ id: 'boundary-reason' }" />
           </NFormItem>
           <div class="console-actions">
-            <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!boundaryReason.trim()">
+            <NButton :type="contact.blocked ? 'primary' : 'error'" attr-type="submit" :loading="busy" :disabled="!boundaryReason.trim()">
               {{ contact.blocked ? '解除联系限制' : '禁止联系' }}
             </NButton>
             <NButton size="small" :disabled="busy" @click="run(() => readBoundary(contact!.id))">重新读取边界</NButton>
@@ -256,3 +260,11 @@ onMounted(() => {
     </section>
   </section>
 </template>
+
+<style scoped>
+.growth-title, .growth-records :is(h4, p) { margin: 0; }
+.growth-list > li { display: grid; gap: .35rem; padding: .8rem .75rem; overflow-wrap: anywhere; }
+.growth-records .console-stack > .n-button { justify-self: start; }
+.growth-quote { margin: 0; }
+.growth-records form > .growth-quote { margin-block: .5rem .75rem; }
+</style>

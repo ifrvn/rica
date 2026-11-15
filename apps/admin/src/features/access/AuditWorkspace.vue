@@ -30,7 +30,7 @@ const labels: Record<string, string> = {
   'character.create': '创建角色', 'character.core.update': '更新角色核心',
   'identity.create': '创建身份', 'identity.update': '更新身份', 'account.create': '登记平台账号',
   'account.register': '添加账号到账号池', 'account.associate': '关联平台账号',
-  'control.apply': '变更运行状态', 'membership.change': '变更成员权限', 'account.remove': '移除未关联账号',
+  'control.apply': '变更运行状态', 'membership.change': '变更角色管理员', 'account.remove': '移除未关联账号',
   'state.energy.approve': '批准角色精力', 'goal.create': '新增目标', 'goal.update': '更新目标',
   'belief.create': '新增观点', 'belief.update': '更新观点', 'belief.restore': '恢复观点版本',
   'contact.boundary': '变更联系边界', 'memory.correct': '纠正记忆',
@@ -77,7 +77,7 @@ onMounted(() => { void load() })
 </script>
 
 <template>
-  <section class="console-workspace" aria-labelledby="audit-records-heading">
+  <section class="console-card console-stack" aria-labelledby="audit-records-heading">
     <div class="console-section-heading">
       <h3 id="audit-records-heading">{{ runId ? '此运行的审计记录' : targetId ? '此目标的审计记录' : '操作记录' }}</h3>
       <div class="console-actions">
@@ -89,13 +89,25 @@ onMounted(() => { void load() })
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
     <NSpin v-if="busy && !items.length" />
     <NEmpty v-else-if="!items.length && !error" description="暂无审计记录。" />
-    <ul v-if="items.length" class="audit-list">
+    <ul v-if="items.length" class="console-group-list">
       <li v-for="item in items" :key="item.id">
-        <details>
-          <summary>
-            <span>{{ labels[item.operation] || item.operation }}</span>
-            <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time>
-          </summary>
+        <div class="console-group-row">
+          <div class="audit-summary">
+            <strong>{{ labels[item.operation] || item.operation }}</strong>
+            <div class="console-group-meta">
+              <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time>
+              <span>操作者 {{ item.actorId.length > 12 ? item.actorId.slice(0, 12) + '…' : item.actorId }}</span>
+            </div>
+          </div>
+          <div class="console-actions">
+            <NButton v-if="!runId && item.operation === 'simulation.start'" size="small" quaternary
+              @click="emit('openRun', item.targetId)">查看运行</NButton>
+            <NButton v-if="reviewFor(item)" size="small" quaternary
+              @click="openProposal(item)">查看平台提案</NButton>
+          </div>
+        </div>
+        <details class="audit-details">
+          <summary>查看记录详情</summary>
           <dl>
             <div><dt>操作代码</dt><dd>{{ item.operation }}</dd></div>
             <div><dt>操作人 ID</dt><dd>{{ item.actorId }}</dd></div>
@@ -103,10 +115,6 @@ onMounted(() => { void load() })
             <div><dt>请求 ID</dt><dd>{{ item.requestId }}</dd></div>
             <div><dt>摘要哈希</dt><dd>{{ item.digest }}</dd></div>
           </dl>
-          <NButton v-if="!runId && item.operation === 'simulation.start'" size="small" quaternary
-            @click="emit('openRun', item.targetId)">查看运行</NButton>
-          <NButton v-if="reviewFor(item)" size="small" quaternary
-            @click="openProposal(item)">查看平台提案</NButton>
         </details>
       </li>
     </ul>
@@ -115,12 +123,15 @@ onMounted(() => { void load() })
 </template>
 
 <style scoped>
-.audit-list { list-style: none; margin: 0 0 .5rem; padding: 0; }
-.audit-list li + li { border-top: 1px solid var(--console-line); }
-details { padding-block: .6rem; }
-summary { cursor: pointer; overflow-wrap: anywhere; }
-summary time { margin-inline-start: .65rem; color: var(--console-muted); }
-dl { display: grid; gap: .4rem; }
-dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .5rem; }
-dd { margin: 0; overflow-wrap: anywhere; }
+.audit-summary { display: grid; gap: .25rem; }
+.audit-summary .console-group-meta { display: flex; flex-wrap: wrap; gap: .2rem .75rem; }
+.audit-details { padding: 0 .75rem .85rem; }
+.audit-details summary { width: fit-content; cursor: pointer; color: var(--console-muted); font-size: .875rem; }
+.audit-details dl { display: grid; gap: .4rem; margin: .6rem 0 0; padding: .75rem;
+  background: var(--console-hover); border-radius: 4px; }
+.audit-details dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .5rem; }
+.audit-details dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 30rem) {
+  .audit-details dl > div { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
+}
 </style>

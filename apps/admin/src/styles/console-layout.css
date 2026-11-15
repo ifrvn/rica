@@ -38,3 +38,16 @@
 @media (max-width: 30rem) {
   .console-record-workspace { padding: .875rem; }
 }
+
+.console-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line);
+  border-radius: 5px; overflow-wrap: anywhere; }
+.console-card .console-section-heading { align-items: center; margin: 0; }
+.console-group-list { list-style: none; margin: 0; padding: 0; }
+.console-group-list > li + li { border-top: 1px solid var(--console-line); }
+.console-group-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: .5rem 1rem; min-width: 0; padding: .8rem .75rem; }
+.console-group-meta { color: var(--console-muted); font-size: .875rem; }
+.console-group-list > li:hover { background: var(--console-hover); }
+@media (max-width: 30rem) { .console-card { padding: .75rem; } }
+
+.knowledge-dialog { width: min(36rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; }

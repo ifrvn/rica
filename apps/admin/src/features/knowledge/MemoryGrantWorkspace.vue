@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '../../../../../packages/contracts/management.js'
 import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from '@rica/console-shared/console-data'
@@ -23,6 +23,9 @@ const cursor = ref<string | null>(null)
 const conversations = ref<Conversation[]>([])
 const conversationCursor = ref<string | null>(null)
 const mode = ref<'grant' | 'revoke'>()
+const dialogTitle = computed(() => mode.value === 'revoke' ? '撤销授权' : '新增授权')
+const heading = ref<HTMLElement>()
+let trigger: HTMLElement | undefined
 const revoking = ref<Grant>()
 const form = reactive({ purpose: 'INTERNAL_CONTEXT' as Purpose, identityId: '', accountId: '', conversationId: '',
   from: '', until: '', reason: '' })
@@ -72,6 +75,7 @@ function resetChoice() {
 }
 
 function open(kind: 'grant' | 'revoke', row?: Grant) {
+  trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   mode.value = kind
   revoking.value = row
   Object.assign(form, { purpose: 'INTERNAL_CONTEXT', identityId: '', accountId: '', conversationId: '', from: '', until: '', reason: '' })
@@ -79,6 +83,10 @@ function open(kind: 'grant' | 'revoke', row?: Grant) {
   conversationCursor.value = null
   error.value = ''
   notice.value = ''
+}
+
+function restoreFocus() {
+  void nextTick(() => (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : heading.value)?.focus())
 }
 
 function save() {
@@ -107,14 +115,37 @@ onMounted(() => { void run(load) })
 </script>
 
 <template>
-  <section class="memory-grants" aria-labelledby="memory-grant-heading">
+  <section class="console-stack memory-grants" aria-labelledby="memory-grant-heading">
     <div class="console-section-heading">
-      <h3 id="memory-grant-heading">授权</h3>
-      <NButton v-if="shareable" size="small" quaternary :disabled="busy" @click="open('grant')">新增授权</NButton>
+      <h3 id="memory-grant-heading" ref="heading" tabindex="-1">使用授权</h3>
+      <NButton v-if="shareable" size="small" type="primary" :disabled="busy" @click="open('grant')">新增授权</NButton>
     </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="error && !mode" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NForm v-if="mode" @submit.prevent="save">
+    <NSpin v-if="busy && !rows.length && !mode" />
+    <NEmpty v-else-if="!rows.length && !error" description="暂无授权。" />
+    <ul v-if="rows.length" class="console-group-list">
+      <li v-for="grant in rows" :key="grant.id" class="grant-row">
+        <div class="console-actions">
+          <strong>{{ name(grant.recipientIdentityId) }}</strong>
+          <NTag size="small">{{ purposes[grant.purpose as Purpose] ?? grant.purpose }}</NTag>
+          <NTag v-if="grant.revokedAt" size="small">已撤销</NTag>
+          <NTag v-else-if="Date.parse(grant.validUntil) <= Date.now()" size="small">已到期</NTag>
+          <NButton v-else size="small" type="error" tertiary :disabled="busy" @click="open('revoke', grant)">撤销授权</NButton>
+        </div>
+        <span class="console-group-meta">{{ formatTime(grant.validFrom) }} 至 {{ formatTime(grant.validUntil) }}</span>
+        <span v-if="grant.recipientAccountId">账号 {{ accounts.find(({ id }) => id === grant.recipientAccountId)?.instanceKey ?? grant.recipientAccountId }}</span>
+        <span v-if="grant.audience || grant.recipientConversationId">会话 {{ grant.audience ?? grant.recipientConversationId }}</span>
+        <span v-if="grant.recipientContactId">联系人 {{ grant.recipientContactId }}</span>
+      </li>
+    </ul>
+    <NButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多授权</NButton>
+  </section>
+  <NModal :show="!!mode" preset="card" :title="dialogTitle" :aria-label="dialogTitle"
+    class="knowledge-dialog" :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
+    @update:show="show => { if (!show) { mode = undefined; error = '' } }" @after-leave="restoreFocus">
+    <NForm v-if="mode" class="console-stack" @submit.prevent="save">
+      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
       <div v-if="mode === 'grant'" class="console-form-grid">
         <NFormItem label="用途" :label-props="{ for: 'grant-purpose' }">
           <NSelect placeholder="选择记忆用途" filterable v-model:value="form.purpose" :options="purposeOptions" :disabled="busy"
@@ -151,32 +182,17 @@ onMounted(() => { void run(load) })
       <NFormItem label="理由" :label-props="{ for: 'grant-reason' }">
         <NInput :placeholder="revoking ? '例如：协作已结束' : '例如：供该身份回复指定会话'" v-model:value="form.reason" :disabled="busy" maxlength="240" :input-props="{ id: 'grant-reason' }" />
       </NFormItem>
-      <div class="console-actions">
-        <NButton type="primary" attr-type="submit" :loading="busy" :disabled="!valid">{{ mode === 'grant' ? '保存授权' : '确认撤销' }}</NButton>
+      <div class="console-actions grant-actions">
         <NButton :disabled="busy" @click="mode = undefined">取消</NButton>
+        <NButton :type="mode === 'revoke' ? 'error' : 'primary'" attr-type="submit" :loading="busy" :disabled="!valid">{{ mode === 'grant' ? '保存授权' : '确认撤销' }}</NButton>
       </div>
     </NForm>
-    <NSpin v-if="busy && !rows.length && !mode" />
-    <NEmpty v-else-if="!rows.length && !error" description="暂无授权。" />
-    <ul v-if="rows.length" class="console-record-list">
-      <li v-for="grant in rows" :key="grant.id">
-        <div class="console-actions">
-          <strong>{{ name(grant.recipientIdentityId) }}</strong>
-          <NTag size="small">{{ purposes[grant.purpose as Purpose] ?? grant.purpose }}</NTag>
-          <NTag v-if="grant.revokedAt" size="small">已撤销</NTag>
-          <NTag v-else-if="Date.parse(grant.validUntil) <= Date.now()" size="small">已到期</NTag>
-          <NButton v-else size="tiny" quaternary :disabled="busy" @click="open('revoke', grant)">撤销授权</NButton>
-        </div>
-        <span>{{ formatTime(grant.validFrom) }} 至 {{ formatTime(grant.validUntil) }}</span>
-        <span v-if="grant.recipientAccountId">账号 {{ accounts.find(({ id }) => id === grant.recipientAccountId)?.instanceKey ?? grant.recipientAccountId }}</span>
-        <span v-if="grant.audience || grant.recipientConversationId">会话 {{ grant.audience ?? grant.recipientConversationId }}</span>
-        <span v-if="grant.recipientContactId">联系人 {{ grant.recipientContactId }}</span>
-      </li>
-    </ul>
-    <NButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多授权</NButton>
-  </section>
+  </NModal>
 </template>
 
 <style scoped>
-.memory-grants { border-top: 1px solid var(--console-line); margin-top: 1rem; padding-top: .875rem; }
+.memory-grants { border-top: 1px solid var(--console-line); padding-top: 1rem; }
+.memory-grants > .n-button { justify-self: start; }
+.grant-row { display: grid; gap: .35rem; padding: .8rem .75rem; overflow-wrap: anywhere; }
+.grant-actions { justify-content: flex-end; }
 </style>

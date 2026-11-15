@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NEmpty, NFormItem, NSelect, NSpin } from 'naive-ui'
+import { NAlert, NEmpty, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { identityView } from '../../../../../packages/contracts/management.js'
 import { characterPath, readAll, useConsoleTask } from '@rica/console-shared/console-data'
@@ -23,23 +23,35 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="console-workspace console-stack" aria-label="身份成长记录">
-    <div class="growth-identity-picker">
-      <NFormItem label="身份" :label-props="{ for: 'growth-identity' }">
-        <NSelect placeholder="搜索或选择身份" filterable :value="selected?.id ?? null" :disabled="busy"
-          :options="identities.map(({ id, profile, slug }) => ({ value: id, label: profile?.displayName || slug }))"
-          :input-props="{ id: 'growth-identity' }" @update:value="emit('open', $event)" />
-      </NFormItem>
+  <div class="growth-layout" :class="{ 'growth-layout--selected': selected }">
+    <section class="console-card console-stack" aria-labelledby="growth-identities-heading">
+      <div class="console-section-heading"><h3 id="growth-identities-heading">身份列表</h3></div>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-      <NSpin v-else-if="busy" />
-      <NEmpty v-else-if="!identities.length" description="暂无身份。" />
+      <NSpin v-else-if="busy" aria-label="正在加载身份" />
+      <NEmpty v-else-if="!identities.length" description="创建身份后，这里会显示成长记录。" />
       <NAlert v-else-if="detailId && !selected" type="warning">找不到当前角色中的身份。</NAlert>
-    </div>
+      <ul v-if="identities.length" class="console-select-list growth-identities">
+        <li v-for="identity in identities" :key="identity.id">
+          <button class="console-record" type="button" :aria-current="selected?.id === identity.id ? 'true' : undefined"
+            @click="emit('open', identity.id)">
+            <strong>{{ identity.profile?.displayName || identity.slug }}</strong>
+            <NTag size="small" :type="identity.status === 'ACTIVE' ? 'success' : 'default'" :bordered="false">
+              {{ identity.status === 'ACTIVE' ? '已启用' : '已暂停' }}
+            </NTag>
+          </button>
+        </li>
+      </ul>
+    </section>
     <IdentityGrowth v-if="selected" :key="selected.id" :identity-id="selected.id" :character-id="characterId" :can-edit="canEdit"
-      @expired="emit('expired')" />
-  </section>
+      :identity-name="selected.profile?.displayName || selected.slug" @expired="emit('expired')" />
+  </div>
 </template>
 
 <style scoped>
-.growth-identity-picker { max-width: 24rem; }
+.growth-layout { display: grid; gap: 1rem; align-items: start; min-width: 0; }
+.growth-identities { margin: 0; }
+.growth-identities .console-record { padding: .875rem .75rem; align-items: center; }
+@media (min-width: 66rem) {
+  .growth-layout--selected { grid-template-columns: minmax(14rem, 1fr) minmax(0, 2.25fr); }
+}
 </style>

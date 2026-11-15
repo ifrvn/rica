@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import { membershipInput, type memberPage } from '../../../../../packages/contracts/management.js'
 import { characterPath, queryPath, useConsoleTask } from '@rica/console-shared/console-data'
@@ -17,7 +17,7 @@ const subject = ref('')
 const reason = ref('')
 const action = ref<'GRANT' | 'REVOKE'>()
 const memberHeading = ref<HTMLElement>()
-const editorHeading = ref<HTMLElement>()
+const dialogTitle = computed(() => action.value === 'REVOKE' ? '移除管理员' : '添加管理员')
 let trigger: HTMLElement | undefined
 const payload = computed(() => membershipInput.safeParse({
   action: action.value, subject: subject.value.trim().toLowerCase(), reason: reason.value,
@@ -37,11 +37,14 @@ function edit(kind: 'GRANT' | 'REVOKE', name = '') {
   reason.value = ''
   error.value = ''
   notice.value = ''
-  void nextTick(() => editorHeading.value?.focus())
 }
 
 function closeEditor() {
   action.value = undefined
+  error.value = ''
+}
+
+function restoreFocus() {
   void nextTick(() => (trigger?.isConnected && !trigger.matches(':disabled') ? trigger : memberHeading.value)?.focus())
 }
 
@@ -62,40 +65,25 @@ onMounted(() => { void run(load) })
 </script>
 
 <template>
-  <section class="console-workspace console-stack" aria-labelledby="member-list-heading">
+  <section class="console-card console-stack" aria-labelledby="member-list-heading">
     <div class="console-section-heading">
       <h3 id="member-list-heading" ref="memberHeading" tabindex="-1">角色管理员</h3>
       <div class="console-actions">
         <NButton size="small" quaternary :disabled="busy" @click="run(() => load())">刷新列表</NButton>
         <NButton v-if="canManageUsers" size="small" quaternary :disabled="busy" @click="emit('manageUsers')">管理本地账号</NButton>
-        <NButton size="small" :disabled="busy || !!action" @click="edit('GRANT')">添加管理员</NButton>
+        <NButton size="small" type="primary" :disabled="busy || !!action" @click="edit('GRANT')">添加管理员</NButton>
       </div>
     </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="error && !action" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NForm v-if="action" class="console-panel" aria-labelledby="member-editor-heading" @submit.prevent="save">
-      <h4 id="member-editor-heading" ref="editorHeading" tabindex="-1">{{ action === 'GRANT' ? '添加管理员' : '移除管理员' }}</h4>
-      <p v-if="action === 'REVOKE'">移除后，该账号将失去此角色的访问权限。</p>
-      <div class="console-form-grid">
-        <NFormItem label="本地用户名" :label-props="{ for: 'member-subject' }">
-          <NInput placeholder="例如：alice" v-model:value="subject" :disabled="busy || action === 'REVOKE'" maxlength="64" :input-props="{ id: 'member-subject' }" />
-        </NFormItem>
-        <NFormItem label="变更理由" :label-props="{ for: 'member-reason' }">
-          <NInput placeholder="例如：负责管理该角色" v-model:value="reason" maxlength="240" :disabled="busy" :input-props="{ id: 'member-reason' }" />
-        </NFormItem>
-      </div>
-      <div class="console-actions">
-        <NButton :type="action === 'REVOKE' ? 'error' : 'primary'" attr-type="submit" :loading="busy" :disabled="busy || !payload.success">
-          {{ action === 'GRANT' ? '添加管理员' : '移除管理员' }}
-        </NButton>
-        <NButton :disabled="busy" @click="closeEditor">取消</NButton>
-      </div>
-    </NForm>
     <NSpin v-if="busy && !rows.length && !action" />
     <NEmpty v-else-if="!rows.length && !error" description="暂无角色管理员。" />
-    <ul v-if="rows.length" class="console-record-list">
-      <li v-for="member in rows" :key="member.subject">
-        <strong>{{ member.subject }}</strong>
+    <ul v-if="rows.length" class="console-group-list">
+      <li v-for="member in rows" :key="member.subject" class="console-group-row">
+        <div class="console-actions">
+          <strong>{{ member.subject }}</strong>
+          <span v-if="member.subject === username" class="console-group-meta">当前账号</span>
+        </div>
         <div class="console-actions">
           <NButton size="small" type="error" tertiary :disabled="busy || !!action"
             :aria-label="'移除管理员 ' + member.subject" @click="edit('REVOKE', member.subject)">移除</NButton>
@@ -106,4 +94,34 @@ onMounted(() => { void run(load) })
       <NButton size="small" :disabled="busy" @click="run(() => load(true))">加载更多</NButton>
     </div>
   </section>
+
+  <NModal :show="!!action" preset="card" :title="dialogTitle" :aria-label="dialogTitle"
+    class="member-dialog" :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
+    @update:show="show => { if (!show) closeEditor() }" @after-leave="restoreFocus">
+    <NForm @submit.prevent="save">
+      <NAlert v-if="error" class="member-dialog-message" type="error" role="alert">{{ error }}</NAlert>
+      <p v-if="action === 'REVOKE'" class="member-dialog-message">
+        移除 <strong>{{ subject }}</strong> 后，该账号将失去此角色的访问权限。
+      </p>
+      <NFormItem v-else label="本地用户名" :label-props="{ for: 'member-subject' }">
+        <NInput v-model:value="subject" placeholder="例如：alice" :disabled="busy" maxlength="64"
+          :input-props="{ id: 'member-subject', autocomplete: 'off' }" />
+      </NFormItem>
+      <NFormItem label="变更理由" :label-props="{ for: 'member-reason' }">
+        <NInput v-model:value="reason" placeholder="例如：调整角色分工" maxlength="240" :disabled="busy"
+          :input-props="{ id: 'member-reason' }" />
+      </NFormItem>
+      <div class="console-actions member-dialog-actions">
+        <NButton :disabled="busy" @click="closeEditor">取消</NButton>
+        <NButton :type="action === 'REVOKE' ? 'error' : 'primary'" attr-type="submit"
+          :loading="busy" :disabled="busy || !payload.success">{{ dialogTitle }}</NButton>
+      </div>
+    </NForm>
+  </NModal>
 </template>
+
+<style scoped>
+.member-dialog { width: min(32rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; }
+.member-dialog-message { margin: 0 0 1rem; overflow-wrap: anywhere; }
+.member-dialog-actions { justify-content: flex-end; }
+</style>

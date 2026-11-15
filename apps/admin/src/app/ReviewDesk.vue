@@ -532,6 +532,7 @@ async function decide(decision: Decision) {
         <h2 id="review-heading" ref="pageHeading" tabindex="-1">
           {{ tab === 'home' && currentCharacter ? (currentCharacter.profile?.name || currentCharacter.slug) + '的工作台' : pageTitle[tab] }}
         </h2>
+        <span v-if="(inAccess || inKnowledge) && currentCharacter" class="access-scope">{{ currentCharacter.profile?.name || currentCharacter.slug }}</span>
         <NTag v-if="tab === 'home' && currentCharacter" :type="currentCharacter.status === 'ACTIVE' ? 'success' : 'default'" size="small" :bordered="false">
           {{ currentCharacter.status === 'ACTIVE' ? '已启用' : '已暂停' }}
         </NTag>
@@ -545,14 +546,14 @@ async function decide(decision: Decision) {
           {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : '失败任务' }}
         </NButton>
       </nav>
-      <nav v-if="inKnowledge && characterId" class="run-navigation" aria-label="记忆与身份成长分区">
-        <NButton v-for="page in knowledgePages" :key="page" text :type="tab === page ? 'primary' : 'default'"
+      <nav v-if="inKnowledge && characterId" class="run-navigation access-navigation" aria-label="记忆与身份成长分区">
+        <NButton v-for="page in knowledgePages" :key="page" size="small" secondary :type="tab === page ? 'primary' : 'default'"
           :aria-current="tab === page ? 'page' : undefined" :disabled="busy || routing" @click="changeTab(page)">
           {{ page === 'knowledge' ? '记忆与授权' : '身份成长' }}
         </NButton>
       </nav>
-      <nav v-if="inAccess && characterId" class="run-navigation" aria-label="成员与审计分区">
-        <NButton v-for="page in accessPages" :key="page" text :type="tab === page ? 'primary' : 'default'"
+      <nav v-if="inAccess && characterId" class="run-navigation access-navigation" aria-label="成员与审计分区">
+        <NButton v-for="page in accessPages" :key="page" size="small" secondary :type="tab === page ? 'primary' : 'default'"
           :aria-current="tab === page ? 'page' : undefined" :disabled="busy || routing" @click="changeTab(page)">
           {{ page === 'members' ? '管理员' : '审计记录' }}
         </NButton>
@@ -588,14 +589,14 @@ async function decide(decision: Decision) {
           @identities="changeTab('character')"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @form="navigate({ characterId, page: 'runs', runQuery, startSimulation: $event })"
-          @filter="navigate({ characterId, page: 'runs', detail: detailId, runQuery: $event, startSimulation })" />
-        <RunOperations v-if="!detailId" :key="characterId" :character-id="characterId" mode="backlog"
+          @filter="navigate({ characterId, page: 'runs', runQuery: $event })" />
+        <RunOperations v-if="!detailId && !startSimulation" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')"
           @open-reconciliation="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
       </template>
       <RunOperations v-else-if="tab === 'outbox' && characterId" :key="characterId"
         :character-id="characterId" mode="outbox" can-retry
-        @expired="resetSession" @open-runs="changeTab('runs')" @open-run="openRun" />
+        @expired="resetSession" @open-run="openRun" />
       <AuditWorkspace v-else-if="tab === 'audit' && characterId" :key="characterId + '/' + (detailId ?? '') + '/' + (auditTarget ?? '')"
         :character-id="characterId" :run-id="detailId" :target-id="auditTarget" can-review
         @expired="resetSession" @all="changeTab('audit')" @open-run="openRun"
@@ -752,6 +753,8 @@ async function decide(decision: Decision) {
 .console-navigation button:focus-visible { outline-offset: -2px; }
 .run-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.125rem; }
 .run-navigation [aria-current] { font-weight: 650; }
+.access-navigation { gap: .5rem; }
+.access-scope { color: var(--console-muted); font-size: .875rem; overflow-wrap: anywhere; }
 .workspace-header h2 { font-size: 1.5rem; line-height: 1.25; letter-spacing: -.025em; }
 .account-name { max-width: 8rem; }
 .account-name :deep(.n-button__content) { overflow: hidden; text-overflow: ellipsis; }

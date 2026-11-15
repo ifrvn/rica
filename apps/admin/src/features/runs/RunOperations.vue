@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '../../../../../packages/contracts/simulation-observability.js'
 import { request, RequestError } from '@rica/console-shared/request'
@@ -10,7 +10,7 @@ type Event = z.infer<typeof quarantinedOutboxEvent>
 type Quarantine = z.infer<typeof outboxQuarantineView>
 
 const props = defineProps<{ characterId: string; mode: 'backlog' | 'outbox'; canRetry?: boolean }>()
-const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openRuns: []; openRun: [id: string] }>()
+const emit = defineEmits<{ expired: []; openOutbox: []; openReconciliation: []; openRun: [id: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId)
 const backlog = ref<Backlog>()
 const events = ref<Event[]>([])
@@ -18,6 +18,8 @@ const cursor = ref<string | null>(null)
 const selected = ref<Event>()
 const stale = ref(false)
 const reason = ref('')
+const listHeading = ref<HTMLElement>()
+let retryTrigger: HTMLElement | undefined
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -84,11 +86,22 @@ async function act(task: () => Promise<void>) {
 }
 
 function select(event: Event) {
+  if (!selected.value) retryTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   if (selected.value?.id !== event.id) reason.value = ''
   selected.value = event
   stale.value = false
   error.value = ''
   notice.value = ''
+}
+
+function closeRetry() {
+  selected.value = undefined
+  reason.value = ''
+  error.value = ''
+}
+
+function restoreFocus() {
+  void nextTick(() => (retryTrigger?.isConnected && !retryTrigger.matches(':disabled') ? retryTrigger : listHeading.value)?.focus())
 }
 
 function retry() {
@@ -111,8 +124,7 @@ function retry() {
       return
     }
     if (!active) return
-    selected.value = undefined
-    reason.value = ''
+    closeRetry()
     events.value = events.value.filter(({ id }) => id !== event.id)
     notice.value = '事件已重新排队。'
     await load()
@@ -123,7 +135,7 @@ onMounted(() => { void act(load) })
 </script>
 
 <template>
-  <section v-if="mode === 'backlog'" class="run-summary" aria-labelledby="run-summary-heading">
+  <section v-if="mode === 'backlog'" class="console-card console-stack run-summary" aria-labelledby="run-summary-heading">
     <div class="console-section-heading">
       <h3 id="run-summary-heading">待处理</h3>
       <NButton size="small" quaternary :disabled="busy" @click="act(load)">刷新待处理</NButton>
@@ -144,65 +156,69 @@ onMounted(() => { void act(load) })
       <NButton v-if="backlog?.reconciliation.count" size="small" @click="emit('openReconciliation')">查看待对账</NButton>
     </div>
   </section>
-  <section v-else class="operations outbox" aria-label="失败任务">
-    <div class="operations-actions">
-      <NButton size="small" @click="emit('openRuns')">返回运行</NButton>
-      <NButton size="small" :disabled="busy || !!selected" @click="act(load)">刷新任务</NButton>
+  <section v-else class="console-card console-stack" aria-labelledby="outbox-list-heading">
+    <div class="console-section-heading">
+      <h3 id="outbox-list-heading" ref="listHeading" tabindex="-1">待恢复任务</h3>
+      <NButton size="small" quaternary :disabled="busy" @click="act(load)">刷新任务</NButton>
     </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="error && !selected" type="error" role="alert">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <section v-if="selected" class="console-panel" aria-labelledby="outbox-retry-heading">
-      <div class="console-section-heading"><h3 id="outbox-retry-heading">恢复失败任务</h3></div>
-      <p>{{ eventType[selected.type] }} · 第 {{ selected.generation }} 代</p>
-      <p>恢复后由 Worker 重新处理此事件。</p>
-      <NForm @submit.prevent="retry">
-        <NFormItem label="恢复理由" :label-props="{ for: 'outbox-reason' }">
-          <NInput placeholder="例如：已排除故障，可以重新处理" v-model:value="reason" :input-props="{ id: 'outbox-reason' }" :maxlength="240" :disabled="busy" />
-        </NFormItem>
+    <NSpin v-if="busy && !events.length" aria-label="正在加载失败任务" />
+    <NEmpty v-else-if="!events.length && !error" description="暂无失败任务。" />
+    <ul v-if="events.length" class="console-group-list">
+      <li v-for="event in events" :key="event.id" class="console-group-row">
+        <div class="event-info">
+          <strong>{{ eventType[event.type] }}</strong>
+          <div class="operations-actions console-group-meta">
+            <time :datetime="event.quarantinedAt">隔离于 {{ time(event.quarantinedAt) }}</time>
+            <span>已尝试 {{ event.attempts }} 次</span>
+          </div>
+        </div>
         <div class="operations-actions">
-          <NButton v-if="stale && currentEvent" :disabled="busy" @click="select(currentEvent)">重新核对</NButton>
-          <NButton v-else type="primary" attr-type="submit" :loading="busy"
-            :disabled="busy || stale || !reason.trim()">恢复事件</NButton>
-          <NButton :disabled="busy" @click="selected = undefined; reason = ''">取消</NButton>
+          <NButton size="small" quaternary @click="emit('openRun', event.runId)">查看运行</NButton>
+          <NButton v-if="canRetry" size="small" secondary type="primary" :disabled="busy || !!selected"
+            @click="select(event)">恢复任务</NButton>
+        </div>
+      </li>
+    </ul>
+    <NButton v-if="cursor" class="load-more" size="small" :disabled="busy" @click="act(() => load(true))">加载更多</NButton>
+
+    <NModal :show="!!selected" preset="card" title="恢复失败任务" aria-label="恢复失败任务"
+      class="recovery-dialog" :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
+      @update:show="show => { if (!show) closeRetry() }" @after-leave="restoreFocus">
+      <NForm v-if="selected" class="console-stack" @submit.prevent="retry">
+        <div class="event-info">
+          <strong>{{ eventType[selected.type] }}</strong>
+          <span class="console-group-meta">第 {{ selected.generation }} 代 · 已尝试 {{ selected.attempts }} 次</span>
+        </div>
+        <p>确认后，Worker 会重新处理此任务。</p>
+        <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+        <p v-if="stale && !currentEvent">此任务已离开失败列表。</p>
+        <NFormItem label="恢复理由" :label-props="{ for: 'outbox-reason' }">
+          <NInput v-model:value="reason" placeholder="例如：已排除故障，可以重新处理"
+            :input-props="{ id: 'outbox-reason' }" :maxlength="240" :disabled="busy" />
+        </NFormItem>
+        <div class="operations-actions recovery-actions">
+          <NButton :disabled="busy" @click="closeRetry">取消</NButton>
+          <NButton v-if="stale && currentEvent" type="primary" :disabled="busy" @click="select(currentEvent)">重新核对</NButton>
+          <NButton v-else-if="!stale" type="primary" attr-type="submit" :loading="busy"
+            :disabled="busy || !reason.trim()">确认恢复</NButton>
         </div>
       </NForm>
-    </section>
-    <section class="console-panel" aria-labelledby="outbox-list-heading">
-      <div class="console-section-heading"><h3 id="outbox-list-heading">失败任务列表</h3></div>
-      <NSpin v-if="busy && !events.length" />
-      <NEmpty v-else-if="!events.length && !error" description="暂无失败任务。" />
-      <ul v-if="events.length" class="events">
-        <li v-for="event in events" :key="event.id">
-          <div class="event-info">
-            <div class="operations-actions">
-              <strong>{{ eventType[event.type] }}</strong>
-              <NTag size="small">第 {{ event.generation }} 代 · 尝试 {{ event.attempts }} 次</NTag>
-            </div>
-            <span>{{ time(event.quarantinedAt) }}</span>
-          </div>
-          <div class="operations-actions">
-            <NButton size="small" quaternary @click="emit('openRun', event.runId)">查看运行</NButton>
-            <NButton v-if="canRetry" size="small" :disabled="busy || !!selected" @click="select(event)">恢复</NButton>
-          </div>
-        </li>
-      </ul>
-      <NButton v-if="cursor" size="small" :disabled="busy" @click="act(() => load(true))">加载更多</NButton>
-    </section>
+    </NModal>
   </section>
 </template>
 
 <style scoped>
-.operations { margin-top: 1rem; }
-.outbox { display: grid; gap: 1rem; }
-.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .75rem; }
-.run-summary { padding-bottom: 1rem; border-bottom: 1px solid var(--console-line); }
-.run-summary .metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.75rem), 1fr)); }
+.run-summary .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.75rem), 1fr));
+  gap: .75rem; margin: 0; }
 .run-summary .metrics div { min-width: 0; }
 .run-summary small { color: var(--console-muted); }
 .metrics dd { margin: .25rem 0; font-size: 1.3rem; font-weight: 650; }
-.operations-actions, .events li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-.events { list-style: none; padding: 0; margin: 0; }
-.events li { justify-content: space-between; padding-block: .6rem; }
-.events li + li { border-top: 1px solid var(--console-line); }
-.event-info { display: grid; gap: .2rem; overflow-wrap: anywhere; }
+.operations-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.event-info { display: grid; gap: .25rem; overflow-wrap: anywhere; }
+.load-more { justify-self: start; }
+.recovery-dialog { width: min(32rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; }
+.recovery-dialog p { margin: 0; }
+.recovery-actions { justify-content: flex-end; }
 </style>
