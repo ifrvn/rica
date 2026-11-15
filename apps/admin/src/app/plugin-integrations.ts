@@ -58,10 +58,15 @@ type AccountIntegration = {
   }
 }
 export const platformAccounts: readonly AccountIntegration[] = [newbiAccounts]
+export type ReviewQueue = {
+  status: string; label: string
+  items: { id: string; title: string; createdAt: string }[]
+}
 export const platformReviews: readonly {
   id: string; title: string; component: Component
   installed(workspace: ConsoleWorkspace): boolean
   deployed(deployment: DeploymentPluginsView): boolean
+  workbench?(characterId: string, canManage: boolean): Promise<ReviewQueue[]>
 }[] = [newbiReview]
 
 export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, ...hostedModelNames }

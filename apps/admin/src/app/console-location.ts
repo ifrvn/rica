@@ -1,5 +1,5 @@
 export type ConsolePage = 'home' | 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'health' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics'
-export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string; reviewPlugin?: string; healthNode?: 'simulation-executor' }
+export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string; reviewPlugin?: string; reviewStatus?: string; healthNode?: 'simulation-executor' }
 
 export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'through'] as const
 
@@ -23,19 +23,22 @@ export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
   const runQuery = filters.toString()
   const connectorAccountId = query.get('accountId')
   const reviewPlugin = query.get('plugin')
+  const reviewStatus = query.get('status')
   return { characterId: characterId.toLowerCase(), page: page as ConsolePage, detail: detail?.toLowerCase(),
     ...(runQuery ? { runQuery } : {}),
     ...(page === 'runs' && !detail && query.get('start') === '1' ? { startSimulation: true } : {}),
     ...(page === 'connector' && connectorAccountId && id.test(connectorAccountId) ? { connectorAccountId } : {}),
     ...(page === 'connector' && reviewPlugin ? { reviewPlugin } : {}),
+    ...(page === 'connector' && reviewStatus !== null ? { reviewStatus } : {}),
     ...(page === 'health' && query.get('node') === 'simulation-executor' ? { healthNode: 'simulation-executor' as const } : {}) }
 }
 
-export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId, reviewPlugin, healthNode }: ConsoleLocation) {
+export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId, reviewPlugin, reviewStatus, healthNode }: ConsoleLocation) {
   const filters = new URLSearchParams(runQuery)
   if (page === 'runs' && !detail && startSimulation) filters.set('start', '1')
   if (page === 'connector' && connectorAccountId) filters.set('accountId', connectorAccountId)
   if (page === 'connector' && reviewPlugin) filters.set('plugin', reviewPlugin)
+  if (page === 'connector' && reviewStatus !== undefined) filters.set('status', reviewStatus)
   return '#/characters/' + characterId + '/' + page + (detail ? '/' + detail : '')
     + ((page === 'runs' || page === 'connector') && filters.size ? '?' + filters.toString() : '')
     + (page === 'health' && healthNode ? '?node=' + healthNode : '')

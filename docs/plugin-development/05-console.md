@@ -102,9 +102,11 @@ export const acmeCard = {
 
 `platformReviews` 的一项包含 `id: string`、`title: string`、`component: Component`、`installed(workspace): boolean`、`deployed(deployment): boolean`。账号详情跳转时用平台 ID 选择同名审批项。
 
-审批组件接收 `characterId: string`、可选的 `detailId: string`、`accountId: string`，以及布尔值 `canReview` 和 `canManage`。事件签名为 `open(id?: string)`、`all()` 和 `expired()`。比如 `open(reply.id)` 切换到提案详情，`open()` 回到筛选列表，`all()` 去掉账号筛选。
+审批组件接收 `characterId: string`、可选的 `detailId: string`、`accountId: string`、`statusFilter: string`，以及布尔值 `canReview` 和 `canManage`。事件签名为 `open(id?: string)`、`all()`、`expired()` 和 `filter(status: string)`。`open(reply.id)` 切换到提案详情，`open()` 回到筛选列表，`all()` 去掉账号筛选，`filter(status)` 更新链接中的状态。插件应校验收到的状态值。
 
 账号详情可以发出 `proposals(accountId, proposalId?)`，宿主形成带插件 ID 的审批链接。路由位于 `#/characters/<characterId>/connector[/<proposalId>]`，查询参数 `plugin` 选择审批组件，`accountId` 限定列表。账号入口使用平台 ID 作为审批插件 ID，登记时保持两者一致。提案正文、目标、受众、动作名称和执行后果应直接可见。前端权限用于展示入口，服务端按操作重新验证。
+
+可选的 `workbench(characterId: string, canManage: boolean)` 向工作台贡献已获授权的待办预览。返回 `Promise<{ status: string; label: string; items: { id: string; title: string; createdAt: string }[] }[]>`。每组的 `status` 同时用于预览查询和审批链接，记录的 `id` 用于打开详情。按 `canManage` 选择适用的队列，服务端继续校验角色和资源权限。
 
 ## 系统运行状况与审计
 

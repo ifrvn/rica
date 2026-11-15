@@ -80,6 +80,7 @@ const characterCursor = ref<string | null>(null)
 const roles = ref<CharacterAccess>([])
 const installedReviews = ref<string[]>([])
 const reviewPlugin = ref<string>()
+const reviewStatus = ref<string>()
 const activePlatformReview = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)
   ?? (reviewPlugin.value ? undefined : platformReviews.find(({ id }) => installedReviews.value.includes(id)) ?? platformReviews[0]))
 const reviewTabs = computed(() => platformReviews.filter(({ id }) => installedReviews.value.includes(id)
@@ -90,6 +91,7 @@ function refreshReviewTabs(deployment: DeploymentPluginsView) {
 }
 const canReadRuns = computed(() => hasManagementRole(roles.value, ['AUDITOR']))
 const canReview = computed(() => hasManagementRole(roles.value, ['REVIEWER']))
+const canOpenHome = computed(() => canReview.value || canReadRuns.value)
 const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const currentCharacter = computed(() => characters.value.find(({ id }) => id === characterId.value))
@@ -226,10 +228,11 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
       else characterUpdated(workspace)
     }
     characterId.value = target
-    const page = landing && !roles.value.includes('ADMIN')
-      ? canReview.value ? 'review' : canReadRuns.value ? 'audit' : 'character'
+    const page = landing && !canReview.value
+      ? canReadRuns.value ? 'audit' : 'character'
       : location.page
-    const denied = (['home', 'runs', 'outbox', 'audit', 'plugins', 'health', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
+    const denied = (page === 'home' && !canOpenHome.value)
+      || (['runs', 'outbox', 'audit', 'plugins', 'health', 'accounts', 'members', 'knowledge', 'growth', 'metrics'].includes(page) && !canReadRuns.value)
       || (page === 'planning' && !roles.value.includes('ADMIN'))
       || ((page === 'connector' || page === 'review') && !canReview.value)
     tab.value = denied ? 'character' : page
@@ -238,12 +241,13 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     startSimulation.value = tab.value === 'runs' && roles.value.includes('ADMIN') && !!location.startSimulation
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
     reviewPlugin.value = tab.value === 'connector' ? location.reviewPlugin : undefined
+    reviewStatus.value = tab.value === 'connector' ? location.reviewStatus : undefined
     healthNode.value = tab.value === 'health' ? location.healthNode : undefined
     if (denied) error.value = '当前账号无权打开此链接。'
     if (replace || tab.value !== location.page || (location.startSimulation && !startSimulation.value)) {
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value,
         runQuery: runQuery.value, startSimulation: startSimulation.value, connectorAccountId: connectorAccountId.value,
-        reviewPlugin: reviewPlugin.value, healthNode: healthNode.value }))
+        reviewPlugin: reviewPlugin.value, reviewStatus: reviewStatus.value, healthNode: healthNode.value }))
     }
     if (tab.value === 'review' && canReview.value) {
       if (!queueLoaded) await fetchQueue(current)
@@ -496,7 +500,7 @@ async function decide(decision: Decision) {
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
       <nav v-if="characters.length" class="console-navigation" aria-label="控制台导航">
-        <button v-if="canReadRuns" type="button" :aria-current="mainPage === 'home' ? 'page' : undefined" :disabled="busy || routing"
+        <button v-if="canOpenHome" type="button" :aria-current="mainPage === 'home' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('home')"><span class="i-lucide-layout-dashboard" aria-hidden="true" />工作台</button>
         <button v-if="canReview" type="button" :aria-current="mainPage === 'review' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('review')"><span class="i-lucide-clipboard-check" aria-hidden="true" />审批</button>
@@ -561,8 +565,9 @@ async function decide(decision: Decision) {
           @click="navigate({ characterId, page: 'connector', reviewPlugin: review.id })">{{ review.title }}</NButton>
       </nav>
       <NSpin v-if="routing && !characterId" />
-      <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canReadRuns" :key="characterId" :character="currentCharacter"
-        :can-review="canReview" :can-start="roles.includes('ADMIN')" @expired="resetSession" @navigate="changeTab"
+      <ConsoleHome v-else-if="tab === 'home' && currentCharacter && canOpenHome" :key="characterId" :character="currentCharacter"
+        :can-review="canReview" :can-read-runs="canReadRuns" :can-start="roles.includes('ADMIN')" :installed-reviews="installedReviews"
+        @expired="resetSession" @navigate="changeTab"
         @updated="characterUpdated"
         @run="openRun" @start="navigate({ characterId, page: 'runs', startSimulation: true })"
         @reconcile="navigate({ characterId, page: 'runs', runQuery: 'state=RECONCILING' })" />
@@ -616,9 +621,11 @@ async function decide(decision: Decision) {
         :character-id="characterId" @expired="resetSession" />
       <template v-else-if="tab === 'connector' && characterId && canReview">
         <component v-if="activePlatformReview" :is="activePlatformReview.component" :key="characterId + '/' + activePlatformReview.id"
-          :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :can-review="canReview" :can-manage="roles.includes('ADMIN')"
-          @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId, reviewPlugin: activePlatformReview?.id })"
-          @all="navigate({ characterId, page: 'connector', reviewPlugin: activePlatformReview?.id })" />
+          :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :status-filter="reviewStatus"
+          :can-review="canReview" :can-manage="roles.includes('ADMIN')"
+          @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId, reviewPlugin: activePlatformReview?.id, reviewStatus })"
+          @filter="navigate({ characterId, page: 'connector', detail: detailId, connectorAccountId, reviewPlugin: activePlatformReview?.id, reviewStatus: $event })"
+          @all="navigate({ characterId, page: 'connector', reviewPlugin: activePlatformReview?.id, reviewStatus })" />
         <NEmpty v-else description="此插件未注册审批页面。" />
       </template>
       <div v-else-if="tab === 'review' && characterId && canReview" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">

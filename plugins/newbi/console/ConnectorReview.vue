@@ -10,15 +10,15 @@ type Summary = z.infer<typeof newbiReplySummary>
 type Reply = z.infer<typeof newbiReviewView>
 type SendResult = z.infer<typeof newbiSendView>
 type Page = { items: Summary[]; nextCursor: string | null }
-const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; canReview: boolean; canManage: boolean }>()
-const emit = defineEmits<{ expired: []; open: [id?: string]; all: [] }>()
+const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; statusFilter?: string; canReview: boolean; canManage: boolean }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; all: []; filter: [status: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId) + '/newbi/replies'
 const statusText: Record<Summary['status'], string> = {
   WAITING: '待审批', READY: '待发送', REJECTED: '已拒绝', IN_FLIGHT: '发送中',
   UNKNOWN: '待核对', SENT: '已发送', CLOSED: '已结案',
 }
 const options = [{ label: '全部状态', value: '' }, ...Object.entries(statusText).map(([value, label]) => ({ label, value }))]
-const filter = ref('WAITING')
+const filter = computed(() => options.find(({ value }) => value === props.statusFilter)?.value ?? 'WAITING')
 const rows = ref<Summary[]>([])
 const cursor = ref<string | null>(null)
 const reply = ref<Reply>()
@@ -88,13 +88,6 @@ async function list(append = false) {
     }
     listError.value = message(cause)
   } finally { if (current === listRevision) loadingList.value = false }
-}
-
-function changeFilter(value: string) {
-  filter.value = value
-  rows.value = []
-  cursor.value = null
-  void list()
 }
 
 async function detail(id?: string) {
@@ -219,7 +212,7 @@ async function send() {
   } finally { submitting.value = false }
 }
 
-watch(() => props.accountId, () => {
+watch([() => props.accountId, filter], () => {
   rows.value = []
   cursor.value = null
   void list()
@@ -240,7 +233,7 @@ onMounted(() => { void list() })
       <div class="connector-actions">
         <label for="connector-filter">状态</label>
         <NSelect placeholder="选择提案状态" filterable :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"
-          class="filter" :disabled="loadingList || submitting" @update:value="changeFilter" />
+          class="filter" :disabled="loadingList || submitting" @update:value="emit('filter', $event)" />
       </div>
       <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
       <NSpin v-if="loadingList && !rows.length" />

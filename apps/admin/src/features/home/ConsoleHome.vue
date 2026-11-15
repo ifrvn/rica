@@ -5,7 +5,8 @@ import type { z } from '@hono/zod-openapi'
 import type { accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import type { simulationBacklogView, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
 import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '@rica/console-shared/console-data'
-import type { ConsolePage } from '../../app/console-location.js'
+import { consoleHash, type ConsolePage } from '../../app/console-location.js'
+import { platformReviews, type ReviewQueue } from '../../app/plugin-integrations.js'
 import { simulationAccounts } from '../runs/simulation-accounts.js'
 import { request } from '@rica/console-shared/request'
 
@@ -14,9 +15,30 @@ type Run = z.infer<typeof simulationRunSummary>
 type Account = z.infer<typeof accountView>
 type Identity = z.infer<typeof identityView>
 type Character = z.infer<typeof characterWorkspaceView>
-const props = defineProps<{ character: z.infer<typeof characterView>; canReview: boolean; canStart: boolean }>()
+const props = defineProps<{
+  character: z.infer<typeof characterView>; canReview: boolean; canStart: boolean; canReadRuns: boolean; installedReviews: string[]
+}>()
 const emit = defineEmits<{ expired: []; navigate: [page: ConsolePage]; run: [id: string]; reconcile: []; start: []; updated: [character: Character] }>()
 const { busy, error, active, run } = useConsoleTask(() => emit('expired'))
+const reviewTask = useConsoleTask(() => emit('expired'))
+const { busy: loadingReviews, error: reviewError } = reviewTask
+const reviewGroups = ref<(ReviewQueue & { plugin: string; pluginTitle: string })[]>([])
+const reviewProviders = computed(() => props.canReview
+  ? platformReviews.flatMap(({ id, title, workbench }) =>
+    props.installedReviews.includes(id) && workbench ? [{ id, title, workbench }] : [])
+  : [])
+
+function refreshReviewGroups() {
+  return reviewTask.run(async () => {
+    const groups = await Promise.all(reviewProviders.value.map(async ({ id, title, workbench }) =>
+      (await workbench(props.character.id, props.canStart)).map((queue) => ({ ...queue, plugin: id, pluginTitle: title }))))
+    if (reviewTask.active()) reviewGroups.value = groups.flat()
+  })
+}
+
+function reviewLink(group: (typeof reviewGroups.value)[number], detail?: string) {
+  return consoleHash({ characterId: props.character.id, page: 'connector', detail, reviewPlugin: group.plugin, reviewStatus: group.status })
+}
 const backlog = ref<Backlog>()
 const recent = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -82,7 +104,10 @@ function refresh() {
   })
 }
 
-onMounted(refresh)
+onMounted(() => {
+  if (props.canReadRuns) void refresh()
+  if (reviewProviders.value.length) void refreshReviewGroups()
+})
 </script>
 
 <template>
@@ -98,7 +123,36 @@ onMounted(refresh)
       </div>
       <NButton type="primary" @click="priority.action">{{ priority.label }}</NButton>
     </section>
-    <section class="home-card" aria-labelledby="home-recent">
+    <section v-if="reviewProviders.length || (canReview && !canReadRuns)" class="home-card" aria-labelledby="home-platform-tasks">
+      <div class="console-section-heading">
+        <h3 id="home-platform-tasks">平台待办</h3>
+        <NButton v-if="canReview && !canReadRuns" size="small" quaternary @click="emit('navigate', 'review')">查看模拟审批</NButton>
+        <NButton v-else-if="reviewError" size="small" :loading="loadingReviews" @click="refreshReviewGroups">重新加载</NButton>
+      </div>
+      <NAlert v-if="reviewError" type="error" role="alert">{{ reviewError }}
+        <NButton v-if="!canReadRuns" size="small" quaternary @click="refreshReviewGroups">重新加载</NButton>
+      </NAlert>
+      <NSpin v-else-if="loadingReviews" aria-label="正在加载平台待办" />
+      <template v-else-if="reviewGroups.some(({ items }) => items.length)">
+        <section v-for="group in reviewGroups.filter(({ items }) => items.length)" :key="group.plugin + '/' + group.status" class="home-queue">
+          <div class="console-section-heading">
+            <h4>{{ group.pluginTitle }} · {{ group.label }}</h4>
+            <NButton tag="a" :href="reviewLink(group)" size="small" quaternary>查看{{ group.label }}列表</NButton>
+          </div>
+          <ul class="home-queue-list">
+            <li v-for="item in group.items" :key="item.id">
+              <a :href="reviewLink(group, item.id)" class="home-row">
+                <span class="i-lucide-message-square" aria-hidden="true" />
+                <span class="home-row-copy"><strong>{{ item.title }}</strong><small>{{ group.label }}</small></span>
+                <time :datetime="item.createdAt">{{ formatTime(item.createdAt) }}</time>
+              </a>
+            </li>
+          </ul>
+        </section>
+      </template>
+      <p v-else class="home-empty">当前角色暂无平台待办。</p>
+    </section>
+    <section v-if="canReadRuns" class="home-card" aria-labelledby="home-recent">
       <div class="console-section-heading">
         <h3 id="home-recent">最近动态</h3>
         <NButton v-if="error" size="small" :loading="busy" @click="refresh">重新加载</NButton>
@@ -119,7 +173,7 @@ onMounted(refresh)
       </ol>
       <p v-else-if="!error" class="home-empty">当前角色暂无运行记录。</p>
     </section>
-    <section class="home-card" aria-labelledby="home-tools">
+    <section v-if="canReadRuns" class="home-card" aria-labelledby="home-tools">
       <div class="console-section-heading"><h3 id="home-tools">常用工具</h3></div>
       <div class="home-tools">
         <button v-for="tool in tools" :key="tool.page" type="button" class="home-row" @click="emit('navigate', tool.page)">
@@ -147,6 +201,10 @@ onMounted(refresh)
   gap: .625rem; width: 100%; min-height: 3.25rem; padding: .5rem .625rem; border: 0; border-radius: 3px;
   background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
 .home-row:hover { background: var(--console-hover); }
+.home-queue { margin-top: .75rem; }
+.home-queue h4 { margin: 0; font-size: .875rem; }
+.home-queue-list { margin: 0; padding: 0; list-style: none; }
+.home-queue-list .home-row { text-decoration: none; }
 .home-row-copy { display: grid; gap: .125rem; overflow-wrap: anywhere; }
 .home-row small, .home-row time, .home-empty { color: var(--console-muted); font-size: .8125rem; }
 .home-node { display: grid; place-items: center; width: 31px; aspect-ratio: 1; border-radius: 50%; background: var(--console-selected); }
