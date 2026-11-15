@@ -28,7 +28,7 @@ const ConsoleHome = defineAsyncComponent(() => import('../features/home/ConsoleH
 const GrowthWorkspace = defineAsyncComponent(() => import('../features/knowledge/GrowthWorkspace.vue'))
 const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowledge/KnowledgeWorkspace.vue'))
 const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
-const LocalUsers = defineAsyncComponent(() => import('../features/access/LocalUsers.vue'))
+const CreateAccount = defineAsyncComponent(() => import('../features/access/CreateAccount.vue'))
 const SecuritySettings = defineAsyncComponent(() => import('../features/access/SecuritySettings.vue'))
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
@@ -43,9 +43,10 @@ const usernameInput = ref('')
 const password = ref('')
 const username = ref('')
 const accountMenuOpen = ref(false)
-const localUsersOpen = ref(false)
+const createAccountOpen = ref(false)
+const accountListRevision = ref(0)
 const securitySettingsOpen = ref(false)
-let localUsersTrigger: HTMLElement | undefined
+let createAccountTriggerId = 'console-account-menu'
 const navigationBreakpoint = window.matchMedia('(max-width: 46rem)')
 const narrowNavigation = ref(navigationBreakpoint.matches)
 const navigationOpen = ref(false)
@@ -266,17 +267,6 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
   }
 }
 
-function refreshMembership() {
-  const target = characterId.value
-  void run(async () => {
-    await fetchCharacters()
-    if (characterId.value !== target) return
-    characterId.value = ''
-    const next = characters.value.some(({ id }) => id === target) ? target : characters.value[0]?.id
-    await applyLocation(next ? { characterId: next, page: next === target ? 'members' : 'character' } : undefined, true)
-  })
-}
-
 function closePlanning(feedback?: string) {
   changeTab('planning')
   if (feedback) notice.value = feedback
@@ -361,7 +351,7 @@ function resetSession() {
   username.value = ''
   password.value = ''
   accountMenuOpen.value = false
-  localUsersOpen.value = false
+  createAccountOpen.value = false
   canCreate.value = false
   tab.value = 'character'
   characterCursor.value = null
@@ -375,15 +365,22 @@ function resetSession() {
   resetReview()
 }
 
-function openLocalUsers() {
-  localUsersTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+function openCreateAccount(triggerId = 'console-account-menu') {
+  createAccountTriggerId = triggerId
   accountMenuOpen.value = false
-  localUsersOpen.value = true
+  notice.value = ''
+  createAccountOpen.value = true
 }
 
-function closeLocalUsers() {
-  localUsersOpen.value = false
-  void nextTick(() => (localUsersTrigger?.isConnected ? localUsersTrigger : document.getElementById('console-account-menu'))?.focus())
+function closeCreateAccount() {
+  createAccountOpen.value = false
+  void nextTick(() => (document.getElementById(createAccountTriggerId) ?? document.getElementById('console-account-menu'))?.focus())
+}
+
+function accountCreated(username: string) {
+  accountListRevision.value++
+  closeCreateAccount()
+  notice.value = '已创建系统管理员账号 ' + username + '。'
 }
 
 function passwordChanged() {
@@ -533,8 +530,8 @@ async function decide(decision: Decision) {
           <PopoverPortal>
             <PopoverContent as-child align="end" :side-offset="8" :collision-padding="12">
               <div class="account-menu" aria-label="账号设置">
-                <UiButton v-if="canCreate" class="account-action" variant="quiet" :disabled="busy" @click="openLocalUsers">
-                  <span class="i-lucide-users" aria-hidden="true" />账号管理
+                <UiButton v-if="canCreate" class="account-action" variant="quiet" :disabled="busy" @click="openCreateAccount()">
+                  <span class="i-lucide-user-plus" aria-hidden="true" />新建账号
                 </UiButton>
                 <UiButton class="account-action" variant="quiet" :disabled="busy"
                   @click="accountMenuOpen = false; securitySettingsOpen = true">
@@ -549,7 +546,7 @@ async function decide(decision: Decision) {
         </PopoverRoot>
       </Teleport>
 
-      <LocalUsers v-if="canCreate && localUsersOpen" @close="closeLocalUsers" @expired="resetSession" />
+      <CreateAccount v-if="canCreate && createAccountOpen" @close="closeCreateAccount" @created="accountCreated" @expired="resetSession" />
       <SecuritySettings v-if="securitySettingsOpen" :passkeys-available="passkeysAvailable"
         @close="closeSecuritySettings" @expired="resetSession" @password-changed="passwordChanged" />
 
@@ -561,7 +558,7 @@ async function decide(decision: Decision) {
         <h2 id="review-heading" ref="pageHeading" tabindex="-1">
           {{ tab === 'home' && currentCharacter ? (currentCharacter.profile?.name || currentCharacter.slug) + '的工作台' : pageTitle[tab] }}
         </h2>
-        <span v-if="(inAccess || inKnowledge) && currentCharacter" class="access-scope">{{ currentCharacter.profile?.name || currentCharacter.slug }}</span>
+        <span v-if="(tab === 'audit' || inKnowledge) && currentCharacter" class="access-scope">{{ currentCharacter.profile?.name || currentCharacter.slug }}</span>
         <UiBadge v-if="tab === 'home' && currentCharacter" :tone="currentCharacter.status === 'ACTIVE' ? 'success' : 'default'">
           {{ currentCharacter.status === 'ACTIVE' ? '已启用' : '已暂停' }}
         </UiBadge>
@@ -641,9 +638,9 @@ async function decide(decision: Decision) {
         :initial-node="healthNode"
         :readiness="readiness" :checked-at="checkedAt" :checking="checkingReadiness" @check="emit('checkReadiness')"
         @accounts="changeTab('accounts')" @runs="changeTab('runs')" />
-      <MembershipWorkspace v-else-if="tab === 'members' && characterId" :key="characterId"
-        :character-id="characterId" :username="username"
-        :can-manage-users="canCreate" @manage-users="openLocalUsers" @expired="resetSession" @permissions="refreshMembership" />
+      <MembershipWorkspace v-else-if="tab === 'members' && characterId"
+        :revision="accountListRevision" :can-create="canCreate"
+        @create-account="openCreateAccount('system-admin-create')" @expired="resetSession" />
       <KnowledgeWorkspace v-else-if="tab === 'knowledge' && characterId" :key="characterId"
         :character-id="characterId" :detail-id="detailId" can-edit
         @expired="resetSession" @open="navigate({ characterId, page: 'knowledge', detail: $event })" />

@@ -690,6 +690,7 @@ model AdminUser {
   actorId      String         @unique @map("actor_id") @db.VarChar(64)
   canCreate    Boolean        @default(false) @map("can_create")
   authVersion  Int            @default(1) @map("auth_version")
+  createdAt    DateTime?      @default(now()) @map("created_at") @db.Timestamptz(6)
   passkeys     AdminPasskey[]
 
   @@map("admin_users")

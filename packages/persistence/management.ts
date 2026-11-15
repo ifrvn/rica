@@ -3,12 +3,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentReceiptView, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
 import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
+import { localIssuer } from '../contracts/local-users.js'
 import type * as contracts from '../contracts/management.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
 import { dailyScheduleSlot } from './simulation-schedules.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 
-type Subject = Readonly<{ issuer: string; subject: string; id: string }>
+type Subject = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
 type Tx = Prisma.TransactionClient
 type CommandResult = { id: string; status?: string; version?: number; authEpoch?: number }
 type Input<T extends z.ZodType> = z.infer<T>
@@ -37,7 +38,15 @@ export function denyPermission(): never {
 
 export type Scope = Readonly<{ actor: Subject; characterId: string }>
 
+function isSystemAdministrator(actor: Subject) {
+  return actor.issuer === localIssuer && actor.canCreate === true
+}
+
 export async function authorize(tx: Tx, scope: Scope) {
+  if (isSystemAdministrator(scope.actor)) {
+    if (!await tx.character.findUnique({ where: { id: scope.characterId }, select: { id: true } })) unavailable()
+    return
+  }
   const membership = await tx.managementMembership.findUnique({
     where: { characterId_issuer_subject: { characterId: scope.characterId, issuer: scope.actor.issuer, subject: scope.actor.subject } },
     select: { subject: true },
@@ -406,7 +415,7 @@ function characterView({ id, slug, status, timezone, activeCoreVersion, activeCo
 }
 
 export async function listCharacters(db: PrismaClient, actor: Subject, page: Page) {
-  const where = { managementMemberships: { some: { issuer: actor.issuer, subject: actor.subject } } }
+  const where = isSystemAdministrator(actor) ? {} : { managementMemberships: { some: { issuer: actor.issuer, subject: actor.subject } } }
   return db.$transaction(async (tx) => {
     const args = await pageArgs(page, (id) => tx.character.findFirst({ where: { ...where, id }, select: { id: true } }))
     const rows = await tx.character.findMany({ ...args, where, select: characterSelect })

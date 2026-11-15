@@ -80,8 +80,8 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     const cursor = usernameInput.optional().safeParse(c.req.query('after'))
     if (!cursor.success) return c.json({ error: { code: 'INVALID_INPUT' } }, 422)
     const rows = await db.adminUser.findMany({
-      select: { username: true, canCreate: true },
-      where: cursor.data ? { username: { gt: cursor.data } } : undefined,
+      select: { username: true, createdAt: true },
+      where: { canCreate: true, username: cursor.data ? { gt: cursor.data } : undefined },
       orderBy: { username: 'asc' }, take: 26,
     })
     const items = rows.slice(0, 25)

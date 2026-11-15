@@ -6,29 +6,29 @@
 
 1. 使用迁移账号执行 `pnpm run db:migrate`。管理 API 复用 `DATABASE_URL`，连接时切换到 `rica_admin_api`。
 2. 将 `RICA_ADMIN_ORIGIN` 设置为与浏览器地址完全相同的源。本地使用 `http://localhost:5173`。部署使用固定的 HTTPS 地址，Passkey 的 RP ID 使用该地址的主机名。
-3. 使用迁移数据库登录初始化本地账号。`--creator` 授予创建新角色的权限。新角色创建者自动成为该角色的 ADMIN。启动 API 后访问控制台登录。
+3. 使用迁移数据库登录初始化系统管理员。启动 API 后访问控制台登录。
 
 ## 本地账号与会话
 
 以下 PowerShell 7 示例以交互方式读取密码，再通过标准输入传递给命令。用户名长度 3–64，允许小写字母、数字、点、下划线及连字符。密码长度 12–128，数据库只保存带盐的 scrypt 哈希。
 
 ```powershell
-Read-Host -MaskInput 'Rica password' | pnpm run admin:user add admin --creator
+Read-Host -MaskInput 'Rica password' | pnpm run admin:user add admin
 Read-Host -MaskInput 'Second administrator password' | pnpm run admin:user add reviewer
 Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 ```
 
-部署管理员可在右上角账号菜单或「成员与审计」打开「账号管理」，确认自己的密码后创建或重置普通账号。使用上面的 CLI 初始化部署管理员。新增账号后，在「成员与审计」将该本地用户名添加为角色管理员。管理员重置密码会使目标账号的所有会话失效并移除其 Passkey，角色授权保留。
+系统管理员可在右上角菜单或「成员与审计」点击「新建账号」，验证当前密码后创建另一位系统管理员。新账号可以管理所有虚拟角色、部署插件和系统账号。列表显示账号创建时间，迁移前的账号可能没有记录。
 
 ### 网页账号管理接口
 
 | 方法 | 参数 | 结果 |
 | --- | --- | --- |
-| `GET /v1/auth/users` | 可选 `after`，取上一页游标。 | 200，`{ items: [{ username, canCreate }], nextCursor }`，每页最多 25 条。 |
-| `POST /v1/auth/users` | `{ username, password, currentPassword }`。 | 201，`{ username }`。新增普通账号，无初始角色权限。 |
+| `GET /v1/auth/users` | 可选 `after`，取上一页游标。 | 200，`{ items: [{ username, createdAt }], nextCursor }`，每页最多 25 条，仅返回系统管理员。历史记录的 `createdAt` 为 `null`。 |
+| `POST /v1/auth/users` | `{ username, password, currentPassword }`。 | 201，`{ username }`。创建系统管理员。 |
 | `PUT /v1/auth/users/{username}/password` | `{ password, currentPassword }`。 | 200，`{ username }`。旧会话及 Passkey 一并失效。 |
 
-这些接口要求具有部署管理权限的本地会话。写请求使用同源 `Origin`，`password` 是目标账号的新密码，`currentPassword` 用于验证当前操作者。普通角色管理员调用返回 403。用户名已存在时返回 `409 ACCOUNT_EXISTS`，重置部署管理员返回 `409 ACCOUNT_PROTECTED`，目标不存在返回 `404 ACCOUNT_NOT_FOUND`。
+这些接口要求系统管理员会话。写请求使用同源 `Origin`，`password` 是目标账号的新密码，`currentPassword` 用于验证当前操作者。历史受限账号调用返回 403。用户名已存在时返回 `409 ACCOUNT_EXISTS`，通过网页接口重置系统管理员返回 `409 ACCOUNT_PROTECTED`，目标不存在返回 `404 ACCOUNT_NOT_FOUND`。
 
 - 网页登录后持有有效期 8 小时的 HttpOnly、SameSite=Strict 会话 Cookie。退出会撤销当前会话，HTTPS 下 Cookie 额外使用 Secure 属性。
 - 已登录用户可输入当前密码后登记 Passkey。登记和登录都验证浏览器来源、RP ID、一次性挑战和验证器的用户验证。已登记用户可直接选用 Passkey 登录。
@@ -44,7 +44,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 ## 已开放的入口
 
-每个虚拟角色单独维护一份管理员列表。角色管理员可配置角色、管理成员、审批和查看运行及审计记录。人工提案须由提交人以外的管理员审批。创建角色、管理本地登录账号和配置部署插件要求部署级权限。
+系统管理员可以访问所有角色。历史账号继续按已有角色授权访问。人工提案须由提交人以外的管理员审批。
 
 从旧版本迁移时，现有管理员授权保留，旧的操作员、审批员和审计员授权会撤销。原登录账号与审计记录保留。
 

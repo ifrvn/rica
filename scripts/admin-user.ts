@@ -5,9 +5,7 @@ import { createDatabase } from '../packages/persistence/client.js'
 async function main() {
   const [command, name, ...flags] = process.argv.slice(2)
   const username = usernameInput.parse(name)
-  const creator = flags[0] === '--creator'
-  if ((command === 'add' && (flags.length === 0 || (creator && flags.length === 1)))
-    || (command === 'reset' && flags.length === 0)) {
+  if ((command === 'add' || command === 'reset') && flags.length === 0) {
     const url = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL
     if (!url) throw new Error('Set MIGRATION_DATABASE_URL or DATABASE_URL')
     let input = ''
@@ -30,14 +28,14 @@ async function main() {
           await tx.adminUser.update({ where: { id: user.id }, data: { passwordHash, authVersion: { increment: 1 } } })
           return
         }
-        await tx.adminUser.create({ data: { username, passwordHash, actorId: actorId(localIssuer, username), canCreate: creator } })
+        await tx.adminUser.create({ data: { username, passwordHash, actorId: actorId(localIssuer, username), canCreate: true } })
       })
       console.info(JSON.stringify({ username, action: command }))
     } finally {
       await db.$disconnect()
     }
   } else {
-    throw new Error('Usage: admin:user add <username> [--creator] or admin:user reset <username>')
+    throw new Error('Usage: admin:user add <username> or admin:user reset <username>')
   }
 }
 

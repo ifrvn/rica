@@ -213,13 +213,11 @@ test('local authentication enforces origin, membership and session revocation', 
   })
   const session = (cookie: string) => local.request('/v1/auth/session', { headers: { Cookie: cookie } })
   try {
-    await accountCommand(['add', username, '--creator'], oldPassword)
+    await accountCommand(['add', username], oldPassword)
     const user = await owner.adminUser.findUniqueOrThrow({ where: { username } })
     assert.equal(user.actorId, actorId(localIssuer, username))
     assert.equal(user.canCreate, true)
-    await owner.managementMembership.create({ data: {
-      characterId: b, issuer: localIssuer, subject: username,
-    } })
+    assert.ok(user.createdAt)
     assert.equal((await submit('login', { username, password: oldPassword }, '', 'https://foreign.example.test')).status, 403)
     assert.equal((await submit('login', { username, password: newPassword })).status, 401)
     const login = await submit('login', { username, password: oldPassword })
@@ -232,7 +230,7 @@ test('local authentication enforces origin, membership and session revocation', 
     assert.equal(currentSession.status, 200)
     assert.deepEqual(await currentSession.json(), { username, canCreate: true })
     assert.equal((await local.request('/v1' + characterPath(b), { headers: { Cookie: cookie } })).status, 200)
-    assert.equal((await local.request('/v1' + characterPath(a), { headers: { Cookie: cookie } })).status, 404)
+    assert.equal((await local.request('/v1' + characterPath(a), { headers: { Cookie: cookie } })).status, 200)
     assert.equal((await local.request('/v1/characters', { method: 'POST', headers: { Cookie: cookie } })).status, 403)
 
     assert.equal((await submit('passkeys/register/options', { password: oldPassword })).status, 401)
@@ -263,7 +261,7 @@ test('local authentication enforces origin, membership and session revocation', 
   }
 })
 
-test('deployment account management leaves role grants scoped and revokes credentials on reset', { timeout: 30_000 }, async () => {
+test('account creation gives system-wide access while existing scoped accounts keep their permissions', { timeout: 30_000 }, async () => {
   const authConfig = loadManagementConfig({ RICA_ADMIN_ORIGIN: fixtureOrigin })!
   const redis = new Redis(config.redisUrl)
   const { app: auth, authenticate } = createAdminAuth(management, redis, authConfig)
@@ -272,11 +270,12 @@ test('deployment account management leaves role grants scoped and revokes creden
       resolveAdapter: simulationPlatforms.resolveAdapter }), auth)
   const suffix = randomUUID()
   const operatorName = 'web-admin-' + suffix
+  const newAdminName = 'web-system-' + suffix
   const name = 'web-user-' + suffix
   const currentPassword = 'operator fixture password'
   const password = 'initial fixture password'
   const replacement = 'replacement fixture password'
-  const createInput = { username: name.toUpperCase(), password, currentPassword }
+  const createInput = { username: newAdminName.toUpperCase(), password, currentPassword }
   const call = (method: string, path: string, cookie = '', data?: object, origin = fixtureOrigin) => local.request(path, {
     method, headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
     ...(data ? { body: JSON.stringify(data) } : {}),
@@ -294,7 +293,7 @@ test('deployment account management leaves role grants scoped and revokes creden
   try {
     const operator = await owner.adminUser.create({ data: {
       username: operatorName, actorId: actorId(localIssuer, operatorName), canCreate: true,
-      passwordHash: await hashPassword(currentPassword),
+      passwordHash: await hashPassword(currentPassword), createdAt: null,
     } })
     const operatorCookie = await login(operatorName, currentPassword)
     assert.equal((await call('POST', users, '', createInput)).status, 401)
@@ -303,14 +302,33 @@ test('deployment account management leaves role grants scoped and revokes creden
     assert.equal((await call('POST', users, operatorCookie, { ...createInput, currentPassword: replacement })).status, 422)
     const created = await call('POST', users, operatorCookie, createInput)
     assert.equal(created.status, 201)
-    assert.deepEqual(await created.json(), { username: name })
+    assert.deepEqual(await created.json(), { username: newAdminName })
     assert.equal((await call('POST', users, operatorCookie, createInput)).status, 409)
-    const list = await call('GET', users + '?after=' + operatorName, operatorCookie)
+
+    const user = await owner.adminUser.create({ data: {
+      username: name, actorId: actorId(localIssuer, name), passwordHash: await hashPassword(password),
+    } })
+    const newAdmin = await owner.adminUser.findUniqueOrThrow({ where: { username: newAdminName } })
+    assert.equal(newAdmin.actorId, actorId(localIssuer, newAdminName))
+    assert.equal(newAdmin.canCreate, true)
+    assert.ok(newAdmin.createdAt)
+    const newAdminCookie = await login(newAdminName, password)
+    const characters = await call('GET', '/v1/characters', newAdminCookie)
+    assert.equal(characters.status, 200)
+    assert.ok((await characters.json()).items.some((row: { id: string }) => row.id === b))
+    assert.equal((await call('GET', '/v1' + characterPath(a), newAdminCookie)).status, 200)
+    assert.equal((await call('GET', '/v1' + characterPath(b), newAdminCookie)).status, 200)
+    assert.equal((await call('GET', '/v1' + characterPath(randomUUID()), newAdminCookie)).status, 404)
+
+    const list = await call('GET', users, newAdminCookie)
     assert.equal(list.status, 200)
     const listed = await list.json()
-    assert.deepEqual(listed.items.find((row: { username: string }) => row.username === name), { username: name, canCreate: false })
+    assert.deepEqual(listed.items.find((row: { username: string }) => row.username === newAdminName),
+      { username: newAdminName, createdAt: newAdmin.createdAt.toISOString() })
+    assert.deepEqual(listed.items.find((row: { username: string }) => row.username === operatorName),
+      { username: operatorName, createdAt: null })
+    assert.ok(!listed.items.some((row: { username: string }) => row.username === name))
 
-    const user = await owner.adminUser.findUniqueOrThrow({ where: { username: name } })
     assert.equal(user.actorId, actorId(localIssuer, name))
     assert.equal(user.canCreate, false)
     const userCookie = await login(name, password)
@@ -318,6 +336,7 @@ test('deployment account management leaves role grants scoped and revokes creden
     await owner.managementMembership.create({ data: { characterId: a, issuer: localIssuer, subject: name } })
     assert.equal((await call('GET', '/v1' + characterPath(a), userCookie)).status, 200)
     assert.equal((await call('GET', users, userCookie)).status, 403)
+    assert.equal((await call('POST', users, userCookie, createInput)).status, 403)
     assert.equal((await call('PUT', reset, userCookie, { password: replacement, currentPassword: password })).status, 403)
     assert.equal((await call('PUT', users + '/' + operatorName + '/password', operatorCookie,
       { password: replacement, currentPassword })).status, 409)
@@ -412,7 +431,7 @@ test('deployment account management leaves role grants scoped and revokes creden
     assert.equal((await call('GET', '/v1' + characterPath(b), renewed)).status, 404)
   } finally {
     await owner.managementMembership.deleteMany({ where: { issuer: localIssuer, subject: name } })
-    await owner.adminUser.deleteMany({ where: { username: { in: [operatorName, name] } } })
+    await owner.adminUser.deleteMany({ where: { username: { in: [operatorName, newAdminName, name] } } })
     await redis.quit()
   }
 })
