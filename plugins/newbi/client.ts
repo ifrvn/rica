@@ -1,6 +1,6 @@
 import { request as directRequest } from 'node:http'
 import { z } from '@hono/zod-openapi'
-import { newbiCredential, newbiEndpoint } from '@rica/contracts/newbi-pilot'
+import { newbiCredential, newbiEndpoint } from './contracts.js'
 import type { PlatformEventReader } from '@rica/contracts/platform-reader'
 import { PlatformReplyError, type PlatformReplyExecutor } from '@rica/contracts/platform-reply-executor'
 

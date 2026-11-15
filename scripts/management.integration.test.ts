@@ -7,12 +7,12 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { newbiExecutorIdentity, newbiExecutorKey } from '../packages/contracts/newbi-executor-identity.js'
+import { newbiExecutorIdentity, newbiExecutorKey } from '@rica/plugin-newbi/executor-identity'
 import { createNewbiReplyExecutor } from '@rica/plugin-newbi/client'
 import { identifyNewbiAccount, startNewbiReader } from '@rica/plugin-newbi/reader'
 import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from '@rica/plugin-newbi/database'
-import { pollNewbiEvents } from '../packages/persistence/newbi-events.js'
-import { executeNewbiReply } from '../packages/persistence/newbi-execution.js'
+import { pollNewbiEvents } from '@rica/plugin-newbi/persistence/events'
+import { executeNewbiReply } from '@rica/plugin-newbi/persistence/execution'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { simulatedModelPlugin } from '@rica/plugin-simulated-model'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
@@ -26,7 +26,7 @@ import { createManagementApp } from '../apps/api/management.js'
 import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../packages/persistence/action-review.js'
-import { sweepSimulationRetention } from '../packages/persistence/simulation-retention.js'
+import { sweepRuntimeRetention } from '../apps/worker/runtime-retention.js'
 import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
 import { scanIdentityReflections } from '../packages/persistence/identity-reflection.js'
@@ -35,7 +35,7 @@ import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '../packag
 import { processSimulatedDraft } from '../packages/persistence/simulated-draft.js'
 import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '../packages/persistence/simulation-execution.js'
 import { loadConfig } from '../packages/runtime/config.js'
-import { createDeploymentPluginStore } from '../packages/runtime/deployment-plugins.js'
+import { createDeploymentPluginStore } from '../apps/deployment-plugins.js'
 
 const config = loadConfig()
 const simulationPlatforms = await startSimulationPlatforms({})
@@ -2314,7 +2314,7 @@ async function ageSimulationRun(runId: string, days: number) {
 }
 
 async function drainSimulationRetention(runtime: ReturnType<typeof createDatabase>) {
-  while (await sweepSimulationRetention(runtime) > 0) { /* Drain the fixture batches. */ }
+  while (await sweepRuntimeRetention(runtime) > 0) { /* Drain the fixture batches. */ }
 }
 
 test('simulation retention removes bodies and references at separate cutoffs while preserving deduplication and receipts', async () => {
@@ -2333,7 +2333,7 @@ test('simulation retention removes bodies and references at separate cutoffs whi
     await ageSimulationRun(fresh.runId, 29)
     assert.ok(await owner.contextSnapshot.count({ where: { runId: archived.runId } }) > 0)
     await Promise.all([drainSimulationRetention(runtime), drainSimulationRetention(runtime)])
-    assert.equal(await sweepSimulationRetention(runtime), 0)
+    assert.equal(await sweepRuntimeRetention(runtime), 0)
 
     for (const { runId } of [archived, redacted, fresh]) {
       const run = await owner.agentRun.findUniqueOrThrow({ where: { id: runId }, include: { inboundEvent: true, draft: true } })
@@ -3275,7 +3275,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(writes, 0)
 
     await owner.newbiEvent.updateMany({ where: { accountId }, data: { occurredAt: new Date(0) } })
-    await sweepSimulationRetention(runtime)
+    await sweepRuntimeRetention(runtime)
     assert.equal(await owner.newbiEvent.count({ where: { accountId } }), 0)
     assert.equal((await account()).historyLostCount, 1)
     const callsBeforeStop = calls

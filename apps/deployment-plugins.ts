@@ -2,13 +2,14 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
-  deploymentPluginChange, deploymentPluginId, deploymentPluginIds, pluginStage,
+  deploymentPluginChange, deploymentPluginId, deploymentPluginIds,
   type DeploymentPluginsView,
-} from '../contracts/deployment-plugins.js'
-import { newbiEndpoint } from '../contracts/newbi-pilot.js'
-import type { ModelSettingsInput } from '../contracts/model-settings.js'
-import type { createModelSettingsStore } from './model-settings-store.js'
-import { writeSettings } from './write-settings.js'
+} from './deployment-plugin-contracts.js'
+import { newbiEndpoint } from '@rica/plugin-newbi/contracts'
+import { pluginStage } from '../packages/contracts/deployment-plugins.js'
+import type { ModelSettingsInput } from '../packages/contracts/model-settings.js'
+import type { createModelSettingsStore } from '../packages/runtime/model-settings-store.js'
+import { writeSettings } from '../packages/runtime/write-settings.js'
 
 const connector = z.object({ endpoint: newbiEndpoint })
 const recordSchema = z.strictObject({

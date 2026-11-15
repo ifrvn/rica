@@ -11,7 +11,7 @@ const fields = {
 const timing = ({ kind, dueAt, dailyAt }: {
   kind: 'PLAN' | 'COMMITMENT'; dueAt?: string; dailyAt?: string
 }) => dailyAt ? kind === 'PLAN' && !dueAt : !!dueAt
-const platform = z.enum(['mock-a', 'mock-b', 'newbi'])
+const platform = z.string().regex(/^[a-z0-9-]{1,80}$/u)
 const participantTask = z.strictObject({ platform, task: planningTask })
 
 export const modelFollowUp = z.strictObject({

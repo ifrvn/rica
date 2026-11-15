@@ -1,8 +1,8 @@
-import type { PrismaClient } from './generated/client.js'
+import { Prisma, type PrismaClient } from './generated/client.js'
 
-export async function sweepSimulationRetention(db: PrismaClient) {
+export async function sweepSimulationRetention(db: PrismaClient, additionalSweep = Prisma.sql`0`) {
   const [row] = await db.$queryRaw<{ changed: number }[]>`
-    SELECT public.rica_sweep_simulation_retention() + public.rica_sweep_newbi_retention() + public.rica_sweep_newbi_events() AS changed
+    SELECT public.rica_sweep_simulation_retention() + (${additionalSweep}) AS changed
   `
   return row.changed
 }

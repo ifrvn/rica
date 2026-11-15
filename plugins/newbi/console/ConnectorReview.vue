@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '@rica/contracts/newbi-pilot'
+import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../contracts.js'
 import { focusRecord, formatTime } from '@rica/console-shared/console-data'
 import { request, RequestError } from '@rica/console-shared/request'
 

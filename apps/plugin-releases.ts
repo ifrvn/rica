@@ -1,5 +1,5 @@
 import { open } from 'node:fs/promises'
-import { deploymentPluginIds } from '../packages/contracts/deployment-plugins.js'
+import { deploymentPluginIds } from './deployment-plugin-contracts.js'
 import { pluginReleaseManifest, type PluginMetadata, type PluginReleaseView, type PluginService } from '../packages/contracts/plugin-status.js'
 
 type ServiceCatalog = { service: PluginService; catalog: PluginMetadata[] }

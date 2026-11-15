@@ -1,6 +1,6 @@
 import type { NewbiConnection } from './reader.js'
-import { newbiExecutorIdentity } from '@rica/contracts/newbi-executor-identity'
-import { newbiEndpoint } from '@rica/contracts/newbi-pilot'
+import { newbiExecutorIdentity } from './executor-identity.js'
+import { newbiEndpoint } from './contracts.js'
 import { createNewbiReplyExecutor } from './client.js'
 import { startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 

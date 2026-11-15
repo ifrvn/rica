@@ -1,5 +1,4 @@
 import { z } from '@hono/zod-openapi'
-import { deploymentPluginId, deploymentPluginsView } from './deployment-plugins.js'
 import { modelCheckStatus } from './model-settings.js'
 
 export const pluginServices = ['api', 'worker', 'simulation-executor', 'connector-reader', 'connector-executor'] as const
@@ -28,7 +27,7 @@ export const pluginReleaseManifest = z.strictObject({
 })
 
 const pluginUpgrade = z.object({
-  id: deploymentPluginId,
+  id: pluginIdentity.shape.id,
   components: z.array(z.object({
     service: z.enum(pluginServices),
     current: pluginIdentity,
@@ -57,17 +56,8 @@ export const pluginReport = z.strictObject({
 export type PluginReport = z.infer<typeof pluginReport>
 
 export const pluginStatusView = z.object({
-  newbiRegistrationAvailable: z.boolean(),
-  deployment: deploymentPluginsView.optional(),
   release: pluginReleaseView.optional(),
   modelCheck: modelCheckStatus.optional(),
-  newbiConnections: z.object({
-    activeAccounts: z.number().int().nonnegative(),
-    readFailures: z.number().int().nonnegative(),
-    lastReadAt: z.iso.datetime().nullable(),
-    hasReceipt: z.boolean(),
-    hasUnknown: z.boolean(),
-  }).optional(),
   services: z.array(z.object({
     service: z.enum(pluginServices),
     catalog: z.array(pluginIdentity),

@@ -1,22 +1,16 @@
 import { z } from '@hono/zod-openapi'
 import { createDatabase, type RawQueryClient } from '../../packages/persistence/client.js'
-import { pollNewbiEvents, runNewbiEventPoller } from '../../packages/persistence/newbi-events.js'
-import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
-import { newbiExecutorIdentity, newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
-import { newbiReaderIdentity } from '../../packages/contracts/newbi-pilot.js'
+import { pollNewbiEvents, runNewbiEventPoller } from './persistence/events.js'
+import { executeNewbiReply } from './persistence/execution.js'
+import { newbiExecutorIdentity, newbiExecutorKey } from './executor-identity.js'
+import { newbiReaderIdentity } from './contracts.js'
 import { PlatformReplyError } from '../../packages/contracts/platform-reply-executor.js'
 import { PluginHostError } from '@rica/plugin-host'
-import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
-import { modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
 import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
-import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase } from './database.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, scopedNewbiDatabase, type NewbiConnectionStore } from './database.js'
 
-function connectorStore() {
-  return createDeploymentPluginStore(modelSettingsDirectory(runtimeDatabaseUrl()))
-}
-
-async function openReader(db: RawQueryClient, accountId: string, signal?: AbortSignal) {
-  const host = await openSavedNewbiReader(db, connectorStore(), accountId, signal)
+async function openReader(store: NewbiConnectionStore, db: RawQueryClient, accountId: string, signal?: AbortSignal) {
+  const host = await openSavedNewbiReader(db, store, accountId, signal)
   if (!host) throw new PluginHostError({ kind: 'platform-reader', id: newbiReaderIdentity.id,
     version: newbiReaderIdentity.version, code: 'INVALID_CONFIG' })
   const { id, version, contractVersion } = host.plugin
@@ -25,7 +19,7 @@ async function openReader(db: RawQueryClient, accountId: string, signal?: AbortS
   return host
 }
 
-async function readEvents(accountId: string, args: string[]) {
+async function readEvents(store: NewbiConnectionStore, accountId: string, args: string[]) {
   const [option, seconds, ...extra] = args
   if (args.length && (option !== '--for-seconds' || !seconds || !/^[1-9][0-9]{0,3}$/u.test(seconds)
     || Number(seconds) > 3600 || extra.length)) throw new Error('Invalid event polling window')
@@ -38,7 +32,7 @@ async function readEvents(accountId: string, args: string[]) {
   process.once('SIGINT', interrupt)
   process.once('SIGTERM', interrupt)
   try {
-    const host = await openReader(readerDb, accountId, stop)
+    const host = await openReader(store, readerDb, accountId, stop)
     try {
       const reader = host.plugin.implementation
       if (seconds) {
@@ -59,10 +53,10 @@ async function readEvents(accountId: string, args: string[]) {
   }
 }
 
-async function main() {
+async function main(store: NewbiConnectionStore) {
   const [command, value, ...args] = process.argv.slice(2)
   const id = z.uuid().parse(value)
-  if (command === 'events') return readEvents(id, args)
+  if (command === 'events') return readEvents(store, id, args)
   const [option, ...extra] = args
   if (extra.length || (command === 'inspect' && !z.uuid().safeParse(option).success)
     || (command === 'send' && option && option !== '--retry') || (command !== 'inspect' && command !== 'send')) {
@@ -71,7 +65,7 @@ async function main() {
   const db = createDatabase(runtimeDatabaseUrl())
   try {
     if (command === 'inspect') {
-      const host = await openReader(scopedNewbiDatabase(db, 'reader'), id)
+      const host = await openReader(store, scopedNewbiDatabase(db, 'reader'), id)
       try {
         const reader = host.plugin.implementation
         const identity = await reader.verify()
@@ -80,7 +74,7 @@ async function main() {
       return
     }
     const executorDb = scopedNewbiDatabase(db, 'executor')
-    const host = await openSavedNewbiExecutor(executorDb, connectorStore(), id)
+    const host = await openSavedNewbiExecutor(executorDb, store, id)
     if (!host) throw new PluginHostError({ kind: 'platform-reply-executor', id: newbiExecutorIdentity.id,
       version: newbiExecutorIdentity.version, code: 'INVALID_CONFIG' })
     try {
@@ -94,11 +88,11 @@ async function main() {
   } finally { await db.$disconnect() }
 }
 
-export async function runNewbiPilot(report: (service: 'connector-executor' | 'connector-reader', error?: unknown) => Promise<void>) {
+export async function runNewbiPilot(store: NewbiConnectionStore, report: (service: 'connector-executor' | 'connector-reader', error?: unknown) => Promise<void>) {
   const command = process.argv[2]
   let failure: unknown
   try {
-    await main()
+    await main(store)
   } catch (error) {
     failure = error
     if (error instanceof PluginHostError) {

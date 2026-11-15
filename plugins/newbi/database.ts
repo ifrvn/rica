@@ -1,8 +1,13 @@
 import type { RawQueryClient } from '../../packages/persistence/client.js'
 import type { Prisma, PrismaClient } from '../../packages/persistence/generated/client.js'
-import type { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import { startNewbiReader, type NewbiConnection } from './reader.js'
 import { startNewbiExecutor } from './executor.js'
+
+export type NewbiConnectionStore = {
+  openNewbi(credential: string, endpoint?: string): Promise<{
+    connection: NewbiConnection; beforeRequest: () => Promise<void>
+  } | undefined>
+}
 
 export function scopedNewbiDatabase(db: PrismaClient, role: 'reader' | 'executor'): RawQueryClient {
   return {
@@ -16,14 +21,14 @@ export function scopedNewbiDatabase(db: PrismaClient, role: 'reader' | 'executor
   }
 }
 
-export async function openSavedNewbiReader(db: RawQueryClient, store: ReturnType<typeof createDeploymentPluginStore>,
+export async function openSavedNewbiReader(db: RawQueryClient, store: NewbiConnectionStore,
   accountId: string, signal?: AbortSignal) {
   const [saved] = await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_poll_connection(${accountId}::uuid)`
   const current = saved && await store.openNewbi(saved.credential, saved.endpoint)
   if (current) return startNewbiReader(current.connection, signal, current.beforeRequest)
 }
 
-export async function readSavedNewbiThread(db: RawQueryClient, store: ReturnType<typeof createDeploymentPluginStore>,
+export async function readSavedNewbiThread(db: RawQueryClient, store: NewbiConnectionStore,
   target: { accountId: string; agentId: string; endpoint: string; postId: string }) {
   const host = await openSavedNewbiReader(db, store, target.accountId, AbortSignal.timeout(7000))
   if (!host) return
@@ -36,7 +41,7 @@ export async function readSavedNewbiThread(db: RawQueryClient, store: ReturnType
   }
 }
 
-export async function openSavedNewbiExecutor(db: RawQueryClient, store: ReturnType<typeof createDeploymentPluginStore>,
+export async function openSavedNewbiExecutor(db: RawQueryClient, store: NewbiConnectionStore,
   replyId: string, signal?: AbortSignal) {
   const [saved] = await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_send_connection(${replyId}::uuid)`
   const current = saved && await store.openNewbi(saved.credential, saved.endpoint)

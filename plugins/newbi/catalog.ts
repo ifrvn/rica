@@ -1,5 +1,5 @@
-import { newbiReaderIdentity } from '@rica/contracts/newbi-pilot'
-import { newbiExecutorIdentity } from '@rica/contracts/newbi-executor-identity'
+import { newbiReaderIdentity } from './contracts.js'
+import { newbiExecutorIdentity } from './executor-identity.js'
 import type { PluginMetadata } from '../../packages/contracts/plugin-status.js'
 
 export const newbiCatalog = {

@@ -19,7 +19,12 @@
     "./console/accounts": "./console/accounts.ts",
     "./catalog": "./catalog.ts",
     "./console/health": "./console/health.ts",
-    "./console/labels": "./console/labels.ts"
+    "./console/labels": "./console/labels.ts",
+    "./contracts": "./contracts.ts",
+    "./executor-identity": "./executor-identity.ts",
+    "./persistence/events": "./persistence/events.ts",
+    "./persistence/execution": "./persistence/execution.ts",
+    "./persistence/retention": "./persistence/retention.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",

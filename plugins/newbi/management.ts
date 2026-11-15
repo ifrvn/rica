@@ -1,13 +1,14 @@
+import { newbiAccountHooks, saveNewbiCredential } from './persistence/accounts.js'
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import * as schema from '../../packages/contracts/management.js'
 import * as management from '../../packages/persistence/management.js'
 import type { PrismaClient, Prisma } from '../../packages/persistence/generated/client.js'
-import type { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
-import type { DeploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
 import { body, character, characterParams, error, errors, security, success, failure, type ManagementEnvironment } from '../../packages/runtime/management-http.js'
-import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from '../../packages/contracts/newbi-pilot.js'
-import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from '../../packages/persistence/newbi-management.js'
-import { newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from '../../packages/contracts/newbi-pilot.js'
+import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
+import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from './persistence/management.js'
+import { newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from './contracts.js'
+
+export type NewbiDeploymentView = { plugins: { newbi: 'NOT_INSTALLED' | 'INSTALLED' | 'ENABLED' }; newbi: { endpoint: string | null } }
 
 export type NewbiManagementOptions = {
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
@@ -17,7 +18,7 @@ export type NewbiManagementOptions = {
     Promise<z.infer<typeof newbiThreadView> | undefined>
 }
 
-export function createNewbiManagement(db: PrismaClient, deploymentPlugins: ReturnType<typeof createDeploymentPluginStore> | undefined,
+export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { readNewbi(): Promise<{ endpoint: string } | undefined> } | undefined,
   { identifyConnector, pollConnector, sendConnector, readConnectorThread }: NewbiManagementOptions) {
   async function newbiAvailable(endpoint: string) {
     return !deploymentPlugins || (await deploymentPlugins.readNewbi())?.endpoint === endpoint
@@ -36,7 +37,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: Retur
     return account
   }
 
-  const verifySavedConnector: management.VerifyConnector = async (endpoint, agentId, tx = db) => {
+  const verifySavedConnector = async (endpoint: string, agentId: string, tx: Prisma.TransactionClient = db) => {
     const where = { endpoint, agentId }
     const saved = await tx.newbiCredential.findUnique({ where: { endpoint_agentId: where }, select: { credential: true } })
     const profile = saved && await identifyConnector?.(saved.credential, endpoint)
@@ -51,11 +52,11 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: Retur
   async function registerAccount(tx: Prisma.TransactionClient, scope: management.Scope, input: z.infer<typeof connectorAccountRegistration>) {
     const account = await identifyNewbi(input.credential, input.agentId)
     const result = await management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: account.endpoint, remoteAccountId: account.agentId })
-    await management.saveNewbiCredential(tx, account, input.credential)
+    await saveNewbiCredential(tx, account, input.credential)
     return result
   }
 
-  async function status(characterId: string, deployment: DeploymentPluginsView) {
+  async function status(characterId: string, deployment: NewbiDeploymentView) {
     const endpoint = deployment.plugins.newbi === 'ENABLED' ? deployment.newbi.endpoint : null
     return { newbiRegistrationAvailable: !!endpoint,
       newbiConnections: endpoint ? await readNewbiConnections(db, characterId, endpoint) : undefined }
@@ -89,7 +90,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: Retur
       }, async (tx) => {
         const account = await identifyNewbi(input.credential, input.agentId)
         const result = await bindNewbiAccount(tx, scope, { ...input, ...account })
-        await management.saveNewbiCredential(tx, account, input.credential)
+        await saveNewbiCredential(tx, account, input.credential)
         return result
       })
       return c.json({ ...result, requestId }, 201)
@@ -235,6 +236,6 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: Retur
     })
   }
 
-  return { registerRoutes, verifySavedConnector, registerAccount, registrationSchema: connectorAccountRegistration, status,
-    isInstalled: (deployment?: DeploymentPluginsView) => deployment?.plugins.newbi !== 'NOT_INSTALLED' }
+  return { registerRoutes, accountHooks: newbiAccountHooks(verifySavedConnector), registerAccount, registrationSchema: connectorAccountRegistration, status,
+    isInstalled: (deployment?: NewbiDeploymentView) => deployment?.plugins.newbi !== 'NOT_INSTALLED' }
 }

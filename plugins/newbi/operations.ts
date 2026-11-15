@@ -1,13 +1,12 @@
 import { identifyNewbiAccount } from './reader.js'
-import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from './database.js'
-import { pollNewbiEvents } from '../../packages/persistence/newbi-events.js'
-import { executeNewbiReply } from '../../packages/persistence/newbi-execution.js'
-import { newbiExecutorKey } from '../../packages/contracts/newbi-executor-identity.js'
+import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase, type NewbiConnectionStore } from './database.js'
+import { pollNewbiEvents } from './persistence/events.js'
+import { executeNewbiReply } from './persistence/execution.js'
+import { newbiExecutorKey } from './executor-identity.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import type { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
 import type { NewbiManagementOptions } from './management.js'
 
-export function createNewbiOperations(db: PrismaClient, deploymentPlugins: ReturnType<typeof createDeploymentPluginStore>): NewbiManagementOptions {
+export function createNewbiOperations(db: PrismaClient, deploymentPlugins: NewbiConnectionStore): NewbiManagementOptions {
   const newbiReaderDb = scopedNewbiDatabase(db, 'reader')
   const newbiExecutorDb = scopedNewbiDatabase(db, 'executor')
   return {

@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import { listQuery, resourceId } from './management.js'
+import { accountRegistrationView, accountView, characterWorkspaceView, listQuery, resourceId } from '@rica/contracts/management'
 
 export const newbiReaderIdentity = { id: 'newbi-local-reader', version: '1.0.0', contractVersion: 1 } as const
 
@@ -83,3 +83,21 @@ export const newbiInboxView = z.object({
     occurredAt: z.iso.datetime(),
   })).nullable(),
 })
+
+const newbiAccountProfile = z.object({ agentId: resourceId, username: z.string().nullable(), avatarUrl: z.string().nullable() })
+export const newbiAccountView = accountView.extend({ newbiProfile: newbiAccountProfile.optional() })
+export const newbiAccountRegistrationView = accountRegistrationView.extend({
+  platform: z.enum(['mock-a', 'mock-b', 'newbi']),
+  newbiProfile: newbiAccountProfile.optional(),
+})
+export const newbiCharacterWorkspaceView = characterWorkspaceView.extend({ newbiInstalled: z.boolean() })
+
+export const newbiConnectionsView = z.object({
+  activeAccounts: z.number().int().nonnegative(),
+  readFailures: z.number().int().nonnegative(),
+  lastReadAt: z.iso.datetime().nullable(),
+  hasReceipt: z.boolean(),
+  hasUnknown: z.boolean(),
+})
+
+export const newbiDeploymentChange = z.strictObject({ action: z.literal('CONFIGURE_NEWBI'), endpoint: newbiEndpoint })

@@ -3,8 +3,9 @@ import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowR
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountRegistrationView, accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
-import type { newbiAccountCheckView } from '@rica/contracts/newbi-pilot'
+import type { characterView, identityView } from '../../../../../packages/contracts/management.js'
+import type { newbiAccountRegistrationView as accountRegistrationView, newbiAccountView as accountView, newbiCharacterWorkspaceView as characterWorkspaceView } from '@rica/plugin-newbi/contracts'
+import type { newbiAccountCheckView } from '@rica/plugin-newbi/contracts'
 import { formatTime } from '@rica/console-shared/console-data'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
@@ -104,13 +105,13 @@ function accountControl(account: Account, revoke = false) {
 }
 const schemas = shallowRef<{
   management: typeof import('../../../../../packages/contracts/management.js')
-  connector: typeof import('@rica/contracts/newbi-pilot')
+  connector: typeof import('@rica/plugin-newbi/contracts')
 }>()
 
 async function loadSchemas() {
   if (schemas.value) return
   const [management, connector] = await Promise.all([
-    import('../../../../../packages/contracts/management.js'), import('@rica/contracts/newbi-pilot'),
+    import('../../../../../packages/contracts/management.js'), import('@rica/plugin-newbi/contracts'),
   ])
   if (active) schemas.value = { management, connector }
 }

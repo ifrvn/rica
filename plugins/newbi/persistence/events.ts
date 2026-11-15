@@ -1,7 +1,7 @@
-import { newbiReadError, type NewbiReadError } from '../contracts/newbi-pilot.js'
+import { newbiReadError, type NewbiReadError } from '../contracts.js'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '../contracts/platform-reader.js'
-import type { RawQueryClient } from './client.js'
+import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '@rica/contracts/platform-reader'
+import type { RawQueryClient } from '../../../packages/persistence/client.js'
 
 type Claim = { ticket: string; cursor: string | null; agentId: string; bindingVersion: number; authEpoch: number }
 type Deferred = { nextAt: string }

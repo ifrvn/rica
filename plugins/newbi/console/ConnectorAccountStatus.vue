@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSpin, NTag } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
-import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '@rica/contracts/newbi-pilot'
+import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '../contracts.js'
 import { characterPath, useConsoleTask } from '@rica/console-shared/console-data'
 import { request, RequestError } from '@rica/console-shared/request'
 

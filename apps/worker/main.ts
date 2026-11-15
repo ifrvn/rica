@@ -2,7 +2,7 @@ import { startOutboxWorker, WorkerDependencyUnavailable } from './outbox.js'
 import { loadConfig } from '../../packages/runtime/config.js'
 import { startConfiguredModel, startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
-import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
+import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 
 async function main() {

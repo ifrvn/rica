@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
-import { newbiExecutorIdentity, newbiExecutorKey } from '../contracts/newbi-executor-identity.js'
-import { coreProfile } from '../contracts/management.js'
-import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts/newbi-pilot.js'
-import type { Prisma, PrismaClient } from './generated/client.js'
-import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope, type VerifyConnector } from './management.js'
+import { newbiExecutorIdentity, newbiExecutorKey } from '../executor-identity.js'
+import { coreProfile } from '@rica/contracts/management'
+import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../contracts.js'
+import type { Prisma, PrismaClient } from '../../../packages/persistence/generated/client.js'
+import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '../../../packages/persistence/management.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -160,7 +160,7 @@ export async function readNewbiConnections(db: PrismaClient, characterId: string
     hasReceipt: !!confirmed, hasUnknown: !!unknown }
 }
 
-export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: VerifyConnector) {
+export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: (endpoint: string, agentId: string) => Promise<boolean>) {
   const account = await db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN'])
     const account = await tx.platformAccount.findFirst({

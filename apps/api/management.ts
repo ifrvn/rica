@@ -16,15 +16,17 @@ import { decideReviewAction, listReviewActions } from '../../packages/persistenc
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { pluginStatusView, type PluginReleaseView } from '../../packages/contracts/plugin-status.js'
+import { consolePluginStatusView } from '../plugin-status-view.js'
+import { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@rica/plugin-newbi/contracts'
+import type { PluginReleaseView } from '../../packages/contracts/plugin-status.js'
 import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 import { modelCheckInput, modelCheckResult, modelSettingsInput, modelSettingsView, type ModelCheckStatus } from '../../packages/contracts/model-settings.js'
 import { checkModel } from '@rica/plugin-hosted-models/check'
 import { startModelPlugin } from '../runtime-plugins.js'
 import { ModelSettingsError, type createModelSettingsStore } from '../../packages/runtime/model-settings-store.js'
-import { deploymentPluginChange, deploymentPluginsView } from '../../packages/contracts/deployment-plugins.js'
-import { DeploymentPluginError, type createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
+import { deploymentPluginChange, deploymentPluginsView } from '../deployment-plugin-contracts.js'
+import { DeploymentPluginError, type createDeploymentPluginStore } from '../deployment-plugins.js'
 
 import { body, character, characterParams, error, errors, failure, security, success, type ManagementEnvironment } from '../../packages/runtime/management-http.js'
 import { createNewbiManagement, type NewbiManagementOptions } from '@rica/plugin-newbi/management'
@@ -226,7 +228,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: character, security, request: { params: characterParams },
-    responses: { ...errors, 200: success(schema.characterWorkspaceView) },
+    responses: { ...errors, 200: success(newbiCharacterWorkspaceView) },
   }), async (c) => {
     const result = await management.getCharacter(db, { ...c.req.valid('param'), actor: c.get('actor') })
     c.header('ETag', `"${result.version ?? 0}"`)
@@ -293,7 +295,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   app.openapi(createRoute({
     method: 'get', path: `${character}/plugins`, security,
     request: { params: characterParams },
-    responses: { ...errors, 200: success(pluginStatusView) },
+    responses: { ...errors, 200: success(consolePluginStatusView) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     await db.$transaction((tx) => management.authorize(tx, scope, ['ADMIN', 'AUDITOR']))
@@ -313,18 +315,18 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   app.openapi(createRoute({
     method: 'get', path: `${character}/accounts`, security,
     request: { params: characterParams, query: schema.listQuery },
-    responses: { ...errors, 200: success(schema.pageView(schema.accountView)) },
+    responses: { ...errors, 200: success(schema.pageView(newbiAccountView)) },
   }), async (c) => c.json(await management.listAccounts(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')), newbi.accountHooks,
   ), 200))
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/account-pool`, security,
     request: { params: characterParams, query: schema.listQuery },
-    responses: { ...errors, 200: success(schema.pageView(schema.accountRegistrationView)) },
-  }), async (c) => c.json(await management.listAccountPool(
-    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')),
-  ), 200))
+    responses: { ...errors, 200: success(schema.pageView(newbiAccountRegistrationView)) },
+  }), async (c) => c.json(schema.pageView(newbiAccountRegistrationView).parse(await management.listAccountPool(
+    db, { ...c.req.valid('param'), actor: c.get('actor') }, management.parsePage(c.req.valid('query')), newbi.accountHooks,
+  )), 200))
 
   app.openapi(createRoute({
     method: 'post', path: `${character}/account-pool`, security,
@@ -356,7 +358,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'account.remove', targetScope: registrationId, input: { registrationId }, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.removeAccountRegistration(tx, scope, registrationId))
+    }, (tx) => management.removeAccountRegistration(tx, scope, registrationId, newbi.accountHooks))
     return c.json({ ...result, requestId }, 200)
   })
 
@@ -411,7 +413,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'control.apply', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.control(tx, scope, input, newbi.verifySavedConnector))
+    }, (tx) => management.control(tx, scope, input, newbi.accountHooks))
     return c.json({ ...result, requestId }, 200)
   })
 

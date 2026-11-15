@@ -1,14 +1,13 @@
 import type { z } from '@hono/zod-openapi'
-import type { DeploymentPluginsView } from '../../../packages/contracts/deployment-plugins.js'
-import type { pluginStatusView } from '../../../packages/contracts/plugin-status.js'
+import type { newbiConnectionsView } from '../contracts.js'
 
 type Tone = 'default' | 'success' | 'warning' | 'error'
 export type HealthNode = { id: string; label: string; description: string; state: string; tone: Tone; at?: string; diagnostic?: string }
 
-export function newbiHealth(status: z.infer<typeof pluginStatusView> | undefined,
+export function newbiHealth(status: { deployment?: { plugins: { newbi: string }; newbi: { endpoint: string | null } }; newbiConnections?: z.infer<typeof newbiConnectionsView> } | undefined,
   processNode: (id: 'connector-reader' | 'connector-executor', label: string, description: string) => HealthNode,
   external: (id: string, label: string, description: string, configured: boolean) => HealthNode) {
-  const deployment: DeploymentPluginsView | undefined = status?.deployment
+  const deployment = status?.deployment
   if (deployment?.plugins.newbi !== 'ENABLED') return { readers: [], executors: [], dependencies: [] }
   const reader = processNode('connector-reader', '读取 Newbi 消息', '独立读取平台事件到账号收件箱。账号接入及读取记录可在平台账号池查看。')
   const executor = processNode('connector-executor', '发送 Newbi 回复', '单次发送命令的最近报告。每条回复都须取得对应的发送许可。')

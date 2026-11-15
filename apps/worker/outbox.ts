@@ -6,7 +6,7 @@ import { scanIdentityReflections } from '../../packages/persistence/identity-ref
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
 import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
-import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
+import { sweepRuntimeRetention } from './runtime-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
 import type { ModelProvider } from '@rica/contracts/model-provider'
 import { HostedModelError } from '@rica/plugin-hosted-models'
@@ -179,7 +179,7 @@ export async function startOutboxWorker(
     while (!stop.signal.aborted) {
       let changed = 0
       try {
-        changed = await sweepSimulationRetention(db)
+        changed = await sweepRuntimeRetention(db)
       } catch {
         logError()
       }

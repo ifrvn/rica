@@ -69,12 +69,10 @@ export const simulationAccountRegistration = z.strictObject({
 })
 export const accountInput = simulationAccountRegistration.extend({ identityId: resourceId })
 export const accountBindingInput = z.strictObject({ registrationId: resourceId, identityId: resourceId })
-const newbiAccountProfile = z.object({ agentId: resourceId, username: z.string().nullable(), avatarUrl: z.string().nullable() })
 
 export const accountRegistrationView = z.strictObject({
-  id: resourceId, platform: z.enum(['mock-a', 'mock-b', 'newbi']),
+  id: resourceId, platform: z.string(),
   instanceKey: z.string(), remoteAccountId: z.string(),
-  newbiProfile: newbiAccountProfile.optional(),
 })
 export const automationEligibilityView = z.object({
   accountId: resourceId, identityId: resourceId, bindingVersion: z.number().int(),
@@ -215,7 +213,6 @@ export const characterView = z.object({
 export const characterWorkspaceView = characterView.extend({
   roles: z.array(membershipInput.shape.role),
   simulationPlatforms: z.array(accountInput.shape.platform),
-  newbiInstalled: z.boolean(),
 })
 export const identityView = z.object({
   id: z.uuid(), slug: z.string(), status: z.string(),
@@ -224,7 +221,6 @@ export const identityView = z.object({
 export const accountView = z.object({
   id: z.uuid(), identityId: z.uuid(), platform: z.string(), instanceKey: z.string(),
   status: z.string(), version: z.number().int(),
-  newbiProfile: newbiAccountProfile.optional(),
 })
 export const memoryView = z.object({
   id: z.uuid(), identityId: z.uuid().nullable(), accountId: z.uuid().nullable(),

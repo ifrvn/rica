@@ -1,5 +1,5 @@
-import type { RawQueryClient } from './client.js'
-import { PlatformReplyError, type PlatformReplyExecutor } from '../contracts/platform-reply-executor.js'
+import type { RawQueryClient } from '../../../packages/persistence/client.js'
+import { PlatformReplyError, type PlatformReplyExecutor } from '@rica/contracts/platform-reply-executor'
 
 type Target = {
   agentId: string; endpoint: string; postId: string; status: string; attempts: number

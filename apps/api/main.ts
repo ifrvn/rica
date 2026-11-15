@@ -9,7 +9,7 @@ import { createApp } from './app.js'
 import { createNewbiOperations } from '@rica/plugin-newbi/operations'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, modelSettingsDirectory } from '../../packages/runtime/model-settings-store.js'
-import { createDeploymentPluginStore } from '../../packages/runtime/deployment-plugins.js'
+import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
 

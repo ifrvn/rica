@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentReceiptView, commitmentUpdate } from '../contracts/commitments.js'
 import type { z } from '@hono/zod-openapi'
-import { accountRegistrationView, contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
+import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '../contracts/management.js'
 import type * as contracts from '../contracts/management.js'
 import { hasManagementRole } from '../contracts/management-permissions.js'
 import type { scheduleInput, scheduleUpdate } from '../contracts/schedules.js'
@@ -185,27 +185,12 @@ export async function updateIdentity(
 
 type AccountRegistration = Pick<Prisma.PlatformAccountRegistrationUncheckedCreateInput, 'platform' | 'instanceKey' | 'remoteAccountId'>
 
-type NewbiProfile = { username: string | null; avatarUrl: string | null }
-
-export async function saveNewbiCredential(tx: Tx, account: NewbiProfile & { endpoint: string; agentId: string }, credential: string) {
-  const { endpoint, agentId, username, avatarUrl } = account
-  await tx.newbiCredential.upsert({ where: { endpoint_agentId: { endpoint, agentId } },
-    create: { endpoint, agentId, credential, username, avatarUrl }, update: { credential, username, avatarUrl } })
-}
-
-async function newbiProfiles(tx: Tx, accounts: { platform: string; instanceKey: string; remoteAccountId: string }[]) {
-  const key = (endpoint: string, agentId: string) => JSON.stringify([endpoint, agentId])
-  const requested = accounts.flatMap(({ platform, instanceKey, remoteAccountId }) =>
-    platform === 'newbi' ? [{ endpoint: instanceKey, agentId: remoteAccountId }] : [])
-  const rows = requested.length ? await tx.newbiCredential.findMany({
-    where: { OR: requested }, select: { endpoint: true, agentId: true, username: true, avatarUrl: true },
-  }) : []
-  const profiles = new Map(rows.map(({ endpoint, agentId, username, avatarUrl }) =>
-    [key(endpoint, agentId), { agentId, username, avatarUrl }] as const))
-  return (account: typeof accounts[number]) => account.platform === 'newbi'
-    ? { newbiProfile: profiles.get(key(account.instanceKey, account.remoteAccountId))
-      ?? { agentId: account.remoteAccountId, username: null, avatarUrl: null } }
-    : {}
+type PlatformAccountRef = { platform: string; instanceKey: string; remoteAccountId: string }
+export type PlatformAccountHooks = {
+  platform: string
+  profiles(tx: Tx, accounts: PlatformAccountRef[]): Promise<(account: PlatformAccountRef) => object>
+  remove(tx: Tx, account: PlatformAccountRef): Promise<void>
+  verifyResume(tx: Tx, account: PlatformAccountRef): Promise<void>
 }
 
 export async function registerAccount(tx: Tx, scope: Scope, input: AccountRegistration) {
@@ -236,14 +221,12 @@ export async function associateAccount(tx: Tx, scope: Scope, input: Input<typeof
   return { id: account.id, status: account.status, version: account.bindingVersion }
 }
 
-export async function removeAccountRegistration(tx: Tx, scope: Scope, id: string) {
+export async function removeAccountRegistration(tx: Tx, scope: Scope, id: string, hooks?: PlatformAccountHooks) {
   const registration = await tx.platformAccountRegistration.findFirst({ where: { id, characterId: scope.characterId } })
   if (!registration) unavailable()
   const removed = await tx.platformAccountRegistration.deleteMany({ where: { id, characterId: scope.characterId, boundAt: null } })
   if (!removed.count) throw new ManagementError(409, 'ACCOUNT_ALREADY_BOUND', 'Platform account already associated')
-  if (registration.platform === 'newbi') {
-    await tx.newbiCredential.deleteMany({ where: { endpoint: registration.instanceKey, agentId: registration.remoteAccountId } })
-  }
+  if (registration.platform === hooks?.platform) await hooks.remove(tx, registration)
   return { id }
 }
 
@@ -252,7 +235,7 @@ export async function createAccount(tx: Tx, scope: Scope, { identityId, ...input
   return associateAccount(tx, scope, { registrationId: id, identityId })
 }
 
-export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page) {
+export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page, hooks?: PlatformAccountHooks) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
     const where = { characterId: scope.characterId, boundAt: null }
@@ -262,14 +245,12 @@ export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page
     const rows = await tx.platformAccountRegistration.findMany({
       ...args, where, select: { id: true, platform: true, instanceKey: true, remoteAccountId: true },
     })
-    const profile = await newbiProfiles(tx, rows)
-    return makePage(rows, page, (row) => accountRegistrationView.parse({ ...row, ...profile(row) }))
+    const profile = await hooks?.profiles(tx, rows)
+    return makePage(rows, page, (row) => ({ ...row, ...profile?.(row) }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export type VerifyConnector = (endpoint: string, agentId: string, tx?: Tx) => Promise<boolean>
-
-export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>, verifyConnector?: VerifyConnector) {
+export async function control(tx: Tx, scope: Scope, input: Input<typeof contracts.controlInput>, hooks?: PlatformAccountHooks) {
   const { characterId } = scope
   const { scopeId: id, operation } = input
   const entityStatus = operation === 'RESUME' ? 'ACTIVE' : 'PAUSED'
@@ -279,12 +260,11 @@ export async function control(tx: Tx, scope: Scope, input: Input<typeof contract
     if (account.status === 'REVOKED' || (operation === 'RESUME' && account.status !== 'PAUSED' && account.status !== 'ACTIVE')) {
       throw new ManagementError(409, 'STATE_CONFLICT', 'Account cannot perform this transition')
     }
-    if (operation === 'RESUME' && account.platform !== 'mock-a' && account.platform !== 'mock-b' && account.platform !== 'newbi') {
-      throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
-    }
-    if (operation === 'RESUME' && account.platform === 'newbi'
-      && !await verifyConnector?.(account.instanceKey, account.remoteAccountId, tx)) {
-      throw new ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Connector read identity could not be verified')
+    if (operation === 'RESUME' && account.platform !== 'mock-a' && account.platform !== 'mock-b') {
+      if (account.platform !== hooks?.platform) {
+        throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
+      }
+      await hooks.verifyResume(tx, account)
     }
     // Pausing a reauthentication or pending account must not make it eligible for activation.
     if (operation === 'PAUSE' && account.status !== 'ACTIVE' && account.status !== 'PAUSED') {
@@ -459,7 +439,7 @@ export async function listIdentities(db: PrismaClient, scope: Scope, page: Page)
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
+export async function listAccounts(db: PrismaClient, scope: Scope, page: Page, hooks?: PlatformAccountHooks) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
     const where = { characterId: scope.characterId }
@@ -468,9 +448,9 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page) {
       ...args, where,
       select: { id: true, identityId: true, platform: true, instanceKey: true, remoteAccountId: true, status: true, bindingVersion: true, createdAt: true },
     })
-    const profile = await newbiProfiles(tx, rows)
+    const profile = await hooks?.profiles(tx, rows)
     return makePage(rows, page, ({ bindingVersion, createdAt: _, remoteAccountId, ...view }) =>
-      ({ ...view, ...profile({ ...view, remoteAccountId }), version: bindingVersion }))
+      ({ ...view, ...profile?.({ ...view, remoteAccountId }), version: bindingVersion }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 

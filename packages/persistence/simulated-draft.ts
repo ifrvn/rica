@@ -135,7 +135,7 @@ async function resolveFollowUp(tx: Prisma.TransactionClient, runId: string, cand
   const byPlatform = new Map(assignments)
   if (byPlatform.size !== assignments.length) return
   const available = await tx.$queryRaw<{ identityId: string; accountId: string; identity: string; account: string;
-    platform: 'mock-a' | 'mock-b' | 'newbi' }[]>`
+    platform: string }[]>`
     SELECT * FROM public.rica_follow_up_accounts(${runId}::uuid)
   `
   const participants = available.filter(({ platform }) => byPlatform.has(platform))

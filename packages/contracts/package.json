@@ -8,10 +8,9 @@
     "./run-continuity": "./run-continuity.ts",
     "./simulation-platform": "./simulation-platform.ts",
     "./model-settings": "./model-settings.ts",
-    "./newbi-pilot": "./newbi-pilot.ts",
-    "./newbi-executor-identity": "./newbi-executor-identity.ts",
     "./platform-reader": "./platform-reader.ts",
-    "./platform-reply-executor": "./platform-reply-executor.ts"
+    "./platform-reply-executor": "./platform-reply-executor.ts",
+    "./management": "./management.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
