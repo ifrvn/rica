@@ -677,11 +677,11 @@ export async function listGrants(db: PrismaClient, scope: Scope, page: Page, mem
   }, { isolationLevel: 'RepeatableRead' })
 }
 
-export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { runId?: string; order?: 'asc' | 'desc' }) {
+export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { runId?: string; targetId?: string; order?: 'asc' | 'desc' }) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN', 'AUDITOR'])
-    const { runId, order = 'asc' } = page
-    const where: Prisma.ManagementAuditWhereInput = { characterId: scope.characterId }
+    const { runId, targetId, order = 'asc' } = page
+    const where: Prisma.ManagementAuditWhereInput = { characterId: scope.characterId, targetId }
     if (runId) {
       const run = await tx.agentRun.findFirst({ where: { characterId: scope.characterId, id: runId }, select: { id: true } })
       if (!run) unavailable()

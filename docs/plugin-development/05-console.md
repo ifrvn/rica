@@ -108,6 +108,8 @@ export const acmeCard = {
 
 可选的 `workbench(characterId: string, canManage: boolean)` 向工作台贡献已获授权的待办预览。返回 `Promise<{ status: string; label: string; items: { id: string; title: string; createdAt: string }[] }[]>`。每组的 `status` 同时用于预览查询和审批链接，记录的 `id` 用于打开详情。按 `canManage` 选择适用的队列，服务端继续校验角色和资源权限。
 
+审批组件可接收 `canInspect: boolean`，在用户有账号和审计访问权时发送 `account(accountId: string)` 或 `audit(targetId: string)` 跳转。插件可以提供 `ownsAudit(operation: string): boolean`，让有审批权限的用户从对应操作记录打开提案。仅对确实以提案 UUID 为目标的操作返回 `true`。
+
 ## 系统运行状况与审计
 
 插件提供状态到 [HealthNode](../../packages/console-shared/health.ts) 的映射，在[系统运行状况](../../apps/admin/src/features/health/SystemHealth.vue)对应层装配。将「已启用」「已配置」「最近核验成功」「进程在线」分别表达。单次命令完成只代表最近一次运行成功。PostgreSQL 和 Redis 的就绪探测由宿主提供。

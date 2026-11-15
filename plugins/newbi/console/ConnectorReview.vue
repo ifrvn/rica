@@ -10,8 +10,8 @@ type Summary = z.infer<typeof newbiReplySummary>
 type Reply = z.infer<typeof newbiReviewView>
 type SendResult = z.infer<typeof newbiSendView>
 type Page = { items: Summary[]; nextCursor: string | null }
-const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; statusFilter?: string; canReview: boolean; canManage: boolean }>()
-const emit = defineEmits<{ expired: []; open: [id?: string]; all: []; filter: [status: string] }>()
+const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; statusFilter?: string; canReview: boolean; canManage: boolean; canInspect?: boolean }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; all: []; filter: [status: string]; account: [id: string]; audit: [id: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId) + '/newbi/replies'
 const statusText: Record<Summary['status'], string> = {
   WAITING: '待审批', READY: '待发送', REJECTED: '已拒绝', IN_FLIGHT: '发送中',
@@ -278,11 +278,16 @@ onMounted(() => { void list() })
           <div><dt>账号</dt><dd>{{ reply.agentId }}</dd></div>
           <div><dt>目标</dt><dd>{{ reply.postId }} · 公开回复</dd></div>
           <div><dt>到期</dt><dd>{{ new Date(reply.expiresAt).toLocaleString() }}</dd></div>
+          <div><dt>发送尝试</dt><dd>{{ reply.attempts }} 次</dd></div>
           <div v-if="reply.retryNotBefore"><dt>最早重试</dt><dd>{{ formatTime(reply.retryNotBefore) }}</dd></div>
           <div v-if="reply.status === 'IN_FLIGHT' && reply.leaseUntil"><dt>许可到期</dt><dd>{{ formatTime(reply.leaseUntil) }}</dd></div>
           <div v-if="reply.remoteCommentId"><dt>评论回执</dt><dd>{{ reply.remoteCommentId }}</dd></div>
           <div v-if="reply.closureReason"><dt>结案理由</dt><dd>{{ reply.closureReason }}</dd></div>
         </dl>
+        <div v-if="canInspect" class="console-actions">
+          <NButton size="small" quaternary @click="emit('account', reply.accountId)">查看账号读取状态</NButton>
+          <NButton size="small" quaternary @click="emit('audit', reply.id)">查看提案审计</NButton>
+        </div>
         <section class="thread-preview" aria-labelledby="newbi-thread-heading">
           <div class="console-section-heading">
             <h4 id="newbi-thread-heading">帖子上下文</h4>

@@ -2940,6 +2940,20 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal(writes, 3)
     assert.ok(reads >= 8)
 
+    const auditPath = characterPath(a) + '/audit?targetId=' + lost.id
+    const audit = await request('GET', auditPath)
+    assert.equal(audit.status, 200)
+    assert.deepEqual(audit.body.items.map(({ operation, targetId, actorId }: { operation: string; targetId: string; actorId: string }) =>
+      [operation, targetId, actorId]), [
+      ['newbi.reply.create', lost.id, actorId(issuer, 'admin-a')],
+      ['newbi.reply.review', lost.id, actorId(issuer, 'reviewer')],
+      ['newbi.reply.send', lost.id, actorId(issuer, 'admin-a')],
+      ['newbi.reply.retry', lost.id, actorId(issuer, 'admin-a')],
+    ])
+    assert.equal((await request('GET', auditPath, { actor: 'reviewer' })).status, 403)
+    assert.deepEqual((await request('GET', characterPath(b) + '/audit?targetId=' + lost.id, { actor: 'admin-b' })).body,
+      { items: [], nextCursor: null })
+
     // Invalid credentials and locked threads never reach the comment endpoint.
     const invalidClient = createNewbiReplyExecutor(endpoint, 'nbi_agent_' + 'y'.repeat(43))
     assert.deepEqual(await executeNewbiReply(executor, invalidClient, executorKey, waiting.id),

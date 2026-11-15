@@ -66,6 +66,7 @@ export const platformReviews: readonly {
   id: string; title: string; component: Component
   installed(workspace: ConsoleWorkspace): boolean
   deployed(deployment: DeploymentPluginsView): boolean
+  ownsAudit?(operation: string): boolean
   workbench?(characterId: string, canManage: boolean): Promise<ReviewQueue[]>
 }[] = [newbiReview]
 

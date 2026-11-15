@@ -660,7 +660,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const query = c.req.valid('query')
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     return c.json(await management.listAudit(db, scope, {
-      ...management.parsePage(query), runId: query.runId, order: query.order,
+      ...management.parsePage(query), runId: query.runId, targetId: query.targetId, order: query.order,
     }), 200)
   })
 

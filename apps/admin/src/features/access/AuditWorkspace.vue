@@ -3,19 +3,24 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NAlert, NButton, NEmpty, NSpin } from 'naive-ui'
 import type { z } from '@hono/zod-openapi'
 import type { auditView } from '../../../../../packages/contracts/management.js'
-import { pluginAuditLabels } from '../../app/plugin-integrations.js'
+import { platformReviews, pluginAuditLabels } from '../../app/plugin-integrations.js'
 import { request, RequestError } from '@rica/console-shared/request'
 
 type Entry = z.infer<typeof auditView>
 type Page = { items: Entry[]; nextCursor: string | null }
 
-const props = defineProps<{ characterId: string; runId?: string }>()
-const emit = defineEmits<{ expired: []; all: []; openRun: [id: string] }>()
+const props = defineProps<{ characterId: string; runId?: string; targetId?: string; canReview: boolean }>()
+const emit = defineEmits<{ expired: []; all: []; openRun: [id: string]; proposal: [plugin: string, id: string] }>()
 const path = '/v1/characters/' + encodeURIComponent(props.characterId) + '/audit'
 const items = ref<Entry[]>([])
 const cursor = ref<string | null>(null)
 const busy = ref(false)
 const error = ref('')
+const reviewFor = (entry: Entry) => props.canReview ? platformReviews.find(({ ownsAudit }) => ownsAudit?.(entry.operation)) : undefined
+function openProposal(entry: Entry) {
+  const review = reviewFor(entry)
+  if (review) emit('proposal', review.id, entry.targetId)
+}
 let active = true
 onBeforeUnmount(() => { active = false })
 
@@ -42,6 +47,7 @@ async function load(append = false) {
   try {
     const query = new URLSearchParams({ order: 'desc' })
     if (props.runId) query.set('runId', props.runId)
+    if (props.targetId) query.set('targetId', props.targetId)
     if (append && cursor.value) query.set('cursor', cursor.value)
     const page = await request<Page>(path + '?' + query.toString())
     if (!active) return
@@ -73,13 +79,11 @@ onMounted(() => { void load() })
 <template>
   <section class="console-workspace" aria-labelledby="audit-records-heading">
     <div class="console-section-heading">
-      <h3 id="audit-records-heading">{{ runId ? '此运行的审计记录' : '操作记录' }}</h3>
+      <h3 id="audit-records-heading">{{ runId ? '此运行的审计记录' : targetId ? '此目标的审计记录' : '操作记录' }}</h3>
       <div class="console-actions">
         <NButton size="small" quaternary :disabled="busy" @click="load()">刷新记录</NButton>
-        <template v-if="runId">
-          <NButton size="small" quaternary @click="emit('all')">查看全部审计</NButton>
-          <NButton size="small" @click="emit('openRun', runId)">返回运行详情</NButton>
-        </template>
+        <NButton v-if="runId || targetId" size="small" quaternary @click="emit('all')">查看全部审计</NButton>
+        <NButton v-if="runId" size="small" @click="emit('openRun', runId)">返回运行详情</NButton>
       </div>
     </div>
     <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
@@ -101,6 +105,8 @@ onMounted(() => { void load() })
           </dl>
           <NButton v-if="!runId && item.operation === 'simulation.start'" size="small" quaternary
             @click="emit('openRun', item.targetId)">查看运行</NButton>
+          <NButton v-if="reviewFor(item)" size="small" quaternary
+            @click="openProposal(item)">查看平台提案</NButton>
         </details>
       </li>
     </ul>

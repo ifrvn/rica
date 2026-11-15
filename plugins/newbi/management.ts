@@ -170,6 +170,11 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
       const eligible = retry ? ['UNKNOWN', 'IN_FLIGHT'].includes(reply.status) : reply.status === 'READY'
       if (!eligible) throw new management.ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is not eligible to send')
       await requireNewbi(reply.endpoint)
+      await management.executeManagementCommand(db, {
+        characterId, actor: c.get('actor'), requestId: c.get('requestId'),
+        operation: retry ? 'newbi.reply.retry' : 'newbi.reply.send',
+        targetScope: characterId + '/' + replyId, input: { retry },
+      }, async () => ({ id: reply.id }))
       const result = await sendConnector?.(reply.id, retry)
       return c.json(newbiSendView.parse(result ?? { status: 'UNAVAILABLE' }), 200)
     })

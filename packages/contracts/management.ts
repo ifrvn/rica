@@ -192,7 +192,7 @@ export const beliefSummary = beliefView.pick({ id: true, version: true, kind: tr
 export const contactSummary = contactBoundaryView.pick({ id: true, accountId: true, version: true, blocked: true })
   .extend({ label: z.string().nullable() })
 
-export const auditQuery = listQuery.extend({ runId: resourceId.optional(), order: z.enum(['asc', 'desc']).optional() })
+export const auditQuery = listQuery.extend({ runId: resourceId.optional(), targetId: resourceId.optional(), order: z.enum(['asc', 'desc']).optional() })
 export const idempotencyHeader = z.object({
   'idempotency-key': z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
 })

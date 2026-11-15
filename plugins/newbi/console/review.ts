@@ -14,6 +14,7 @@ const queues = [
 
 export const newbiReview = {
   id: newbiConsole.id, title: newbiConsole.reviewTitle, component: Review,
+  ownsAudit: (operation: string) => operation.startsWith('newbi.reply.'),
   installed: (workspace: z.infer<typeof newbiCharacterWorkspaceView>) => workspace.newbiInstalled,
   deployed: (deployment: NewbiDeploymentView) => deployment.plugins.newbi !== 'NOT_INSTALLED',
   workbench(characterId: string, canManage: boolean) {

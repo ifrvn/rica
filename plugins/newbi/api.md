@@ -124,6 +124,8 @@ type ReplyDetail = {
 
 发送结果为 `{ status: "SENT", commentId }` 或 `{ status, reason?, retryNotBefore? }`。后一种状态为 `UNAVAILABLE`、`UNKNOWN` 或 `CLOSED`，原因可为 `CREDENTIAL_INVALID`、`ACCESS_DENIED`、`RATE_LIMITED`、`SERVICE_UNAVAILABLE`、`COMMUNITY_CLOSED` 或 `POST_LOCKED`。收到 `UNKNOWN` 时根据原提案和平台回执核对，恢复请求沿用同一提案。
 
+通过权限和状态检查的网页发送与重试请求分别写入 `newbi.reply.send`、`newbi.reply.retry` 审计事件，目标为提案 UUID。管理员或审计员可用 `GET /v1/characters/{characterId}/audit?targetId={replyId}` 读取这些记录。发送尝试次数与评论回执以提案详情为准。
+
 在本地协议夹具中创建提案并读取上下文。
 
 ```powershell

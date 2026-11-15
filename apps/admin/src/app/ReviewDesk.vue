@@ -81,6 +81,7 @@ const roles = ref<CharacterAccess>([])
 const installedReviews = ref<string[]>([])
 const reviewPlugin = ref<string>()
 const reviewStatus = ref<string>()
+const auditTarget = ref<string>()
 const activePlatformReview = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)
   ?? (reviewPlugin.value ? undefined : platformReviews.find(({ id }) => installedReviews.value.includes(id)) ?? platformReviews[0]))
 const reviewTabs = computed(() => platformReviews.filter(({ id }) => installedReviews.value.includes(id)
@@ -242,12 +243,13 @@ async function applyLocation(location?: ConsoleLocation, replace = false, landin
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
     reviewPlugin.value = tab.value === 'connector' ? location.reviewPlugin : undefined
     reviewStatus.value = tab.value === 'connector' ? location.reviewStatus : undefined
+    auditTarget.value = tab.value === 'audit' && !detailId.value ? location.auditTarget : undefined
     healthNode.value = tab.value === 'health' ? location.healthNode : undefined
     if (denied) error.value = '当前账号无权打开此链接。'
     if (replace || tab.value !== location.page || (location.startSimulation && !startSimulation.value)) {
       window.history.replaceState(null, '', consoleHash({ characterId: target, page: tab.value, detail: detailId.value,
         runQuery: runQuery.value, startSimulation: startSimulation.value, connectorAccountId: connectorAccountId.value,
-        reviewPlugin: reviewPlugin.value, reviewStatus: reviewStatus.value, healthNode: healthNode.value }))
+        reviewPlugin: reviewPlugin.value, reviewStatus: reviewStatus.value, auditTarget: auditTarget.value, healthNode: healthNode.value }))
     }
     if (tab.value === 'review' && canReview.value) {
       if (!queueLoaded) await fetchQueue(current)
@@ -594,8 +596,10 @@ async function decide(decision: Decision) {
       <RunOperations v-else-if="tab === 'outbox' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" mode="outbox" :can-retry="roles.includes('ADMIN')"
         @expired="resetSession" @open-runs="changeTab('runs')" @open-run="openRun" />
-      <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '')"
-        :character-id="characterId" :run-id="detailId" @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" />
+      <AuditWorkspace v-else-if="tab === 'audit' && characterId && canReadRuns" :key="characterId + '/' + (detailId ?? '') + '/' + (auditTarget ?? '')"
+        :character-id="characterId" :run-id="detailId" :target-id="auditTarget" :can-review="canReview"
+        @expired="resetSession" @all="changeTab('audit')" @open-run="openRun"
+        @proposal="(plugin, proposalId) => navigate({ characterId, page: 'connector', reviewPlugin: plugin, detail: proposalId })" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :can-configure-model="canCreate" :can-start-simulation="roles.includes('ADMIN')" @expired="resetSession"
         @deployment-changed="refreshReviewTabs"
@@ -622,8 +626,10 @@ async function decide(decision: Decision) {
       <template v-else-if="tab === 'connector' && characterId && canReview">
         <component v-if="activePlatformReview" :is="activePlatformReview.component" :key="characterId + '/' + activePlatformReview.id"
           :character-id="characterId" :detail-id="detailId" :account-id="connectorAccountId" :status-filter="reviewStatus"
-          :can-review="canReview" :can-manage="roles.includes('ADMIN')"
+          :can-review="canReview" :can-manage="roles.includes('ADMIN')" :can-inspect="canReadRuns"
           @expired="resetSession" @open="navigate({ characterId, page: 'connector', detail: $event, connectorAccountId, reviewPlugin: activePlatformReview?.id, reviewStatus })"
+          @account="navigate({ characterId, page: 'accounts', detail: $event })"
+          @audit="navigate({ characterId, page: 'audit', auditTarget: $event })"
           @filter="navigate({ characterId, page: 'connector', detail: detailId, connectorAccountId, reviewPlugin: activePlatformReview?.id, reviewStatus: $event })"
           @all="navigate({ characterId, page: 'connector', reviewPlugin: activePlatformReview?.id, reviewStatus })" />
         <NEmpty v-else description="此插件未注册审批页面。" />

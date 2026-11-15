@@ -1,6 +1,7 @@
 export const newbiAuditLabels = {
   'newbi.account.bind': '绑定连接器账号', 'newbi.reply.create': '创建回复提案',
   'newbi.reply.review': '审批公开回复', 'newbi.reply.close': '结案回复提案',
+  'newbi.reply.send': '请求发送公开回复', 'newbi.reply.retry': '请求重试公开回复',
 }
 
 export const newbiConsole = {
