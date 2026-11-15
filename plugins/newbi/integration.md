@@ -25,6 +25,7 @@ Newbi 在 [database.ts](database.ts)中复用宿主客户端，在事务内按�
 | `pollConnector` | `accountId: string`，Rica 已绑定账号 UUID | 单次读取状态 `READ`、`WAITING`、`STOPPED` 或 `undefined`。 |
 | `readConnectorThread` | `{ accountId, agentId, endpoint, postId }`，从已授权提案取得 | `{ post, comments }` 或 `undefined`。核对当前 Agent 和端点后读取。 |
 | `sendConnector` | `replyId: string`、`retry: boolean` | `SENT`、`UNAVAILABLE`、`UNKNOWN` 或 `CLOSED` 的发送结果。 |
+| `reportConnectorOperation` | `service: 'connector-reader' \| 'connector-executor'`、`succeeded: boolean` | 可选的观测回调，返回 `void` 或 `Promise<void>`。网页读取或发送返回结果后通知宿主，回调失败不影响业务响应。|
 
 已经持有宿主数据库客户端和配置存储时，可以按下例装配，回调中使用的数据库权限由操作工厂切换。
 

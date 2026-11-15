@@ -7,6 +7,7 @@ import { body, character, characterParams, error, errors, security, success, fai
 import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
 import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from './persistence/management.js'
 import { newbiAccountProfile, newbiConnectionsView, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from './contracts.js'
+import type { newbiCatalog } from './catalog.js'
 
 export type NewbiDeploymentView = { plugins: { newbi: 'NOT_INSTALLED' | 'INSTALLED' | 'ENABLED' }; newbi: { endpoint: string | null } }
 
@@ -14,12 +15,24 @@ export type NewbiManagementOptions = {
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
   pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
   sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
+  reportConnectorOperation?: (service: keyof typeof newbiCatalog, succeeded: boolean) => void | Promise<void>
   readConnectorThread?: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>) =>
     Promise<z.infer<typeof newbiThreadView> | undefined>
 }
 
 export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { readNewbi(): Promise<{ endpoint: string } | undefined>; isInstalled(): Promise<boolean> } | undefined,
-  { identifyConnector, pollConnector, sendConnector, readConnectorThread }: NewbiManagementOptions): ManagementPlugin {
+  { identifyConnector, pollConnector, sendConnector, readConnectorThread, reportConnectorOperation }: NewbiManagementOptions): ManagementPlugin {
+  async function observe<T>(service: keyof typeof newbiCatalog, run: () => Promise<T>, succeeded: (result: T) => boolean) {
+    let completed = false
+    try {
+      const result = await run()
+      completed = succeeded(result)
+      return result
+    } finally {
+      if (reportConnectorOperation) void Promise.resolve().then(() => reportConnectorOperation(service, completed)).catch(() => {})
+    }
+  }
+
   async function newbiAvailable(endpoint: string) {
     return !deploymentPlugins || (await deploymentPlugins.readNewbi())?.endpoint === endpoint
   }
@@ -175,8 +188,10 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
         operation: retry ? 'newbi.reply.retry' : 'newbi.reply.send',
         targetScope: characterId + '/' + replyId, input: { retry },
       }, async () => ({ id: reply.id }))
-      const result = await sendConnector?.(reply.id, retry)
-      return c.json(newbiSendView.parse(result ?? { status: 'UNAVAILABLE' }), 200)
+      const result = await observe('connector-executor', async () =>
+        newbiSendView.parse(await sendConnector?.(reply.id, retry) ?? { status: 'UNAVAILABLE' }),
+      (delivery) => delivery.status === 'SENT')
+      return c.json(result, 200)
     })
 
     app.openapi(createRoute({
@@ -235,9 +250,12 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
         }
         await requireNewbi(account.instanceKey)
       })
-      const result = await pollConnector?.(accountId)
-      if (!result) throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Newbi reading is unavailable')
-      return c.json(newbiPollView.parse(result), 200)
+      const result = await observe('connector-reader', async () => {
+        const page = await pollConnector?.(accountId)
+        if (!page) throw new management.ManagementError(409, 'CONNECTOR_VERIFICATION_FAILED', 'Newbi reading is unavailable')
+        return newbiPollView.parse(page)
+      }, (page) => page.status === 'READ' || (page.status === 'WAITING' && !page.reason))
+      return c.json(result, 200)
     })
   }
 

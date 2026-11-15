@@ -38,6 +38,7 @@ import { processSimulatedDraft } from '../packages/persistence/simulated-draft.j
 import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '../packages/persistence/simulation-execution.js'
 import { loadConfig } from '../packages/runtime/config.js'
 import { createDeploymentPluginStore } from '../apps/deployment-plugins.js'
+import { readPluginStatus, reportPluginResult } from '../apps/plugin-observation.js'
 
 const config = loadConfig()
 const simulationPlatforms = await startSimulationPlatforms({})
@@ -50,7 +51,8 @@ let connectorEndpoint: string | undefined
 const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>,
   pollConnector?: NewbiManagementOptions['pollConnector'],
   sendConnector?: NewbiManagementOptions['sendConnector'],
-  readConnectorThread?: NewbiManagementOptions['readConnectorThread']) =>
+  readConnectorThread?: NewbiManagementOptions['readConnectorThread'],
+  reportConnectorOperation?: NewbiManagementOptions['reportConnectorOperation']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
@@ -58,7 +60,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
     plugins: [createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
       identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
-      pollConnector, sendConnector, readConnectorThread,
+      pollConnector, sendConnector, readConnectorThread, reportConnectorOperation,
     })],
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
@@ -2760,12 +2762,16 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   const runtime = createDatabase(scheduleRuntimeUrl())
   const executorDb = scopedNewbiDatabase(runtime, 'executor')
   const readerDb = scopedNewbiDatabase(runtime, 'reader')
+  const sendReports: boolean[] = []
   const sendApp = testApp(settings, undefined, async (id, retry) => {
     const host = await openSavedNewbiExecutor(executorDb, connectNewbiSettings(settings.readConfiguration), id)
     if (!host) return { status: 'UNAVAILABLE' }
     try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
     finally { await host.stop() }
-  }, (target) => readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target))
+  }, (target) => readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target), (service, succeeded) => {
+    assert.equal(service, 'connector-executor')
+    sendReports.push(succeeded)
+  })
   t.after(() => runtime.$disconnect())
   try {
     const identityId = await reflectionIdentity()
@@ -2883,6 +2889,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal((await sendFromConsole(approved.path, 'reviewer')).status, 403)
     assert.equal((await sendFromConsole(characterPath(b) + '/newbi/replies/' + approved.id, 'admin-b')).status, 404)
     assert.equal((await sendFromConsole(approved.path, 'admin-a', true)).status, 409)
+    assert.deepEqual(sendReports, [])
     const nextExecutor = newbiExecutorKey({ ...newbiExecutorIdentity, version: '2.0.0' })
     const readCount = reads
     assert.deepEqual(await executeNewbiReply(executor, client, nextExecutor, approved.id), { status: 'UNAVAILABLE' })
@@ -2918,6 +2925,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     assert.equal((await lost.decide('APPROVE')).status, 200)
     dropResponse = true
     assert.deepEqual((await sendFromConsole(lost.path)).body, { status: 'UNKNOWN' })
+    assert.equal(sendReports.at(-1), false)
     assert.equal((await request('GET', lost.path)).body.status, 'UNKNOWN')
     assert.equal(sent.get(lost.id)?.content, lost.content)
     const waiting = await propose('Fixture queued behind unknown result', 'newbi-waiting')
@@ -2933,6 +2941,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const recovered = await sendFromConsole(prefix + '/replies/' + lost.id.toUpperCase(), 'admin-a', true)
     assert.equal(recovered.status, 200, JSON.stringify(recovered.body))
     assert.deepEqual(recovered.body, { status: 'SENT', commentId: sent.get(lost.id)?.id })
+    assert.equal(sendReports.at(-1), true)
     const receipt = await request('GET', lost.path)
     assert.equal(receipt.body.remoteCommentId, sent.get(lost.id)?.id)
     assert.equal(receipt.body.attempts, 2)
@@ -3194,19 +3203,31 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal((await account()).cursor, null)
     assert.equal((await request('GET', character + inbox)).body.readError, 'CREDENTIAL_INVALID')
     assert.deepEqual(cursors, [])
+    const statusRedis = new Redis(config.redisUrl)
+    t.after(() => statusRedis.disconnect())
+    const reports: Promise<void>[] = []
     const target = testApp(settings, async (id) => {
       const host = await openSavedNewbiReader(db, connectNewbiSettings(settings.readConfiguration), id)
       if (!host) return
       try { return await pollNewbiEvents(db, host.plugin.implementation, id) }
       finally { await host.stop() }
+    }, undefined, undefined, (service, succeeded) => {
+      reports.push(reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'))
     })
+    const readerReport = async () => (await readPluginStatus(statusRedis)).services.find(({ service }) => service === 'connector-reader')?.report
+    const previousReport = await readerReport()
     const pollPath = character + inbox + '/poll'
     assert.equal((await request('POST', pollPath, { target, actor: 'auditor' })).status, 403)
     assert.equal((await request('POST', characterPath(b) + inbox + '/poll', { target, actor: 'admin-b' })).status, 404)
+    assert.equal(reports.length, 0)
+    assert.deepEqual(await readerReport(), previousReport)
     assert.deepEqual(cursors, [])
     const firstRead = await request('POST', pollPath, { target })
     assert.equal(firstRead.status, 200, JSON.stringify(firstRead.body))
     assert.equal(firstRead.body.status, 'READ')
+    assert.equal(reports.length, 1)
+    await Promise.all(reports)
+    assert.equal((await readerReport())?.status, 'COMPLETED')
     assert.equal((await account()).cursor, opaque)
     assert.deepEqual(cursors, [null])
 
@@ -3226,6 +3247,12 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.ok(caughtUp.nextPollAt.getTime() > Date.now() + 20_000)
     const deferred = await request('POST', pollPath, { target })
     assert.deepEqual(deferred.body, { status: 'WAITING', nextAt: caughtUp.nextPollAt.toISOString() })
+    await Promise.all(reports)
+    const reportKey = 'rica:plugin-status:v1:connector-reader'
+    assert.ok(await statusRedis.ttl(reportKey) > 0)
+    assert.equal(await statusRedis.pexpire(reportKey, 1), 1)
+    await sleep(20)
+    assert.equal(await readerReport(), null)
     assert.deepEqual(cursors, [null, opaque, 'next-page'])
     const firstInbox = await request('GET', character + inbox)
     assert.equal(firstInbox.status, 200, JSON.stringify(firstInbox.body))
@@ -3248,9 +3275,14 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     await dueNow()
     mode = 'LIMIT'
     const atLimit = Date.now()
-    const limited = await poll()
-    assert.equal(limited.status, 'WAITING')
-    assert.ok('reason' in limited && limited.reason === 'RATE_LIMITED')
+    const limited = await request('POST', pollPath, { target })
+    assert.equal(limited.status, 200)
+    assert.equal(limited.body.status, 'WAITING')
+    assert.equal(limited.body.reason, 'RATE_LIMITED')
+    await Promise.all(reports)
+    const limitedReport = await readerReport()
+    assert.equal(limitedReport?.status, 'FAILED')
+    assert.equal(limitedReport?.diagnostic, 'OPERATION_FAILED')
     const checkpoint = await account()
     assert.equal(checkpoint.cursor, 'tail')
     const failedInbox = await request('GET', character + inbox)

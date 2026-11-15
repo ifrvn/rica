@@ -50,7 +50,11 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   activeModel,
   deploymentPlugins,
   plugins: [
-    createNewbiManagement(managementDb, newbi, createNewbiOperations(db, newbi)),
+    createNewbiManagement(managementDb, newbi, {
+      ...createNewbiOperations(db, newbi),
+      reportConnectorOperation: (service, succeeded) =>
+        reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
+    }),
     createHostedModelManagement({ modelSettings, startModelPlugin,
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
       isEnabled: (provider) => deploymentPlugins.isEnabled(provider, activeModel),
