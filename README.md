@@ -47,7 +47,7 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
    ```
 
 3. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址一致，重启 API，然后在 [本地控制台](http://localhost:5173/) 用用户名和密码登录。登录后可在「添加 Passkey」中确认密码并登记设备。下次可直接点「使用 Passkey」。
-4. 需要审批人时，用 `pnpm run admin:user add <username>` 创建其本地账号，然后通过管理 API 授权。[账号恢复](docs/management-api.md#本地账号与会话)
+4. 需要审批人时，在账号菜单打开「管理本地账号」创建账号，再到「成员与审计」授予对应角色的审批权限。[本地账号与会话](docs/management-api.md#本地账号与会话)
 
 本机开发使用 `http://localhost:5173`。部署时使用固定 HTTPS 地址。浏览器会话存入 HttpOnly Cookie。
 

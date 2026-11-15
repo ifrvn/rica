@@ -18,7 +18,17 @@ Read-Host -MaskInput 'Reviewer password' | pnpm run admin:user add reviewer
 Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 ```
 
-新增账号后，用成员接口将角色权限授予其本地用户名。重设密码会使该账号的所有会话失效并移除已登记的 Passkey。
+部署管理员可在右上角账号菜单或「成员与审计」打开「管理本地账号」，确认自己的密码后创建或重置普通账号。使用上面的 CLI 初始化和维护部署管理员。新增账号后，在成员列表将角色权限授予其本地用户名。重设密码会使该账号的所有会话失效并移除已登记的 Passkey，角色授权保留。
+
+### 网页账号管理接口
+
+| 方法 | 参数 | 结果 |
+| --- | --- | --- |
+| `GET /v1/auth/users` | 可选 `after`，取上一页游标。 | 200，`{ items: [{ username, canCreate }], nextCursor }`，每页最多 25 条。 |
+| `POST /v1/auth/users` | `{ username, password, currentPassword }`。 | 201，`{ username }`。新增普通账号，无初始角色权限。 |
+| `PUT /v1/auth/users/{username}/password` | `{ password, currentPassword }`。 | 200，`{ username }`。旧会话及 Passkey 一并失效。 |
+
+这些接口要求具有部署管理权限的本地会话。写请求使用同源 `Origin`，`password` 是目标账号的新密码，`currentPassword` 用于验证当前操作者。普通角色管理员调用返回 403。用户名已存在时返回 `409 ACCOUNT_EXISTS`，重置部署管理员返回 `409 ACCOUNT_PROTECTED`，目标不存在返回 `404 ACCOUNT_NOT_FOUND`。
 
 - 网页登录后持有有效期 8 小时的 HttpOnly、SameSite=Strict 会话 Cookie。退出会撤销当前会话，HTTPS 下 Cookie 额外使用 Secure 属性。
 - 已登录用户可输入当前密码后登记 Passkey。登记和登录都验证浏览器来源、RP ID、一次性挑战和验证器的用户验证。已登记用户可直接选用 Passkey 登录。

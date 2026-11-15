@@ -8,8 +8,8 @@ import { request } from '@rica/console-shared/request'
 
 type Members = z.infer<typeof memberPage>
 type Role = Members['items'][number]['roles'][number]
-const props = defineProps<{ characterId: string; canEdit: boolean; username: string }>()
-const emit = defineEmits<{ expired: []; permissions: [] }>()
+const props = defineProps<{ characterId: string; canEdit: boolean; username: string; canManageUsers: boolean }>()
+const emit = defineEmits<{ expired: []; permissions: []; manageUsers: [] }>()
 const { busy, error, notice, active, run, command } = useConsoleTask(() => emit('expired'))
 const path = characterPath(props.characterId) + '/memberships'
 const rows = ref<Members['items']>([])
@@ -76,6 +76,7 @@ onMounted(() => { void run(load) })
       <h3 id="member-list-heading" ref="memberHeading" tabindex="-1">成员列表</h3>
       <div class="console-actions">
         <NButton size="small" quaternary :disabled="busy" @click="run(() => load())">刷新成员</NButton>
+        <NButton v-if="canManageUsers" size="small" quaternary :disabled="busy" @click="emit('manageUsers')">管理本地账号</NButton>
         <NButton v-if="canEdit" size="small" :disabled="busy || !!action" @click="edit('GRANT')">授予角色权限</NButton>
       </div>
     </div>

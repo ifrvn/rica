@@ -45,7 +45,7 @@ Open the [local console](http://localhost:5173/) and check [API readiness](http:
    ```
 
 3. Set `RICA_ADMIN_ORIGIN` to the browser's address and restart the API. Sign in to the [local console](http://localhost:5173/) with your username and password. Open the Passkey section and confirm your password to register a device. Next time, use the Passkey sign-in button.
-4. Create local reviewer accounts with `pnpm run admin:user add <username>`, then grant their roles through the management API. [Account recovery (Chinese)](docs/management-api.md#本地账号与会话)
+4. Create local reviewer accounts from the account menu, then grant reviewer access for the relevant character in Members and Audit. [Local accounts and sessions (Chinese)](docs/management-api.md#本地账号与会话)
 
 Local development uses `http://localhost:5173`. Use a stable HTTPS origin for deployments. The browser stores its session in an HttpOnly cookie.
 

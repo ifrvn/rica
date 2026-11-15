@@ -18,7 +18,7 @@ import { simulatedModelPlugin } from '@rica/plugin-simulated-model'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { dailyScheduleSlot, dispatchSimulationSchedule, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
-import { actorId, loadManagementConfig, localIssuer } from '../apps/api/admin-auth.js'
+import { actorId, hashPassword, loadManagementConfig, localIssuer } from '../apps/api/admin-auth.js'
 import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
@@ -259,6 +259,92 @@ test('local authentication enforces origin, membership and session revocation', 
   } finally {
     await owner.managementMembership.deleteMany({ where: { issuer: localIssuer, subject: username } })
     await owner.adminUser.deleteMany({ where: { username } })
+    await redis.quit()
+  }
+})
+
+test('deployment account management leaves role grants scoped and revokes credentials on reset', { timeout: 30_000 }, async () => {
+  const authConfig = loadManagementConfig({ RICA_ADMIN_ORIGIN: fixtureOrigin })!
+  const redis = new Redis(config.redisUrl)
+  const { app: auth, authenticate } = createAdminAuth(management, redis, authConfig)
+  const local = createApp({ postgres: async () => true, redis: async () => true },
+    createManagementApp({ db: management, authenticate, origin: fixtureOrigin, cookie: authConfig.cookie,
+      resolveAdapter: simulationPlatforms.resolveAdapter }), auth)
+  const suffix = randomUUID()
+  const operatorName = 'web-admin-' + suffix
+  const name = 'web-user-' + suffix
+  const currentPassword = 'operator fixture password'
+  const password = 'initial fixture password'
+  const replacement = 'replacement fixture password'
+  const createInput = { username: name.toUpperCase(), password, currentPassword }
+  const call = (method: string, path: string, cookie = '', data?: object, origin = fixtureOrigin) => local.request(path, {
+    method, headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+    ...(data ? { body: JSON.stringify(data) } : {}),
+  })
+  const users = '/v1/auth/users'
+  const reset = users + '/' + name + '/password'
+  async function login(username: string, password: string) {
+    const response = await call('POST', '/v1/auth/login', '', { username, password })
+    assert.equal(response.status, 200)
+    const cookie = response.headers.get('set-cookie')?.split(';')[0]
+    assert.ok(cookie)
+    return cookie
+  }
+
+  try {
+    const operator = await owner.adminUser.create({ data: {
+      username: operatorName, actorId: actorId(localIssuer, operatorName), canCreate: true,
+      passwordHash: await hashPassword(currentPassword),
+    } })
+    const operatorCookie = await login(operatorName, currentPassword)
+    assert.equal((await call('POST', users, '', createInput)).status, 401)
+    assert.equal((await call('POST', users, operatorCookie, createInput, 'https://foreign.example.test')).status, 403)
+    assert.equal((await call('POST', users, operatorCookie, { ...createInput, canCreate: true })).status, 422)
+    assert.equal((await call('POST', users, operatorCookie, { ...createInput, currentPassword: replacement })).status, 422)
+    const created = await call('POST', users, operatorCookie, createInput)
+    assert.equal(created.status, 201)
+    assert.deepEqual(await created.json(), { username: name })
+    assert.equal((await call('POST', users, operatorCookie, createInput)).status, 409)
+    const list = await call('GET', users + '?after=' + operatorName, operatorCookie)
+    assert.equal(list.status, 200)
+    const listed = await list.json()
+    assert.deepEqual(listed.items.find((row: { username: string }) => row.username === name), { username: name, canCreate: false })
+
+    const user = await owner.adminUser.findUniqueOrThrow({ where: { username: name } })
+    assert.equal(user.actorId, actorId(localIssuer, name))
+    assert.equal(user.canCreate, false)
+    const userCookie = await login(name, password)
+    assert.equal((await call('GET', '/v1' + characterPath(a), userCookie)).status, 404)
+    await owner.managementMembership.create({ data: { characterId: a, issuer: localIssuer, subject: name, role: 'ADMIN' } })
+    assert.equal((await call('GET', '/v1' + characterPath(a), userCookie)).status, 200)
+    assert.equal((await call('GET', users, userCookie)).status, 403)
+    assert.equal((await call('PUT', reset, userCookie, { password: replacement, currentPassword: password })).status, 403)
+    assert.equal((await call('PUT', users + '/' + operatorName + '/password', operatorCookie,
+      { password: replacement, currentPassword })).status, 409)
+
+    const [permission] = await owner.$queryRaw<{ allowed: boolean }[]>`
+      SELECT has_function_privilege('rica_runtime', 'public.rica_manage_local_user(uuid,integer,text,text,text)', 'EXECUTE') AS allowed
+    `
+    assert.equal(permission.allowed, false)
+    const [stale] = await management.$queryRaw<{ code: string }[]>`
+      SELECT public.rica_manage_local_user(${operator.id}::uuid, ${operator.authVersion + 1}::int,
+        ${name}::text, ${user.passwordHash}::text, 'RESET') AS code
+    `
+    assert.equal(stale.code, 'FORBIDDEN')
+
+    await owner.adminPasskey.create({ data: { id: suffix, userId: user.id, publicKey: Uint8Array.of(1) } })
+    const updated = await call('PUT', reset, operatorCookie, { password: replacement, currentPassword })
+    assert.equal(updated.status, 200)
+    assert.deepEqual(await updated.json(), { username: name })
+    assert.equal(await owner.adminPasskey.count({ where: { userId: user.id } }), 0)
+    assert.equal((await call('GET', '/v1/auth/session', userCookie)).status, 401)
+    assert.equal((await call('POST', '/v1/auth/login', '', { username: name, password })).status, 401)
+    const renewed = await login(name, replacement)
+    assert.equal((await call('GET', '/v1' + characterPath(a), renewed)).status, 200)
+    assert.equal((await call('GET', '/v1' + characterPath(b), renewed)).status, 404)
+  } finally {
+    await owner.managementMembership.deleteMany({ where: { issuer: localIssuer, subject: name } })
+    await owner.adminUser.deleteMany({ where: { username: { in: [operatorName, name] } } })
     await redis.quit()
   }
 })

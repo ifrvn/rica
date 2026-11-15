@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { getCookie, setCookie } from 'hono/cookie'
 import { parse as parseCookie } from 'hono/utils/cookie'
@@ -9,8 +9,9 @@ import {
 } from '@simplewebauthn/server'
 import type { Redis } from 'ioredis'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
+import { localUserCreate, localUserPassword } from '../../packages/contracts/local-users.js'
 import {
-  allowAuthAttempt, createAdminSessions, localPrincipal, passwordInput, sessionKey, sessionSeconds, usernameInput,
+  allowAuthAttempt, createAdminSessions, hashPassword, localPrincipal, passwordInput, sessionKey, sessionSeconds, usernameInput,
   verifyPassword, type Authenticate, type ManagementConfig,
 } from './admin-auth.js'
 
@@ -71,6 +72,54 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     if (!user) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
     return c.json({ username: user.username, canCreate: user.canCreate })
   })
+
+  app.get('/users', async (c) => {
+    const operator = await sessions.read(getCookie(c, config.cookie))
+    if (!operator) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
+    if (!operator.canCreate) return c.json({ error: { code: 'FORBIDDEN' } }, 403)
+    const cursor = usernameInput.optional().safeParse(c.req.query('after'))
+    if (!cursor.success) return c.json({ error: { code: 'INVALID_INPUT' } }, 422)
+    const rows = await db.adminUser.findMany({
+      select: { username: true, canCreate: true },
+      where: cursor.data ? { username: { gt: cursor.data } } : undefined,
+      orderBy: { username: 'asc' }, take: 26,
+    })
+    const items = rows.slice(0, 25)
+    return c.json({ items, nextCursor: rows.length > 25 ? items.at(-1)?.username ?? null : null })
+  })
+
+  async function manageUser(c: Context, operation: 'CREATE' | 'RESET') {
+    const operator = await sessions.read(getCookie(c, config.cookie))
+    if (!operator) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
+    if (!operator.canCreate) return c.json({ error: { code: 'FORBIDDEN' } }, 403)
+    const body = await c.req.json().catch(() => null)
+    const input = operation === 'CREATE' ? localUserCreate.safeParse(body) : localUserPassword.safeParse(body)
+    const username = usernameInput.safeParse(input.success && 'username' in input.data ? input.data.username : c.req.param('username'))
+    if (!input.success || !username.success) return c.json({ error: { code: 'INVALID_INPUT' } }, 422)
+    if (!await allowAuthAttempt(redis, 'password', operator.id)) return c.json({ error: { code: 'RATE_LIMITED' } }, 429)
+    if (!await verifyPassword(input.data.currentPassword, operator.passwordHash)) {
+      return c.json({ error: { code: 'INVALID_CREDENTIALS' } }, 422)
+    }
+    const hash = await hashPassword(input.data.password)
+    const [result] = await db.$queryRaw<{ code: string }[]>`
+      SELECT public.rica_manage_local_user(${operator.id}::uuid, ${operator.authVersion}::int,
+        ${username.data}::text, ${hash}::text, ${operation}::text) AS code
+    `
+    switch (result.code) {
+      case 'OK':
+        console.info(JSON.stringify({ service: 'api', event: 'local_user_changed', operation, actorId: operator.actorId, username: username.data }))
+        return c.json({ username: username.data }, operation === 'CREATE' ? 201 : 200)
+      case 'FORBIDDEN': return c.json({ error: { code: result.code } }, 403)
+      case 'ACCOUNT_NOT_FOUND': return c.json({ error: { code: result.code } }, 404)
+      case 'ACCOUNT_EXISTS':
+      case 'ACCOUNT_PROTECTED': return c.json({ error: { code: result.code } }, 409)
+      case 'INVALID_INPUT': return c.json({ error: { code: result.code } }, 422)
+      default: throw new Error('Unexpected local account result')
+    }
+  }
+
+  app.post('/users', (c) => manageUser(c, 'CREATE'))
+  app.put('/users/:username/password', (c) => manageUser(c, 'RESET'))
 
   app.post('/login', async (c) => {
     const input = passwordLogin.safeParse(await c.req.json().catch(() => null))

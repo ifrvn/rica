@@ -24,6 +24,7 @@ const ConsoleHome = defineAsyncComponent(() => import('../features/home/ConsoleH
 const GrowthWorkspace = defineAsyncComponent(() => import('../features/knowledge/GrowthWorkspace.vue'))
 const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowledge/KnowledgeWorkspace.vue'))
 const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
+const LocalUsers = defineAsyncComponent(() => import('../features/access/LocalUsers.vue'))
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
@@ -40,6 +41,8 @@ const username = ref('')
 const passkeyPassword = ref('')
 const showPasskeyForm = ref(false)
 const accountMenuOpen = ref(false)
+const localUsersOpen = ref(false)
+let localUsersTrigger: HTMLElement | undefined
 const pageHeading = ref<HTMLElement>()
 const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && window.isSecureContext
 const characters = ref<Character[]>([])
@@ -356,6 +359,7 @@ function resetSession() {
   password.value = ''
   passkeyPassword.value = ''
   accountMenuOpen.value = false
+  localUsersOpen.value = false
   showPasskeyForm.value = false
   canCreate.value = false
   tab.value = 'character'
@@ -369,6 +373,17 @@ function resetSession() {
   error.value = ''
   notice.value = ''
   resetReview()
+}
+
+function openLocalUsers() {
+  localUsersTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  accountMenuOpen.value = false
+  localUsersOpen.value = true
+}
+
+function closeLocalUsers() {
+  localUsersOpen.value = false
+  void nextTick(() => (localUsersTrigger?.isConnected ? localUsersTrigger : document.getElementById('console-account-menu'))?.focus())
 }
 
 async function fetchQueue(current: number, append = false) {
@@ -480,10 +495,11 @@ async function decide(decision: Decision) {
           <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
             @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
             <template #trigger>
-              <NButton size="small" quaternary class="account-name" :aria-expanded="accountMenuOpen"
+              <NButton id="console-account-menu" size="small" quaternary class="account-name" :aria-expanded="accountMenuOpen"
                 :aria-label="'账号设置 · ' + username">{{ username }} <span aria-hidden="true">⌄</span></NButton>
             </template>
             <div class="account-menu">
+              <NButton v-if="canCreate" size="small" quaternary :disabled="busy" @click="openLocalUsers">管理本地账号</NButton>
               <NButton v-if="passkeysAvailable && !showPasskeyForm" size="small" quaternary
                 :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</NButton>
               <NForm v-if="showPasskeyForm" :show-feedback="false" @submit.prevent="registerPasskey">
@@ -499,6 +515,8 @@ async function decide(decision: Decision) {
           </NPopover>
         </div>
       </Teleport>
+
+      <LocalUsers v-if="canCreate && localUsersOpen" @close="closeLocalUsers" @expired="resetSession" />
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
       <nav v-if="characters.length" class="console-navigation" aria-label="控制台导航">
@@ -613,7 +631,7 @@ async function decide(decision: Decision) {
         @accounts="changeTab('accounts')" @runs="changeTab('runs')" />
       <MembershipWorkspace v-else-if="tab === 'members' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :username="username" :can-edit="roles.includes('ADMIN')"
-        @expired="resetSession" @permissions="refreshMembership" />
+        :can-manage-users="canCreate" @manage-users="openLocalUsers" @expired="resetSession" @permissions="refreshMembership" />
       <KnowledgeWorkspace v-else-if="tab === 'knowledge' && characterId && canReadRuns" :key="characterId"
         :character-id="characterId" :detail-id="detailId" :can-edit="roles.includes('ADMIN')"
         @expired="resetSession" @open="navigate({ characterId, page: 'knowledge', detail: $event })" />
