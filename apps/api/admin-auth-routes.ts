@@ -141,6 +141,29 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     return c.json({ success: true })
   })
 
+  app.put('/password', async (c) => {
+    const token = getCookie(c, config.cookie)
+    const user = await sessions.read(token)
+    if (!user) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
+    const input = localUserPassword.safeParse(await c.req.json().catch(() => null))
+    if (!input.success) return c.json({ error: { code: 'INVALID_INPUT' } }, 422)
+    if (!await allowAuthAttempt(redis, 'password', user.id)) return c.json({ error: { code: 'RATE_LIMITED' } }, 429)
+    if (!await verifyPassword(input.data.currentPassword, user.passwordHash)) {
+      return c.json({ error: { code: 'INVALID_CREDENTIALS' } }, 422)
+    }
+    if (input.data.password === input.data.currentPassword) {
+      return c.json({ error: { code: 'PASSWORD_UNCHANGED' } }, 422)
+    }
+    const hash = await hashPassword(input.data.password)
+    const [result] = await db.$queryRaw<{ changed: boolean }[]>`
+      SELECT public.rica_change_local_password(${user.id}::uuid, ${user.authVersion}::int, ${hash}::text) AS changed
+    `
+    if (!result.changed) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
+    setCookie(c, config.cookie, '', { ...cookieOptions, maxAge: 0 })
+    console.info(JSON.stringify({ service: 'api', event: 'own_password_changed', actorId: user.actorId }))
+    return c.json({ success: true })
+  })
+
   app.get('/passkeys', async (c) => {
     const user = await sessions.read(getCookie(c, config.cookie))
     if (!user) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)

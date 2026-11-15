@@ -70,7 +70,7 @@ onMounted(() => { void run(load) })
       <h3 id="member-list-heading" ref="memberHeading" tabindex="-1">角色管理员</h3>
       <div class="console-actions">
         <UiButton size="small" variant="quiet" :disabled="busy" @click="run(() => load())">刷新列表</UiButton>
-        <UiButton v-if="canManageUsers" size="small" variant="quiet" :disabled="busy" @click="emit('manageUsers')">管理本地账号</UiButton>
+        <UiButton v-if="canManageUsers" size="small" variant="quiet" :disabled="busy" @click="emit('manageUsers')">账号管理</UiButton>
         <UiButton size="small" tone="primary" :disabled="busy || !!action" @click="edit('GRANT')">添加管理员</UiButton>
       </div>
     </div>

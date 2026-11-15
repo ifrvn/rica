@@ -87,7 +87,7 @@ onMounted(() => { void run(load) })
 </script>
 
 <template>
-  <UiDialog :open="true" title="本地登录账号"
+  <UiDialog :open="true" title="账号管理"
     :style="{ width: 'min(36rem, calc(100vw - 2rem))', maxHeight: 'calc(100dvh - 2rem)', overflow: 'auto' }" :busy="busy"
     @update:open="show => { if (!show) emit('close') }">
     <div class="console-stack">

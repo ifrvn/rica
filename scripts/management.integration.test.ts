@@ -417,6 +417,66 @@ test('deployment account management leaves role grants scoped and revokes creden
   }
 })
 
+test('self-service password change verifies the requester and expires old sessions without revoking passkeys', { timeout: 30_000 }, async () => {
+  const authConfig = loadManagementConfig({ RICA_ADMIN_ORIGIN: fixtureOrigin })!
+  const redis = new Redis(config.redisUrl, { keyPrefix: randomUUID() + ':' })
+  const { app: auth } = createAdminAuth(management, redis, authConfig)
+  const username = 'self-password-' + randomUUID()
+  const currentPassword = 'original fixture password'
+  const password = 'new fixture password'
+  const passwordHash = await hashPassword(currentPassword)
+  const passkeyId = randomUUID()
+  const call = (method: string, path: string, cookie = '', data?: object, origin = fixtureOrigin) => auth.request(path, {
+    method, headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+    ...(data ? { body: JSON.stringify(data) } : {}),
+  })
+  async function login(secret: string) {
+    const response = await call('POST', '/login', '', { username, password: secret })
+    assert.equal(response.status, 200)
+    const cookie = response.headers.get('set-cookie')?.split(';')[0]
+    assert.ok(cookie)
+    return cookie
+  }
+
+  try {
+    const user = await owner.adminUser.create({ data: { username, actorId: actorId(localIssuer, username), passwordHash } })
+    await owner.adminPasskey.create({ data: { id: passkeyId, userId: user.id, publicKey: Buffer.from([1]) } })
+    const first = await login(currentPassword)
+    const second = await login(currentPassword)
+    const input = { currentPassword, password }
+    assert.equal((await call('PUT', '/password', '', input)).status, 401)
+    assert.equal((await call('PUT', '/password', first, input, 'https://foreign.example.test')).status, 403)
+    assert.equal((await call('PUT', '/password', first, { ...input, username: 'other-user' })).status, 422)
+    const incorrect = await call('PUT', '/password', first, { ...input, currentPassword: 'wrong fixture password' })
+    assert.equal(incorrect.status, 422)
+    assert.equal((await incorrect.json()).error.code, 'INVALID_CREDENTIALS')
+    const unchanged = await call('PUT', '/password', first, { currentPassword, password: currentPassword })
+    assert.equal(unchanged.status, 422)
+    assert.equal((await unchanged.json()).error.code, 'PASSWORD_UNCHANGED')
+    const updated = await call('PUT', '/password', first, input)
+    assert.equal(updated.status, 200)
+    assert.match(updated.headers.get('set-cookie') ?? '', /Max-Age=0/i)
+    assert.equal((await call('GET', '/session', first)).status, 401)
+    assert.equal((await call('GET', '/session', second)).status, 401)
+    assert.equal((await call('POST', '/login', '', { username, password: currentPassword })).status, 401)
+    const [permission] = await owner.$queryRaw<{ allowed: boolean }[]>`
+      SELECT has_function_privilege('rica_runtime', 'public.rica_change_local_password(uuid,integer,text)', 'EXECUTE') AS allowed
+    `
+    assert.equal(permission.allowed, false)
+    const [stale] = await management.$queryRaw<{ changed: boolean }[]>`
+      SELECT public.rica_change_local_password(${user.id}::uuid, ${user.authVersion}::int, ${passwordHash}::text) AS changed
+    `
+    assert.equal(stale.changed, false)
+    const next = await login(password)
+    const keys = await call('GET', '/passkeys', next)
+    assert.equal(keys.status, 200)
+    assert.deepEqual((await keys.json()).items.map((key: { id: string }) => key.id), [passkeyId])
+  } finally {
+    await owner.adminUser.deleteMany({ where: { username } })
+    await redis.quit()
+  }
+})
+
 test('authentication and membership distinguish unauthenticated, forbidden and foreign resources', async () => {
   const absent = await request('GET', characterPath(a), { actor: null })
   assert.equal(absent.status, 401)

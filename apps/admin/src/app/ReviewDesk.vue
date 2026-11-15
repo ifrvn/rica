@@ -8,7 +8,7 @@ import {
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
 } from 'reka-ui'
 import ConsoleNavigation from './ConsoleNavigation.vue'
-import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
+import { startAuthentication } from '@simplewebauthn/browser'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
@@ -29,7 +29,7 @@ const GrowthWorkspace = defineAsyncComponent(() => import('../features/knowledge
 const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowledge/KnowledgeWorkspace.vue'))
 const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
 const LocalUsers = defineAsyncComponent(() => import('../features/access/LocalUsers.vue'))
-const PasskeyWorkspace = defineAsyncComponent(() => import('../features/access/PasskeyWorkspace.vue'))
+const SecuritySettings = defineAsyncComponent(() => import('../features/access/SecuritySettings.vue'))
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
@@ -42,11 +42,9 @@ type Decision = 'APPROVE' | 'REJECT'
 const usernameInput = ref('')
 const password = ref('')
 const username = ref('')
-const passkeyPassword = ref('')
-const showPasskeyForm = ref(false)
 const accountMenuOpen = ref(false)
 const localUsersOpen = ref(false)
-const managePasskeysOpen = ref(false)
+const securitySettingsOpen = ref(false)
 let localUsersTrigger: HTMLElement | undefined
 const navigationBreakpoint = window.matchMedia('(max-width: 46rem)')
 const narrowNavigation = ref(navigationBreakpoint.matches)
@@ -135,7 +133,6 @@ function authPost<T>(path: string, data: object = {}) {
 
 type Session = { username: string; canCreate: boolean }
 type AuthenticationOptions = { challengeId: string; options: Parameters<typeof startAuthentication>[0]['optionsJSON'] }
-type RegistrationOptions = { challengeId: string; options: Parameters<typeof startRegistration>[0]['optionsJSON'] }
 
 async function run(task: () => Promise<void>, scope?: number) {
   if (busy.value) return
@@ -340,19 +337,6 @@ async function passkeyLogin() {
   })
 }
 
-async function registerPasskey() {
-  await run(async () => {
-    const { challengeId, options } = await authPost<RegistrationOptions>('passkeys/register/options', {
-      password: passkeyPassword.value,
-    })
-    passkeyPassword.value = ''
-    const response = await startRegistration({ optionsJSON: options })
-    await authPost('passkeys/register/verify', { challengeId, response })
-    accountMenuOpen.value = false
-    notice.value = '已添加 Passkey。'
-  })
-}
-
 function resetReview() {
   selected.value = undefined
   reason.value = ''
@@ -368,7 +352,7 @@ async function disconnect() {
 }
 
 function resetSession() {
-  managePasskeysOpen.value = false
+  securitySettingsOpen.value = false
   navigationOpen.value = false
   focusPageAfterNavigation = false
   ++revision
@@ -376,10 +360,8 @@ function resetSession() {
   detailId.value = undefined
   username.value = ''
   password.value = ''
-  passkeyPassword.value = ''
   accountMenuOpen.value = false
   localUsersOpen.value = false
-  showPasskeyForm.value = false
   canCreate.value = false
   tab.value = 'character'
   characterCursor.value = null
@@ -404,8 +386,13 @@ function closeLocalUsers() {
   void nextTick(() => (localUsersTrigger?.isConnected ? localUsersTrigger : document.getElementById('console-account-menu'))?.focus())
 }
 
-function closePasskeyManager() {
-  managePasskeysOpen.value = false
+function passwordChanged() {
+  resetSession()
+  notice.value = '密码已修改，请重新登录。'
+}
+
+function closeSecuritySettings() {
+  securitySettingsOpen.value = false
   void nextTick(() => document.getElementById('console-account-menu')?.focus())
 }
 
@@ -496,6 +483,7 @@ async function decide(decision: Decision) {
             :disabled="busy" placeholder="输入账号密码" />
         </UiField>
         <UiAlert v-if="error" tone="error" role="alert" class="login-alert">{{ error }}</UiAlert>
+        <UiAlert v-if="notice" tone="success" role="status" class="login-alert">{{ notice }}</UiAlert>
         <div class="login-actions">
           <UiButton tone="primary" type="submit" block :disabled="busy">登录</UiButton>
           <UiButton v-if="passkeysAvailable" block :disabled="busy" @click="passkeyLogin">使用 Passkey</UiButton>
@@ -534,38 +522,36 @@ async function decide(decision: Decision) {
         </div>
       </Teleport>
       <Teleport to="#masthead-account">
-        <div class="workspace-account">
-          <PopoverRoot v-model:open="accountMenuOpen"
-            @update:open="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
-            <PopoverTrigger as-child>
-              <UiButton id="console-account-menu" size="small" variant="quiet" class="account-name" :aria-expanded="accountMenuOpen"
-                :aria-label="'账号设置 · ' + username"><span class="ui-button-label">{{ username }}</span> <span aria-hidden="true">⌄</span></UiButton>
-            </PopoverTrigger>
-            <PopoverPortal>
-              <PopoverContent class="account-menu" align="end" :side-offset="8" :collision-padding="12">
-              <UiButton v-if="canCreate" size="small" variant="quiet" :disabled="busy" @click="openLocalUsers">管理本地账号</UiButton>
-              <UiButton v-if="passkeysAvailable && !showPasskeyForm" size="small" variant="quiet"
-                :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</UiButton>
-              <form v-if="showPasskeyForm" @submit.prevent="registerPasskey">
-                <UiField label="确认密码" for="review-passkey-password">
-                  <input class="ui-control" v-model="passkeyPassword" type="password"
-                    v-bind="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
-                    :disabled="busy" placeholder="输入当前密码以确认身份" />
-                </UiField>
-                <UiButton type="submit" tone="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</UiButton>
-              </form>
-              <UiButton size="small" variant="quiet" :disabled="busy" @click="accountMenuOpen = false; managePasskeysOpen = true">
-                <span class="i-lucide-shield-check" aria-hidden="true" />管理通行密钥
-              </UiButton>
-              <UiButton size="small" variant="quiet" :disabled="busy" @click="disconnect">退出登录</UiButton>
-              </PopoverContent>
-            </PopoverPortal>
-          </PopoverRoot>
-        </div>
+        <PopoverRoot v-model:open="accountMenuOpen">
+          <PopoverTrigger as-child>
+            <button id="console-account-menu" type="button" class="ui-button account-name" data-variant="quiet"
+              :aria-label="'账号设置 · ' + username">
+              <span class="account-label">{{ username }}</span>
+              <span class="i-lucide-chevron-down account-chevron" aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+          <PopoverPortal>
+            <PopoverContent as-child align="end" :side-offset="8" :collision-padding="12">
+              <div class="account-menu" aria-label="账号设置">
+                <UiButton v-if="canCreate" class="account-action" variant="quiet" :disabled="busy" @click="openLocalUsers">
+                  <span class="i-lucide-users" aria-hidden="true" />账号管理
+                </UiButton>
+                <UiButton class="account-action" variant="quiet" :disabled="busy"
+                  @click="accountMenuOpen = false; securitySettingsOpen = true">
+                  <span class="i-lucide-shield-check" aria-hidden="true" />安全设置
+                </UiButton>
+                <UiButton class="account-action" variant="quiet" tone="error" :disabled="busy" @click="disconnect">
+                  <span class="i-lucide-log-out" aria-hidden="true" />退出登录
+                </UiButton>
+              </div>
+            </PopoverContent>
+          </PopoverPortal>
+        </PopoverRoot>
       </Teleport>
 
       <LocalUsers v-if="canCreate && localUsersOpen" @close="closeLocalUsers" @expired="resetSession" />
-      <PasskeyWorkspace v-if="managePasskeysOpen" @close="closePasskeyManager" @expired="resetSession" />
+      <SecuritySettings v-if="securitySettingsOpen" :passkeys-available="passkeysAvailable"
+        @close="closeSecuritySettings" @expired="resetSession" @password-changed="passwordChanged" />
 
       <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
       <ConsoleNavigation v-if="characters.length && !narrowNavigation" :has-character="!!characterId" :main-page="mainPage"
@@ -778,9 +764,11 @@ async function decide(decision: Decision) {
 .login-alert { margin-block: .5rem; }
 .workspace-header, .account-actions, .decision-buttons { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
 .workspace-header { justify-content: space-between; }
-.workspace-account { display: flex; align-items: center; gap: .5rem; }
-.account-menu { z-index: 20; background: var(--console-surface); color: var(--console-text); padding: .5rem;
-  border: 1px solid var(--console-line); border-radius: 6px; box-shadow: 0 .5rem 1.5rem #0002; display: grid; gap: .5rem; min-width: 10rem; justify-items: start; }
+.account-menu { z-index: 20; box-sizing: border-box; width: min(12rem, var(--reka-popper-available-width, calc(100vw - 1.5rem)));
+  display: grid; gap: .125rem; padding: .25rem; background: var(--console-surface); color: var(--console-text);
+  border: 1px solid var(--console-line); border-radius: 6px; box-shadow: 0 .5rem 1.5rem #0002; }
+.account-menu .account-action { justify-content: flex-start; gap: .625rem; min-height: 2.5rem; text-align: start; }
+.account-action > span { flex: none; }
 .workspace-shell { display: grid; min-height: calc(100vh - 3.75rem); }
 .workspace-shell--with-nav { grid-template-columns: 10.25rem minmax(0, 1fr); }
 .workspace-content { display: grid; align-content: start; gap: 1rem; min-width: 0; padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 2rem; }
@@ -804,7 +792,10 @@ async function decide(decision: Decision) {
 .access-scope { color: var(--console-muted); font-size: .875rem; overflow-wrap: anywhere; }
 .workspace-header h2 { font-size: 1.5rem; line-height: 1.25; letter-spacing: -.025em; }
 .account-name { max-width: 8rem; }
-.account-name .ui-button-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.account-name[data-state="open"] { background: var(--console-selected); }
+.account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-chevron { flex: none; font-size: .875rem; color: var(--console-muted); }
+.account-name[data-state="open"] .account-chevron { transform: rotate(180deg); }
 .role-picker { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .role-picker > label { flex: none; color: var(--console-muted); }
 .role-picker :deep(.ui-combobox) { width: clamp(7rem, 15vw, 13rem); }
@@ -815,7 +806,7 @@ async function decide(decision: Decision) {
 .proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
 .follow-up-participants { margin-block: .5rem; padding-inline-start: 1rem; overflow-wrap: anywhere; }
 .follow-up-participants span { display: block; }
-.decision-buttons, .passkey-submit { margin-block-start: .75rem; }
+.decision-buttons { margin-block-start: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) {
   .workspace-shell--with-nav { grid-template-columns: minmax(0, 1fr); }
