@@ -2,8 +2,11 @@
 import { platformReviews, type ConsoleWorkspace } from './plugin-integrations.js'
 import type { DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NInput, NPopover, NSelect, NSpin, NTag } from 'naive-ui'
-import { DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger } from 'reka-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import {
+  DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger,
+  PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
+} from 'reka-ui'
 import ConsoleNavigation from './ConsoleNavigation.vue'
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
@@ -472,25 +475,25 @@ async function decide(decision: Decision) {
 
 <template>
   <section class="review-desk" aria-labelledby="review-heading" :aria-busy="busy || routing">
-    <NCard v-if="!username" class="login-card">
+    <div v-if="!username" class="login-card console-card">
       <h2 id="review-heading">登录控制台</h2>
-      <NForm :show-feedback="false" @submit.prevent="connect">
-        <NFormItem label="用户名" :label-props="{ for: 'review-username' }">
-          <NInput v-model:value="usernameInput" :input-props="{ id: 'review-username', autocomplete: 'username', required: true }"
+      <form @submit.prevent="connect">
+        <UiField label="用户名" for="review-username">
+          <input class="ui-control" v-model="usernameInput" v-bind="{ id: 'review-username', autocomplete: 'username', required: true }"
             :disabled="busy" placeholder="输入本地用户名" />
-        </NFormItem>
-        <NFormItem label="密码" :label-props="{ for: 'review-password' }">
-          <NInput v-model:value="password" type="password"
-            :input-props="{ id: 'review-password', autocomplete: 'current-password', required: true }"
+        </UiField>
+        <UiField label="密码" for="review-password">
+          <input class="ui-control" v-model="password" type="password"
+            v-bind="{ id: 'review-password', autocomplete: 'current-password', required: true }"
             :disabled="busy" placeholder="输入账号密码" />
-        </NFormItem>
-        <NAlert v-if="error" type="error" role="alert" class="login-alert">{{ error }}</NAlert>
+        </UiField>
+        <UiAlert v-if="error" tone="error" role="alert" class="login-alert">{{ error }}</UiAlert>
         <div class="login-actions">
-          <NButton type="primary" attr-type="submit" block :disabled="busy">登录</NButton>
-          <NButton v-if="passkeysAvailable" block :disabled="busy" @click="passkeyLogin">使用 Passkey</NButton>
+          <UiButton tone="primary" type="submit" block :disabled="busy">登录</UiButton>
+          <UiButton v-if="passkeysAvailable" block :disabled="busy" @click="passkeyLogin">使用 Passkey</UiButton>
         </div>
-      </NForm>
-    </NCard>
+      </form>
+    </div>
 
     <template v-else>
       <DialogRoot v-if="characters.length && narrowNavigation" v-model:open="navigationOpen">
@@ -516,35 +519,37 @@ async function decide(decision: Decision) {
       <Teleport v-if="characters.length" to="#masthead-role">
         <div class="role-picker">
           <label for="review-character">角色</label>
-          <NSelect :value="characterId || null" :options="characterOptions" :disabled="busy"
-            :input-props="{ id: 'review-character' }" placeholder="选择角色" filterable @update:value="changeCharacter" />
-          <NButton v-if="characterCursor" size="small" :disabled="busy"
-            @click="run(() => fetchCharacters(characterCursor ?? undefined))">更多角色</NButton>
+          <UiCombobox :model-value="characterId" :options="characterOptions" :disabled="busy"
+            :input-attrs="{ id: 'review-character' }" placeholder="选择角色" @update:model-value="changeCharacter" />
+          <UiButton v-if="characterCursor" size="small" :disabled="busy"
+            @click="run(() => fetchCharacters(characterCursor ?? undefined))">更多角色</UiButton>
         </div>
       </Teleport>
       <Teleport to="#masthead-account">
         <div class="workspace-account">
-          <NPopover v-model:show="accountMenuOpen" trigger="click" placement="bottom-end"
-            @update:show="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
-            <template #trigger>
-              <NButton id="console-account-menu" size="small" quaternary class="account-name" :aria-expanded="accountMenuOpen"
-                :aria-label="'账号设置 · ' + username">{{ username }} <span aria-hidden="true">⌄</span></NButton>
-            </template>
-            <div class="account-menu">
-              <NButton v-if="canCreate" size="small" quaternary :disabled="busy" @click="openLocalUsers">管理本地账号</NButton>
-              <NButton v-if="passkeysAvailable && !showPasskeyForm" size="small" quaternary
-                :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</NButton>
-              <NForm v-if="showPasskeyForm" :show-feedback="false" @submit.prevent="registerPasskey">
-                <NFormItem label="确认密码" :label-props="{ for: 'review-passkey-password' }">
-                  <NInput v-model:value="passkeyPassword" type="password"
-                    :input-props="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
+          <PopoverRoot v-model:open="accountMenuOpen"
+            @update:open="if (!$event) { showPasskeyForm = false; passkeyPassword = '' }">
+            <PopoverTrigger as-child>
+              <UiButton id="console-account-menu" size="small" variant="quiet" class="account-name" :aria-expanded="accountMenuOpen"
+                :aria-label="'账号设置 · ' + username"><span class="ui-button-label">{{ username }}</span> <span aria-hidden="true">⌄</span></UiButton>
+            </PopoverTrigger>
+            <PopoverPortal>
+              <PopoverContent class="account-menu" align="end" :side-offset="8" :collision-padding="12">
+              <UiButton v-if="canCreate" size="small" variant="quiet" :disabled="busy" @click="openLocalUsers">管理本地账号</UiButton>
+              <UiButton v-if="passkeysAvailable && !showPasskeyForm" size="small" variant="quiet"
+                :disabled="busy" @click="showPasskeyForm = true">添加通行密钥</UiButton>
+              <form v-if="showPasskeyForm" @submit.prevent="registerPasskey">
+                <UiField label="确认密码" for="review-passkey-password">
+                  <input class="ui-control" v-model="passkeyPassword" type="password"
+                    v-bind="{ id: 'review-passkey-password', autocomplete: 'current-password', required: true }"
                     :disabled="busy" placeholder="输入当前密码以确认身份" />
-                </NFormItem>
-                <NButton attr-type="submit" type="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</NButton>
-              </NForm>
-              <NButton size="small" quaternary :disabled="busy" @click="disconnect">退出登录</NButton>
-            </div>
-          </NPopover>
+                </UiField>
+                <UiButton type="submit" tone="primary" size="small" class="passkey-submit" :disabled="busy">确认添加</UiButton>
+              </form>
+              <UiButton size="small" variant="quiet" :disabled="busy" @click="disconnect">退出登录</UiButton>
+              </PopoverContent>
+            </PopoverPortal>
+          </PopoverRoot>
         </div>
       </Teleport>
 
@@ -559,41 +564,41 @@ async function decide(decision: Decision) {
           {{ tab === 'home' && currentCharacter ? (currentCharacter.profile?.name || currentCharacter.slug) + '的工作台' : pageTitle[tab] }}
         </h2>
         <span v-if="(inAccess || inKnowledge) && currentCharacter" class="access-scope">{{ currentCharacter.profile?.name || currentCharacter.slug }}</span>
-        <NTag v-if="tab === 'home' && currentCharacter" :type="currentCharacter.status === 'ACTIVE' ? 'success' : 'default'" size="small" :bordered="false">
+        <UiBadge v-if="tab === 'home' && currentCharacter" :tone="currentCharacter.status === 'ACTIVE' ? 'success' : 'default'">
           {{ currentCharacter.status === 'ACTIVE' ? '已启用' : '已暂停' }}
-        </NTag>
+        </UiBadge>
       </div>
-      <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+      <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
       <nav v-if="inRuns && characterId" class="run-navigation" aria-label="运行页面">
-        <NButton v-for="page in runPages" :key="page"
-          text :type="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
+        <UiButton v-for="page in runPages" :key="page"
+          variant="text" :tone="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
           :disabled="busy || routing" @click="changeTab(page)">
           {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : '失败任务' }}
-        </NButton>
+        </UiButton>
       </nav>
       <nav v-if="inKnowledge && characterId" class="run-navigation access-navigation" aria-label="记忆与身份成长分区">
-        <NButton v-for="page in knowledgePages" :key="page" size="small" secondary :type="tab === page ? 'primary' : 'default'"
+        <UiButton v-for="page in knowledgePages" :key="page" size="small" variant="soft" :tone="tab === page ? 'primary' : 'default'"
           :aria-current="tab === page ? 'page' : undefined" :disabled="busy || routing" @click="changeTab(page)">
           {{ page === 'knowledge' ? '记忆与授权' : '身份成长' }}
-        </NButton>
+        </UiButton>
       </nav>
       <nav v-if="inAccess && characterId" class="run-navigation access-navigation" aria-label="成员与审计分区">
-        <NButton v-for="page in accessPages" :key="page" size="small" secondary :type="tab === page ? 'primary' : 'default'"
+        <UiButton v-for="page in accessPages" :key="page" size="small" variant="soft" :tone="tab === page ? 'primary' : 'default'"
           :aria-current="tab === page ? 'page' : undefined" :disabled="busy || routing" @click="changeTab(page)">
           {{ page === 'members' ? '管理员' : '审计记录' }}
-        </NButton>
+        </UiButton>
       </nav>
 
       <nav v-if="characterId && (tab === 'connector' || (tab === 'review' && reviewTabs.length))" class="account-actions" aria-label="审批类型">
-        <NButton size="small" :type="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
-          @click="changeTab('review')">模拟提案</NButton>
-        <NButton v-for="review in reviewTabs" :key="review.id" size="small"
-          :type="tab === 'connector' && activePlatformReview?.id === review.id ? 'primary' : 'default'"
+        <UiButton size="small" :tone="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
+          @click="changeTab('review')">模拟提案</UiButton>
+        <UiButton v-for="review in reviewTabs" :key="review.id" size="small"
+          :tone="tab === 'connector' && activePlatformReview?.id === review.id ? 'primary' : 'default'"
           :aria-current="tab === 'connector' && activePlatformReview?.id === review.id ? 'page' : undefined" :disabled="busy || routing"
-          @click="navigate({ characterId, page: 'connector', reviewPlugin: review.id })">{{ review.title }}</NButton>
+          @click="navigate({ characterId, page: 'connector', reviewPlugin: review.id })">{{ review.title }}</UiButton>
       </nav>
-      <NSpin v-if="routing && !characterId" />
+      <UiSpinner v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter" :key="characterId" :character="currentCharacter"
         can-review can-read-runs can-start :installed-reviews="installedReviews"
         @expired="resetSession" @navigate="changeTab"
@@ -660,16 +665,16 @@ async function decide(decision: Decision) {
           @audit="navigate({ characterId, page: 'audit', auditTarget: $event })"
           @filter="navigate({ characterId, page: 'connector', detail: detailId, connectorAccountId, reviewPlugin: activePlatformReview?.id, reviewStatus: $event })"
           @all="navigate({ characterId, page: 'connector', reviewPlugin: activePlatformReview?.id, reviewStatus })" />
-        <NEmpty v-else description="此插件未注册审批页面。" />
+        <UiEmpty v-else description="此插件未注册审批页面。" />
       </template>
       <div v-else-if="tab === 'review' && characterId" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
         <section class="console-split-list" aria-labelledby="review-list-heading">
           <div class="console-section-heading">
             <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">待审批的模拟提案</h3>
-            <NButton size="small" quaternary :disabled="busy || routing" @click="loadQueue()">刷新待办</NButton>
+            <UiButton size="small" variant="quiet" :disabled="busy || routing" @click="loadQueue()">刷新待办</UiButton>
           </div>
-          <NSpin v-if="routing && !actions.length" aria-label="正在加载待办" />
-          <NEmpty v-else-if="!actions.length && !busy && !error" description="暂无待审批提案。" />
+          <UiSpinner v-if="routing && !actions.length" aria-label="正在加载待办" />
+          <UiEmpty v-else-if="!actions.length && !busy && !error" description="暂无待审批提案。" />
           <ul v-if="actions.length" class="console-select-list">
             <li v-for="item in actions" :key="item.id">
               <button :id="'review-row-' + item.id" type="button" class="console-record" :disabled="busy"
@@ -679,26 +684,26 @@ async function decide(decision: Decision) {
                   <span>{{ item.target.platform }} · {{ item.target.account }}</span>
                   <span class="console-record-meta">{{ item.target.audience === 'PUBLIC' ? '公开' : '私聊' }} · {{ item.target.conversation }}</span>
                 </span>
-                <NTag size="small" :bordered="false" :type="statusTone(item.state)">{{ statusText[item.state] }}</NTag>
+                <UiBadge :tone="statusTone(item.state)">{{ statusText[item.state] }}</UiBadge>
               </button>
             </li>
           </ul>
-          <NButton v-if="nextCursor" size="small" quaternary :disabled="busy" @click="loadQueue(true)">加载更多</NButton>
+          <UiButton v-if="nextCursor" size="small" variant="quiet" :disabled="busy" @click="loadQueue(true)">加载更多</UiButton>
         </section>
 
         <section v-if="detailId" class="console-split-detail proposal" aria-labelledby="review-detail-heading">
           <div class="console-section-heading">
             <h3 id="review-detail-heading" ref="reviewDetailHeading" tabindex="-1">模拟回复</h3>
-            <NButton size="small" quaternary :disabled="busy" @click="openAction()">返回待办</NButton>
+            <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction()">返回待办</UiButton>
           </div>
-          <NSpin v-if="routing && !selected" aria-label="正在加载提案" />
+          <UiSpinner v-if="routing && !selected" aria-label="正在加载提案" />
           <div v-if="selected" class="console-actions proposal-actions">
-            <NTag size="small" :bordered="false">模拟执行</NTag>
-            <NTag size="small" :bordered="false" :type="statusTone(selected.state)">{{ statusText[selected.state] }}</NTag>
-            <NButton size="small" quaternary :disabled="busy" @click="openAction(selected.id)">重新核对</NButton>
-            <NButton size="small" quaternary :disabled="busy" @click="openRun(selected.runId)">查看运行记录</NButton>
+            <UiBadge>模拟执行</UiBadge>
+            <UiBadge :tone="statusTone(selected.state)">{{ statusText[selected.state] }}</UiBadge>
+            <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction(selected.id)">重新核对</UiButton>
+            <UiButton size="small" variant="quiet" :disabled="busy" @click="openRun(selected.runId)">查看运行记录</UiButton>
           </div>
-          <NButton v-else-if="error" size="small" :disabled="busy" @click="openAction(detailId)">重新加载提案</NButton>
+          <UiButton v-else-if="error" size="small" :disabled="busy" @click="openAction(detailId)">重新加载提案</UiButton>
           <template v-if="selected">
             <dl class="metadata">
               <div><dt>平台</dt><dd>{{ selected.target.platform }} / {{ selected.target.instance }}</dd></div>
@@ -706,13 +711,13 @@ async function decide(decision: Decision) {
               <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
               <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
             </dl>
-            <NAlert v-if="selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" type="warning">
+            <UiAlert v-if="selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
               此回复与其他平台的内容相似，请核对后再审批。
-            </NAlert>
+            </UiAlert>
             <template v-if="selected.content">
               <h4>拟回复内容</h4>
               <p class="console-payload">{{ selected.content }}</p>
-              <NAlert v-if="selected.followUp" type="info">
+              <UiAlert v-if="selected.followUp" tone="info">
                 <strong>{{ selected.followUp.kind === 'PLAN' ? 'AI 拟定计划' : 'AI 拟登记承诺' }} · {{ selected.followUp.title }}</strong>
                 <p>{{ selected.followUp.task }}</p>
                 <p v-if="selected.followUp.dailyAt">每日 {{ selected.followUp.dailyAt }} · {{ selected.followUp.zone }}</p>
@@ -724,22 +729,22 @@ async function decide(decision: Decision) {
                   </li>
                 </ul>
                 <p>批准后，模拟回执确认且参与账号仍有效时自动登记。</p>
-              </NAlert>
+              </UiAlert>
             </template>
             <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
-            <NForm v-if="selected.state === 'WAITING_APPROVAL' && selected.content" :show-feedback="false"
+            <form v-if="selected.state === 'WAITING_APPROVAL' && selected.content"
               @submit.prevent="decide('APPROVE')">
-              <NFormItem label="审批理由" :label-props="{ for: 'review-reason' }">
-                <NInput v-model:value="reason" type="textarea" :rows="3" :maxlength="240"
-                  :input-props="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="例如：已核对目标和拟发送内容" />
-              </NFormItem>
+              <UiField label="审批理由" for="review-reason">
+                <textarea class="ui-control" v-model="reason" :rows="3" :maxlength="240"
+                  v-bind="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="例如：已核对目标和拟发送内容"></textarea>
+              </UiField>
               <div class="decision-buttons">
-                <NButton type="primary" attr-type="submit" :disabled="busy || !reason.trim()">
+                <UiButton tone="primary" type="submit" :disabled="busy || !reason.trim()">
                   {{ selected.followUp ? '批准回复及后续事项' : '批准模拟回复' }}
-                </NButton>
-                <NButton type="error" :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</NButton>
+                </UiButton>
+                <UiButton tone="error" :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</UiButton>
               </div>
-            </NForm>
+            </form>
           </template>
         </section>
       </div>
@@ -756,13 +761,14 @@ async function decide(decision: Decision) {
 .login-card { width: min(calc(100% - 2rem), 25rem); margin: clamp(1rem, 8vh, 5rem) auto 2rem; }
 .login-card h2, .workspace-header h2, h3 { margin: 0; }
 .login-card h2 { font-size: 1.25rem; margin-block-end: 1rem; }
-.login-card :deep(.n-form-item + .n-form-item) { margin-block-start: .625rem; }
+.login-card :deep(.ui-field + .ui-field) { margin-block-start: .625rem; }
 .login-actions { display: grid; gap: .625rem; margin-block-start: .625rem; }
 .login-alert { margin-block: .5rem; }
 .workspace-header, .account-actions, .decision-buttons { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
 .workspace-header { justify-content: space-between; }
 .workspace-account { display: flex; align-items: center; gap: .5rem; }
-.account-menu { display: grid; gap: .5rem; min-width: 10rem; justify-items: start; }
+.account-menu { z-index: 20; background: var(--console-surface); color: var(--console-text); padding: .5rem;
+  border: 1px solid var(--console-line); border-radius: 6px; box-shadow: 0 .5rem 1.5rem #0002; display: grid; gap: .5rem; min-width: 10rem; justify-items: start; }
 .workspace-shell { display: grid; min-height: calc(100vh - 3.75rem); }
 .workspace-shell--with-nav { grid-template-columns: 10.25rem minmax(0, 1fr); }
 .workspace-content { display: grid; align-content: start; gap: 1rem; min-width: 0; padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 2rem; }
@@ -786,10 +792,10 @@ async function decide(decision: Decision) {
 .access-scope { color: var(--console-muted); font-size: .875rem; overflow-wrap: anywhere; }
 .workspace-header h2 { font-size: 1.5rem; line-height: 1.25; letter-spacing: -.025em; }
 .account-name { max-width: 8rem; }
-.account-name :deep(.n-button__content) { overflow: hidden; text-overflow: ellipsis; }
+.account-name .ui-button-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .role-picker { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .role-picker > label { flex: none; color: var(--console-muted); }
-.role-picker :deep(.n-select) { width: clamp(7rem, 15vw, 13rem); }
+.role-picker :deep(.ui-combobox) { width: clamp(7rem, 15vw, 13rem); }
 .proposal-actions { margin-bottom: .75rem; }
 .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
 .metadata dt { color: var(--console-muted); font-size: .8125rem; }

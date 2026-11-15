@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NButton, NSpin } from 'naive-ui'
+import { UiAlert, UiButton, UiSpinner } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import type { simulationBacklogView, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
@@ -112,7 +112,7 @@ onMounted(() => {
 
 <template>
   <div class="console-stack home">
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
     <section v-if="priority" class="home-card home-priority" aria-label="优先处理">
       <div class="home-action-copy">
         <span class="i-lucide-message-circle" aria-hidden="true" />
@@ -121,23 +121,23 @@ onMounted(() => {
           <p>{{ priority.detail }}</p>
         </div>
       </div>
-      <NButton type="primary" @click="priority.action">{{ priority.label }}</NButton>
+      <UiButton tone="primary" @click="priority.action">{{ priority.label }}</UiButton>
     </section>
     <section v-if="reviewProviders.length || (canReview && !canReadRuns)" class="home-card" aria-labelledby="home-platform-tasks">
       <div class="console-section-heading">
         <h3 id="home-platform-tasks">平台待办</h3>
-        <NButton v-if="canReview && !canReadRuns" size="small" quaternary @click="emit('navigate', 'review')">查看模拟审批</NButton>
-        <NButton v-else-if="reviewError" size="small" :loading="loadingReviews" @click="refreshReviewGroups">重新加载</NButton>
+        <UiButton v-if="canReview && !canReadRuns" size="small" variant="quiet" @click="emit('navigate', 'review')">查看模拟审批</UiButton>
+        <UiButton v-else-if="reviewError" size="small" :loading="loadingReviews" @click="refreshReviewGroups">重新加载</UiButton>
       </div>
-      <NAlert v-if="reviewError" type="error" role="alert">{{ reviewError }}
-        <NButton v-if="!canReadRuns" size="small" quaternary @click="refreshReviewGroups">重新加载</NButton>
-      </NAlert>
-      <NSpin v-else-if="loadingReviews" aria-label="正在加载平台待办" />
+      <UiAlert v-if="reviewError" tone="error" role="alert">{{ reviewError }}
+        <UiButton v-if="!canReadRuns" size="small" variant="quiet" @click="refreshReviewGroups">重新加载</UiButton>
+      </UiAlert>
+      <UiSpinner v-else-if="loadingReviews" aria-label="正在加载平台待办" />
       <template v-else-if="reviewGroups.some(({ items }) => items.length)">
         <section v-for="group in reviewGroups.filter(({ items }) => items.length)" :key="group.plugin + '/' + group.status" class="home-queue">
           <div class="console-section-heading">
             <h4>{{ group.pluginTitle }} · {{ group.label }}</h4>
-            <NButton tag="a" :href="reviewLink(group)" size="small" quaternary>查看{{ group.label }}列表</NButton>
+            <UiButton tag="a" :href="reviewLink(group)" size="small" variant="quiet">查看{{ group.label }}列表</UiButton>
           </div>
           <ul class="home-queue-list">
             <li v-for="item in group.items" :key="item.id">
@@ -155,10 +155,10 @@ onMounted(() => {
     <section v-if="canReadRuns" class="home-card" aria-labelledby="home-recent">
       <div class="console-section-heading">
         <h3 id="home-recent">最近动态</h3>
-        <NButton v-if="error" size="small" :loading="busy" @click="refresh">重新加载</NButton>
-        <NButton v-else-if="recent.length" size="small" quaternary @click="emit('navigate', 'runs')">查看运行记录</NButton>
+        <UiButton v-if="error" size="small" :loading="busy" @click="refresh">重新加载</UiButton>
+        <UiButton v-else-if="recent.length" size="small" variant="quiet" @click="emit('navigate', 'runs')">查看运行记录</UiButton>
       </div>
-      <NSpin v-if="busy && !backlog" aria-label="正在加载工作台" />
+      <UiSpinner v-if="busy && !backlog" aria-label="正在加载工作台" />
       <ol v-else-if="recent.length" class="home-timeline">
         <li v-for="item in recent" :key="item.id">
           <button type="button" class="home-row" @click="emit('run', item.id)">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, identityView, memoryProvenanceView, memoryView } from '../../../../../packages/contracts/management.js'
 import MemoryGrantWorkspace from './MemoryGrantWorkspace.vue'
@@ -30,7 +30,7 @@ const provenance = ref<Provenance>()
 const filters = reactive({ identityId: '', scope: '', status: '' })
 let applied = { ...filters }
 const correcting = ref(false)
-const correctionTrigger = ref<InstanceType<typeof NButton>>()
+const correctionTrigger = ref<InstanceType<typeof UiButton>>()
 const content = ref('')
 const reason = ref('')
 const scopeOptions = [
@@ -154,32 +154,32 @@ onMounted(() => {
     <section v-if="wide || !detailId" class="console-card console-stack memory-list" aria-labelledby="memory-list-heading">
       <div class="console-section-heading">
         <h3 id="memory-list-heading" ref="listHeading" tabindex="-1">记忆列表</h3>
-        <NButton size="small" quaternary :disabled="busy" @click="run(() => list())">刷新列表</NButton>
+        <UiButton size="small" variant="quiet" :disabled="busy" @click="run(() => list())">刷新列表</UiButton>
       </div>
-      <NAlert v-if="error && !previewId" type="error" role="alert">{{ error }}</NAlert>
+      <UiAlert v-if="error && !previewId" tone="error" role="alert">{{ error }}</UiAlert>
       <details class="memory-filters">
         <summary>筛选记忆</summary>
-        <NForm @submit.prevent="apply">
+        <form @submit.prevent="apply">
           <div class="console-form-grid">
-            <NFormItem label="身份" :label-props="{ for: 'memory-identity' }">
-              <NSelect placeholder="全部身份" filterable clearable :value="filters.identityId || null"
+            <UiField label="身份" for="memory-identity">
+              <UiCombobox placeholder="全部身份" clearable :model-value="filters.identityId || null"
                 :options="identities.map(({ id }) => ({ value: id, label: name(id) ?? id }))"
-                :disabled="busy" :input-props="{ id: 'memory-identity' }" @update:value="filters.identityId = $event ?? ''" />
-            </NFormItem>
-            <NFormItem label="记忆范围" :label-props="{ for: 'memory-scope' }">
-              <NSelect placeholder="全部范围" filterable clearable :value="filters.scope || null" :options="scopeOptions" :disabled="busy"
-                :input-props="{ id: 'memory-scope' }" @update:value="filters.scope = $event ?? ''" />
-            </NFormItem>
-            <NFormItem label="状态" :label-props="{ for: 'memory-status' }">
-              <NSelect placeholder="全部状态" filterable clearable :value="filters.status || null" :options="statusOptions" :disabled="busy"
-                :input-props="{ id: 'memory-status' }" @update:value="filters.status = $event ?? ''" />
-            </NFormItem>
+                :disabled="busy" :input-attrs="{ id: 'memory-identity' }" @update:model-value="filters.identityId = $event ?? ''" />
+            </UiField>
+            <UiField label="记忆范围" for="memory-scope">
+              <UiCombobox placeholder="全部范围" clearable :model-value="filters.scope || null" :options="scopeOptions" :disabled="busy"
+                :input-attrs="{ id: 'memory-scope' }" @update:model-value="filters.scope = $event ?? ''" />
+            </UiField>
+            <UiField label="状态" for="memory-status">
+              <UiCombobox placeholder="全部状态" clearable :model-value="filters.status || null" :options="statusOptions" :disabled="busy"
+                :input-attrs="{ id: 'memory-status' }" @update:model-value="filters.status = $event ?? ''" />
+            </UiField>
           </div>
-          <NButton attr-type="submit" size="small" :disabled="busy">筛选记忆</NButton>
-        </NForm>
+          <UiButton type="submit" size="small" :disabled="busy">筛选记忆</UiButton>
+        </form>
       </details>
-      <NSpin v-if="busy && !rows.length" />
-      <NEmpty v-else-if="!rows.length && !error" description="暂无符合条件的记忆。" />
+      <UiSpinner v-if="busy && !rows.length" />
+      <UiEmpty v-else-if="!rows.length && !error" description="暂无符合条件的记忆。" />
       <ul v-if="rows.length" class="console-select-list">
         <li v-for="row in rows" :key="row.id">
           <button :id="'memory-row-' + row.id" type="button" class="console-record" :disabled="busy"
@@ -189,30 +189,30 @@ onMounted(() => {
               <span v-if="accountName(row.accountId)">{{ accountName(row.accountId) }}</span>
             </span>
             <span class="console-record-meta">
-              <NTag size="small" :bordered="false">{{ statusName(row.status) }} · {{ visibilityLabels[row.visibility] ?? row.visibility }}</NTag>
+              <UiBadge>{{ statusName(row.status) }} · {{ visibilityLabels[row.visibility] ?? row.visibility }}</UiBadge>
               <time v-if="row.createdAt" :datetime="row.createdAt">{{ formatTime(row.createdAt) }}</time>
             </span>
           </button>
         </li>
       </ul>
-      <NButton v-if="cursor" size="small" :disabled="busy" @click="run(() => list(true))">加载更多记忆</NButton>
+      <UiButton v-if="cursor" size="small" :disabled="busy" @click="run(() => list(true))">加载更多记忆</UiButton>
     </section>
 
     <section v-if="previewId" class="console-card console-stack memory-detail" aria-labelledby="memory-detail-heading">
       <div class="console-section-heading">
         <h3 id="memory-detail-heading" ref="detailHeading" tabindex="-1">记忆详情</h3>
-        <NButton v-if="!wide || detailId" size="small" quaternary :disabled="busy" @click="emit('open')">返回记忆列表</NButton>
+        <UiButton v-if="!wide || detailId" size="small" variant="quiet" :disabled="busy" @click="emit('open')">返回记忆列表</UiButton>
       </div>
-      <NAlert v-if="error && !correcting" type="error" role="alert">{{ error }}</NAlert>
-      <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-      <NAlert v-if="detailError && !correcting" type="error" role="alert">{{ detailError }}</NAlert>
-      <NButton v-if="detailError && !correcting" size="small" @click="detail()">重新加载详情</NButton>
-      <NSpin v-if="loadingDetail" aria-label="正在加载记忆详情" />
+      <UiAlert v-if="error && !correcting" tone="error" role="alert">{{ error }}</UiAlert>
+      <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+      <UiAlert v-if="detailError && !correcting" tone="error" role="alert">{{ detailError }}</UiAlert>
+      <UiButton v-if="detailError && !correcting" size="small" @click="detail()">重新加载详情</UiButton>
+      <UiSpinner v-if="loadingDetail" aria-label="正在加载记忆详情" />
       <template v-if="selected && provenance">
         <div class="console-actions">
-          <NTag size="small" :bordered="false">{{ scopeName(selected.scope) }} · {{ statusName(provenance.status) }}</NTag>
-          <NTag size="small" :bordered="false">{{ visibilityLabels[selected.visibility] ?? selected.visibility }}</NTag>
-          <NTag size="small" :bordered="false">版本 {{ provenance.revision }}</NTag>
+          <UiBadge>{{ scopeName(selected.scope) }} · {{ statusName(provenance.status) }}</UiBadge>
+          <UiBadge>{{ visibilityLabels[selected.visibility] ?? selected.visibility }}</UiBadge>
+          <UiBadge>版本 {{ provenance.revision }}</UiBadge>
         </div>
         <dl class="memory-facts">
           <div v-if="selected.identityId"><dt>归属身份</dt><dd>{{ name(selected.identityId) }}</dd></div>
@@ -221,17 +221,17 @@ onMounted(() => {
           <div v-if="selected.expiresAt"><dt>到期时间</dt><dd>{{ formatTime(selected.expiresAt) }}</dd></div>
         </dl>
         <div class="console-actions">
-          <NButton v-if="canEdit && provenance.status === 'ACTIVE'" ref="correctionTrigger" size="small" :disabled="busy"
-            @click="correcting = true; error = ''">纠正记忆</NButton>
-          <NButton v-if="provenance.parentMemoryId" size="small" quaternary :disabled="busy"
-            @click="emit('open', provenance.parentMemoryId)">查看原记忆</NButton>
+          <UiButton v-if="canEdit && provenance.status === 'ACTIVE'" ref="correctionTrigger" size="small" :disabled="busy"
+            @click="correcting = true; error = ''">纠正记忆</UiButton>
+          <UiButton v-if="provenance.parentMemoryId" size="small" variant="quiet" :disabled="busy"
+            @click="emit('open', provenance.parentMemoryId)">查看原记忆</UiButton>
         </div>
         <h4>来源</h4>
-        <NEmpty v-if="!provenance.sources.length" description="暂无来源。" />
+        <UiEmpty v-if="!provenance.sources.length" description="暂无来源。" />
         <ul v-else class="console-record-list">
           <li v-for="source in provenance.sources" :key="source.id">
-            <div class="console-actions">{{ source.kind }} <NTag size="small">{{ visibilityLabels[source.classification] }}</NTag>
-              <NTag v-if="source.revokedAt" size="small">已撤销</NTag></div>
+            <div class="console-actions">{{ source.kind }} <UiBadge>{{ visibilityLabels[source.classification] }}</UiBadge>
+              <UiBadge v-if="source.revokedAt">已撤销</UiBadge></div>
             <span>{{ source.id }}</span>
           </li>
         </ul>
@@ -250,30 +250,30 @@ onMounted(() => {
           <summary>记录标识</summary>
           <p>记忆 ID {{ selected.id }}</p>
           <p v-if="selected.conversationId">会话 ID {{ selected.conversationId }}</p>
-          <NButton size="small" @click="copyId(selected.id)">{{ copied ? '已复制' : '复制记忆 ID' }}</NButton>
+          <UiButton size="small" @click="copyId(selected.id)">{{ copied ? '已复制' : '复制记忆 ID' }}</UiButton>
         </details>
       </template>
     </section>
   </div>
-  <NModal :show="correcting" preset="card" title="纠正记忆" aria-label="纠正记忆"
-    class="knowledge-dialog" :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
-    @update:show="show => { if (!show) correcting = false }"
-    @after-leave="correctionTrigger?.$el?.focus()">
-    <NForm @submit.prevent="correct">
-      <NAlert v-if="error || detailError" class="correction-error" type="error" role="alert">{{ error || detailError }}</NAlert>
-      <NFormItem label="更正后的正文" :label-props="{ for: 'memory-correction' }">
-        <NInput placeholder="输入更正后应保留的内容" v-model:value="content" type="textarea" maxlength="1500" :disabled="busy" :input-props="{ id: 'memory-correction' }" />
-      </NFormItem>
-      <NFormItem label="纠错理由" :label-props="{ for: 'memory-reason' }">
-        <NInput placeholder="例如：原记录把时间写错了" v-model:value="reason" maxlength="240" :disabled="busy" :input-props="{ id: 'memory-reason' }" />
-      </NFormItem>
+  <UiDialog :open="correcting" title="纠正记忆"
+    class="knowledge-dialog" :busy="busy"
+    @update:open="show => { if (!show) correcting = false }"
+    @closed="correctionTrigger?.$el?.focus()">
+    <form @submit.prevent="correct">
+      <UiAlert v-if="error || detailError" class="correction-error" tone="error" role="alert">{{ error || detailError }}</UiAlert>
+      <UiField label="更正后的正文" for="memory-correction">
+        <textarea class="ui-control" placeholder="输入更正后应保留的内容" v-model="content" maxlength="1500" :disabled="busy" v-bind="{ id: 'memory-correction' }"></textarea>
+      </UiField>
+      <UiField label="纠错理由" for="memory-reason">
+        <input class="ui-control" placeholder="例如：原记录把时间写错了" v-model="reason" maxlength="240" :disabled="busy" v-bind="{ id: 'memory-reason' }" />
+      </UiField>
       <div class="console-actions correction-actions">
-        <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || loadingDetail || !provenance || !content.trim() || !reason.trim()">保存修订</NButton>
-        <NButton quaternary :disabled="busy || loadingDetail" @click="detail()">重新读取修订</NButton>
-        <NButton :disabled="busy" @click="correcting = false">取消</NButton>
+        <UiButton tone="primary" type="submit" :loading="busy" :disabled="busy || loadingDetail || !provenance || !content.trim() || !reason.trim()">保存修订</UiButton>
+        <UiButton variant="quiet" :disabled="busy || loadingDetail" @click="detail()">重新读取修订</UiButton>
+        <UiButton :disabled="busy" @click="correcting = false">取消</UiButton>
       </div>
-    </NForm>
-  </NModal>
+    </form>
+  </UiDialog>
 </template>
 
 <style scoped>
@@ -281,7 +281,7 @@ onMounted(() => {
 .memory-layout--split { grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); }
 .memory-list .console-select-list { margin: 0; }
 .memory-list .console-record { padding: .875rem .75rem; }
-.memory-list > .n-button, .memory-detail > .n-button { justify-self: start; }
+.memory-list > .ui-button, .memory-detail > .ui-button { justify-self: start; }
 .memory-filters form { margin-top: .75rem; }
 .memory-detail :is(h4, p, dl) { margin: 0; }
 .memory-detail summary, .memory-filters summary { width: fit-content; cursor: pointer; color: var(--console-muted); }

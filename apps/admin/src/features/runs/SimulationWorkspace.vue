@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
 import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
@@ -284,66 +284,66 @@ onMounted(() => {
 <template>
   <div class="simulation-workspace">
     <div v-if="canStart && (!detailId || wide) && !showForm" class="run-actions">
-      <NButton id="run-start-trigger" type="primary" :disabled="busy || !options.length"
-        @click="emit('form', true)">发起模拟</NButton>
+      <UiButton id="run-start-trigger" tone="primary" :disabled="busy || !options.length"
+        @click="emit('form', true)">发起模拟</UiButton>
     </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-    <NAlert v-if="loadingError" type="warning" role="status">{{ loadingError }}</NAlert>
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiAlert v-if="loadingError" tone="warning" role="status">{{ loadingError }}</UiAlert>
     <div v-if="!detailId && canStart && !busy && !options.length && !loadingError" class="run-actions">
       <span class="run-muted">发起模拟前，请启用角色、身份和已关联的模拟账号。</span>
-      <NButton size="small" secondary @click="emit('identities')">前往角色与身份</NButton>
+      <UiButton size="small" variant="soft" @click="emit('identities')">前往角色与身份</UiButton>
     </div>
     <section v-if="canStart && showForm && !detailId" class="run-editor console-card" aria-labelledby="run-editor-heading">
       <h3 id="run-editor-heading" ref="editorHeading" tabindex="-1">发起模拟</h3>
-      <NForm @submit.prevent="start">
-        <NFormItem label="身份和模拟账号" :label-props="{ for: 'run-account' }">
-          <NSelect placeholder="选择接收模拟消息的账号" filterable v-model:value="accountId" :options="options" :input-props="{ id: 'run-account' }" :disabled="busy" />
-        </NFormItem>
-        <NFormItem label="模拟收到的消息" :label-props="{ for: 'run-message' }">
-          <NInput placeholder="例如：你好，能介绍一下你的工作吗？" v-model:value="message" type="textarea" :rows="3" :input-props="{ id: 'run-message' }"
-            :maxlength="4000" :disabled="busy" />
-        </NFormItem>
+      <form @submit.prevent="start">
+        <UiField label="身份和模拟账号" for="run-account">
+          <UiCombobox placeholder="选择接收模拟消息的账号" v-model="accountId" :options="options" :input-attrs="{ id: 'run-account' }" :disabled="busy" />
+        </UiField>
+        <UiField label="模拟收到的消息" for="run-message">
+          <textarea class="ui-control" placeholder="例如：你好，能介绍一下你的工作吗？" v-model="message" :rows="3" v-bind="{ id: 'run-message' }"
+            :maxlength="4000" :disabled="busy"></textarea>
+        </UiField>
         <div class="run-actions run-editor-actions">
-          <NButton :disabled="busy" @click="emit('form', false)">取消</NButton>
-          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !accountId || !message.trim()">开始模拟</NButton>
+          <UiButton :disabled="busy" @click="emit('form', false)">取消</UiButton>
+          <UiButton tone="primary" type="submit" :loading="busy" :disabled="busy || !accountId || !message.trim()">开始模拟</UiButton>
         </div>
-      </NForm>
+      </form>
     </section>
     <div v-else class="run-layout" :class="{ 'run-layout--split': wide && previewId }">
       <section v-if="wide || !detailId" class="console-card run-list" aria-labelledby="run-list-heading">
         <div class="console-section-heading">
           <h3 id="run-list-heading" ref="listHeading" tabindex="-1">最近运行</h3>
-          <NButton size="small" quaternary :disabled="busy || loadingList" @click="refresh">刷新运行</NButton>
+          <UiButton size="small" variant="quiet" :disabled="busy || loadingList" @click="refresh">刷新运行</UiButton>
         </div>
         <details class="run-filter-panel" :open="!!runQuery">
           <summary>{{ runQuery ? '筛选 · 已应用' : '筛选运行' }}</summary>
-          <NForm class="run-filters" aria-label="筛选运行" @submit.prevent="applyFilters">
-            <NFormItem label="状态" :label-props="{ for: 'filter-run-state' }">
-              <NSelect placeholder="全部状态" filterable v-model:value="filters.state" :options="stateOptions" :input-props="{ id: 'filter-run-state' }" />
-            </NFormItem>
-            <NFormItem label="身份" :label-props="{ for: 'filter-run-identity' }">
-              <NSelect placeholder="全部身份" filterable v-model:value="filters.identityId" :options="identityOptions"
-                :input-props="{ id: 'filter-run-identity' }" @update:value="filters.accountId = ''" />
-            </NFormItem>
-            <NFormItem label="账号" :label-props="{ for: 'filter-run-account' }">
-              <NSelect placeholder="全部账号" filterable v-model:value="filters.accountId" :options="accountOptions" :input-props="{ id: 'filter-run-account' }" />
-            </NFormItem>
-            <NFormItem label="开始日期（UTC）" :label-props="{ for: 'filter-run-from' }">
+          <form class="run-filters" aria-label="筛选运行" @submit.prevent="applyFilters">
+            <UiField label="状态" for="filter-run-state">
+              <UiCombobox placeholder="全部状态" v-model="filters.state" :options="stateOptions" :input-attrs="{ id: 'filter-run-state' }" />
+            </UiField>
+            <UiField label="身份" for="filter-run-identity">
+              <UiCombobox placeholder="全部身份" v-model="filters.identityId" :options="identityOptions"
+                :input-attrs="{ id: 'filter-run-identity' }" @update:model-value="filters.accountId = ''" />
+            </UiField>
+            <UiField label="账号" for="filter-run-account">
+              <UiCombobox placeholder="全部账号" v-model="filters.accountId" :options="accountOptions" :input-attrs="{ id: 'filter-run-account' }" />
+            </UiField>
+            <UiField label="开始日期（UTC）" for="filter-run-from">
               <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />
-            </NFormItem>
-            <NFormItem label="截止日期（UTC）" :label-props="{ for: 'filter-run-through' }">
+            </UiField>
+            <UiField label="截止日期（UTC）" for="filter-run-through">
               <input id="filter-run-through" v-model="filters.through" type="date" min="0001-01-01" max="9999-12-31" />
-            </NFormItem>
+            </UiField>
             <div class="run-actions">
-              <NButton attr-type="submit" :disabled="invalidDates">筛选</NButton>
-              <NButton v-if="runQuery" quaternary @click="emit('filter', '')">清除筛选</NButton>
+              <UiButton type="submit" :disabled="invalidDates">筛选</UiButton>
+              <UiButton v-if="runQuery" variant="quiet" @click="emit('filter', '')">清除筛选</UiButton>
             </div>
-          </NForm>
-          <NAlert v-if="invalidDates" type="warning" role="status">截止日期应等于或晚于开始日期。</NAlert>
+          </form>
+          <UiAlert v-if="invalidDates" tone="warning" role="status">截止日期应等于或晚于开始日期。</UiAlert>
         </details>
-        <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
+        <UiAlert v-if="listError" tone="error" role="alert">{{ listError }}</UiAlert>
         <p v-if="loadingList && !rows.length" role="status">正在加载运行…</p>
-        <NEmpty v-if="!rows.length && !loadingList && !listError"
+        <UiEmpty v-if="!rows.length && !loadingList && !listError"
           :description="runQuery ? '没有符合筛选条件的运行。' : '暂无模拟运行。'" />
         <ul v-if="rows.length" class="console-select-list run-list-rows">
           <li v-for="item in rows" :key="item.id">
@@ -351,51 +351,51 @@ onMounted(() => {
               @click="emit('open', item.id)">
               <span class="run-row-title">
                 <strong>{{ identityName(item.identityId) }}</strong>
-                <NTag size="small" :type="stateTone(item.state)" :bordered="false">{{ stateName(item.state) }}</NTag>
+                <UiBadge :tone="stateTone(item.state)">{{ stateName(item.state) }}</UiBadge>
               </span>
               <span class="run-muted">{{ accountName(item.accountId, item.platform) }}</span>
               <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time>
             </button>
           </li>
         </ul>
-        <NButton v-if="cursor" class="run-load-more" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</NButton>
+        <UiButton v-if="cursor" class="run-load-more" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</UiButton>
       </section>
       <section v-if="previewId" class="console-card run-detail" aria-labelledby="run-detail-heading">
         <div class="console-section-heading">
           <h3 id="run-detail-heading" ref="detailHeading" tabindex="-1">模拟运行详情</h3>
-          <NTag v-if="selected" size="small" :type="stateTone(selected.state)" :bordered="false">{{ stateName(selected.state) }}</NTag>
+          <UiBadge v-if="selected" :tone="stateTone(selected.state)">{{ stateName(selected.state) }}</UiBadge>
           <div v-if="!wide" class="run-actions">
-            <NButton size="small" quaternary :disabled="busy || loadingDetail" @click="refresh">刷新运行</NButton>
-            <NButton size="small" quaternary @click="emit('open')">返回运行列表</NButton>
+            <UiButton size="small" variant="quiet" :disabled="busy || loadingDetail" @click="refresh">刷新运行</UiButton>
+            <UiButton size="small" variant="quiet" @click="emit('open')">返回运行列表</UiButton>
           </div>
         </div>
-        <NAlert v-if="resolutionNotice" type="success" role="status">{{ resolutionNotice }}</NAlert>
-        <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
-        <NButton v-if="detailError" size="small" :disabled="loadingDetail" @click="detail(previewId)">重新加载详情</NButton>
-        <NSpin v-if="loadingDetail" aria-label="正在加载运行详情" />
+        <UiAlert v-if="resolutionNotice" tone="success" role="status">{{ resolutionNotice }}</UiAlert>
+        <UiAlert v-if="detailError" tone="error" role="alert">{{ detailError }}</UiAlert>
+        <UiButton v-if="detailError" size="small" :disabled="loadingDetail" @click="detail(previewId)">重新加载详情</UiButton>
+        <UiSpinner v-if="loadingDetail" aria-label="正在加载运行详情" />
         <template v-if="selected">
           <div class="run-actions">
             <span v-if="trackingRun" class="run-muted">自动更新中</span>
-            <NButton v-if="canReview && selected.proposal" size="small"
-              :type="selected.state === 'WAITING_APPROVAL' ? 'primary' : 'default'"
-              :secondary="selected.state !== 'WAITING_APPROVAL'" @click="emit('review', selected.proposal.id)">
+            <UiButton v-if="canReview && selected.proposal" size="small"
+              :tone="selected.state === 'WAITING_APPROVAL' ? 'primary' : 'default'"
+              :variant="selected.state !== 'WAITING_APPROVAL' ? 'soft' : 'solid'" @click="emit('review', selected.proposal.id)">
               {{ selected.state === 'WAITING_APPROVAL' ? '前往审批' : '查看模拟提案' }}
-            </NButton>
-            <NButton size="small" quaternary @click="emit('audit', selected.id)">查看相关审计</NButton>
-            <NButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
-              size="small" quaternary @click="emit('commitment', selected.id)">登记模拟承诺</NButton>
+            </UiButton>
+            <UiButton size="small" variant="quiet" @click="emit('audit', selected.id)">查看相关审计</UiButton>
+            <UiButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
+              size="small" variant="quiet" @click="emit('commitment', selected.id)">登记模拟承诺</UiButton>
           </div>
-          <NAlert v-if="selected.state === 'WAITING_APPROVAL'" type="info"
+          <UiAlert v-if="selected.state === 'WAITING_APPROVAL'" tone="info"
             :title="canReview ? '草稿已生成，等待审批' : '此提案需要审批权限'">
             {{ canReview ? '点击「前往审批」即可查看拟回复正文，并决定是否批准。' : '请联系当前角色的管理员处理这次模拟提案。' }}
-          </NAlert>
-          <NAlert v-if="selected.state === 'READY'" type="info" title="已批准，等待模拟执行器">
+          </UiAlert>
+          <UiAlert v-if="selected.state === 'READY'" tone="info" title="已批准，等待模拟执行器">
             <p>执行器会自动领取许可并写入模拟回执。长时间等待时，先查看执行器状态。</p>
-            <NButton size="small" secondary @click="emit('executorHealth')">查看模拟执行器</NButton>
-          </NAlert>
-          <NAlert v-else-if="selected.state === 'EXECUTING'" type="info" title="已领取许可，正在等待模拟回执">
+            <UiButton size="small" variant="soft" @click="emit('executorHealth')">查看模拟执行器</UiButton>
+          </UiAlert>
+          <UiAlert v-else-if="selected.state === 'EXECUTING'" tone="info" title="已领取许可，正在等待模拟回执">
             回执写入后，这条运行会显示「模拟完成」。
-          </NAlert>
+          </UiAlert>
           <dl class="run-meta">
             <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
             <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>
@@ -406,7 +406,7 @@ onMounted(() => {
             <li v-for="stage in timeline" :key="stage.label">
               <div class="run-actions">
                 <strong>{{ stage.label }}</strong>
-                <NTag size="small" :bordered="false">{{ stage.status }}</NTag>
+                <UiBadge>{{ stage.status }}</UiBadge>
                 <time v-if="stage.at" :datetime="stage.at">{{ new Date(stage.at).toLocaleString() }}</time>
               </div>
               <blockquote v-if="stage.quote" class="console-payload run-quote">{{ stage.quote }}</blockquote>

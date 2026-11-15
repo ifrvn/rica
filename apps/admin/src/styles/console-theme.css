@@ -1,5 +1,14 @@
 :root {
   color-scheme: light;
+  --console-primary: #3f814a;
+  --console-primary-hover: #397345;
+  --console-good-bg: #e8f5ed;
+  --console-warning: #754511;
+  --console-warning-bg: #fbefdb;
+  --console-error: #9e2633;
+  --console-error-bg: #faecec;
+  --console-info: #2c4d7a;
+  --console-info-bg: #ebf1fa;
   --console-page: #f8faf3;
   --console-surface: #fffefb;
   --console-nav: #fdfef9;
@@ -50,6 +59,13 @@
 }
 :root[data-console-mode="dark"] {
   color-scheme: dark;
+  --console-good-bg: #24372e;
+  --console-warning: #f7cf86;
+  --console-warning-bg: #3b2b18;
+  --console-error: #ffb3b5;
+  --console-error-bg: #43292e;
+  --console-info: #bdd7ff;
+  --console-info-bg: #26344c;
   --console-page: #1c1a1c;
   --console-surface: #242125;
   --console-nav: #1d1a1e;

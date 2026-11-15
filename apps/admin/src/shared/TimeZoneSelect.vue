@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NSelect } from 'naive-ui'
+import { UiCombobox } from '@rica/console-shared/ui'
 
 const value = defineModel<string>('value', { required: true })
-const props = defineProps<{ id: string; inherited?: string; invalid?: boolean; disabled?: boolean; to?: string }>()
+const props = defineProps<{ id: string; inherited?: string; invalid?: boolean; disabled?: boolean }>()
 const cities: Record<string, string> = {
   'Asia/Hong_Kong': '香港', 'Asia/Shanghai': '上海', 'Asia/Taipei': '台北', 'Asia/Tokyo': '东京',
   'Asia/Singapore': '新加坡', 'America/New_York': '纽约', 'America/Los_Angeles': '洛杉矶',
@@ -20,7 +20,6 @@ const options = computed(() => [
 </script>
 
 <template>
-  <NSelect v-model:value="value" filterable :disabled="disabled" :options="options" :to="to" placeholder="选择时区"
-    :filter="(query, option) => [option.label, option.value].some(text => String(text).toLowerCase().includes(query.toLowerCase()))"
-    :input-props="{ id, 'aria-invalid': invalid || undefined, 'aria-describedby': invalid ? id + '-error' : undefined }" />
+  <UiCombobox v-model="value" :disabled="disabled" :options="options" placeholder="选择时区"
+    :input-attrs="{ id, 'aria-invalid': invalid || undefined, 'aria-describedby': invalid ? id + '-error' : undefined }" />
 </template>

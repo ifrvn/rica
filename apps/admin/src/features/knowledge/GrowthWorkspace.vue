@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NEmpty, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiEmpty, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { identityView } from '../../../../../packages/contracts/management.js'
 import { characterPath, readAll, useConsoleTask } from '@rica/console-shared/console-data'
@@ -26,18 +26,18 @@ onMounted(() => {
   <div class="growth-layout" :class="{ 'growth-layout--selected': selected }">
     <section class="console-card console-stack" aria-labelledby="growth-identities-heading">
       <div class="console-section-heading"><h3 id="growth-identities-heading">身份列表</h3></div>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-      <NSpin v-else-if="busy" aria-label="正在加载身份" />
-      <NEmpty v-else-if="!identities.length" description="创建身份后，这里会显示成长记录。" />
-      <NAlert v-else-if="detailId && !selected" type="warning">找不到当前角色中的身份。</NAlert>
+      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+      <UiSpinner v-else-if="busy" aria-label="正在加载身份" />
+      <UiEmpty v-else-if="!identities.length" description="创建身份后，这里会显示成长记录。" />
+      <UiAlert v-else-if="detailId && !selected" tone="warning">找不到当前角色中的身份。</UiAlert>
       <ul v-if="identities.length" class="console-select-list growth-identities">
         <li v-for="identity in identities" :key="identity.id">
           <button class="console-record" type="button" :aria-current="selected?.id === identity.id ? 'true' : undefined"
             @click="emit('open', identity.id)">
             <strong>{{ identity.profile?.displayName || identity.slug }}</strong>
-            <NTag size="small" :type="identity.status === 'ACTIVE' ? 'success' : 'default'" :bordered="false">
+            <UiBadge :tone="identity.status === 'ACTIVE' ? 'success' : 'default'">
               {{ identity.status === 'ACTIVE' ? '已启用' : '已暂停' }}
-            </NTag>
+            </UiBadge>
           </button>
         </li>
       </ul>

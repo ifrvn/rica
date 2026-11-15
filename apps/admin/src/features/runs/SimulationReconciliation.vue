@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { NAlert, NButton, NForm, NFormItem, NInput } from 'naive-ui'
+import { UiAlert, UiButton, UiField } from '@rica/console-shared/ui'
 import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
 import { request, RequestError } from '@rica/console-shared/request'
 
@@ -79,27 +79,27 @@ function resolve() {
 <template>
   <section class="console-panel" aria-labelledby="reconciliation-heading">
     <div class="console-section-heading"><h3 id="reconciliation-heading">模拟对账</h3></div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-    <NButton v-if="!canResolve" :loading="busy" :disabled="busy" @click="readEvidence">
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiButton v-if="!canResolve" :loading="busy" :disabled="busy" @click="readEvidence">
       {{ stale || evidence ? '重新核对账本' : '核对账本' }}
-    </NButton>
+    </UiButton>
     <p v-if="evidence && evidence.state !== 'RECONCILING'">此运行已离开待对账状态，请刷新运行详情。</p>
     <p v-else-if="evidence && !canResolve && !stale">本地账本尚未封存证据，请稍后重新核对。</p>
-    <NForm v-if="canResolve && evidence" @submit.prevent="resolve">
+    <form v-if="canResolve && evidence" @submit.prevent="resolve">
       <dl class="ledger">
         <div><dt>账本结论</dt><dd>{{ evidence.outcome === 'CONFIRMED' ? '确认已有模拟回执' : '确认未写入模拟回执' }}</dd></div>
         <div><dt>证据引用</dt><dd>{{ evidence.evidenceRef }}</dd></div>
       </dl>
       <p v-if="evidence.outcome === 'DEFINITELY_NOT_SENT'">结案后释放账号占用与预算，原提案进入「已拦截」。</p>
-      <NFormItem label="对账理由" :label-props="{ for: 'reconciliation-reason' }">
-        <NInput placeholder="例如：已核对封存账本，确认没有回执" v-model:value="reason" :input-props="{ id: 'reconciliation-reason' }" :maxlength="240" :disabled="busy" />
-      </NFormItem>
+      <UiField label="对账理由" for="reconciliation-reason">
+        <input class="ui-control" placeholder="例如：已核对封存账本，确认没有回执" v-model="reason" v-bind="{ id: 'reconciliation-reason' }" :maxlength="240" :disabled="busy" />
+      </UiField>
       <div class="ledger-actions">
-        <NButton :type="evidence.outcome === 'DEFINITELY_NOT_SENT' ? 'warning' : 'primary'"
-          attr-type="submit" :loading="busy" :disabled="busy || !reason.trim()">提交对账结论</NButton>
-        <NButton :disabled="busy" @click="readEvidence">重新核对账本</NButton>
+        <UiButton :tone="evidence.outcome === 'DEFINITELY_NOT_SENT' ? 'warning' : 'primary'"
+          type="submit" :loading="busy" :disabled="busy || !reason.trim()">提交对账结论</UiButton>
+        <UiButton :disabled="busy" @click="readEvidence">重新核对账本</UiButton>
       </div>
-    </NForm>
+    </form>
   </section>
 </template>
 

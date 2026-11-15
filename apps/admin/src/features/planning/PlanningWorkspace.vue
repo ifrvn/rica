@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCheckbox, NForm, NFormItem, NSelect, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiCheckbox, UiField, UiCombobox, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView } from '../../../../../packages/contracts/management.js'
 import { scheduleUpdate, type scheduleView } from '../../../../../packages/contracts/schedules.js'
@@ -24,7 +24,7 @@ const editorHeading = ref<HTMLElement>()
 const plansHeading = ref<HTMLElement>()
 let trigger: HTMLElement | undefined
 const form = reactive({ zone: 'UTC', kind: 'DAILY' as Schedule['rule']['kind'], enabled: true, localTime: '09:00', dueAt: '' })
-const kinds = [{ value: 'DAILY', label: '每日计划' }, { value: 'REMINDER', label: '单次提醒' }]
+const kinds = [{ value: 'DAILY', label: '每日计划' }, { value: 'REMINDER', label: '单次提醒' }] as const
 const dueAt = computed(() => {
   const date = new Date(form.dueAt)
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined
@@ -102,37 +102,37 @@ onMounted(() => { void run(load) })
 
 <template>
   <section class="console-workspace console-stack" aria-label="计划与承诺">
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-    <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
     <CollaborativePlans :character-id="characterId" :zone="zone" @expired="emit('expired')" @run="emit('run', $event)" />
     <CommitmentWorkspace :character-id="characterId" :run-id="runId" @expired="emit('expired')" @clear="emit('clear', $event)" />
     <section v-if="schedule" class="console-panel" aria-labelledby="plan-editor-heading">
       <div class="console-section-heading">
         <h3 id="plan-editor-heading" ref="editorHeading" tabindex="-1">编辑定时任务</h3>
       </div>
-      <NForm @submit.prevent="save">
+      <form @submit.prevent="save">
         <div class="console-form-grid">
-          <NFormItem label="计划类型" :label-props="{ for: 'plan-kind' }">
-            <NSelect placeholder="选择每日计划或单次提醒" filterable v-model:value="form.kind" :options="kinds" :disabled="busy" :input-props="{ id: 'plan-kind' }" />
-          </NFormItem>
-          <NFormItem label="时区" :label-props="{ for: 'plan-zone' }" :validation-status="invalidZone ? 'error' : undefined">
+          <UiField label="计划类型" for="plan-kind">
+            <UiCombobox placeholder="选择每日计划或单次提醒" v-model="form.kind" :options="kinds" :disabled="busy" :input-attrs="{ id: 'plan-kind' }" />
+          </UiField>
+          <UiField label="时区" for="plan-zone" :invalid="invalidZone">
             <TimeZoneSelect v-model:value="form.zone" id="plan-zone" :disabled="busy" :invalid="invalidZone" />
             <template v-if="invalidZone" #feedback><span id="plan-zone-error">请选择可用的时区。</span></template>
-          </NFormItem>
-          <NFormItem v-if="form.kind === 'DAILY'" label="每天触发时间（计划时区）" :label-props="{ for: 'plan-time' }">
+          </UiField>
+          <UiField v-if="form.kind === 'DAILY'" label="每天触发时间（计划时区）" for="plan-time">
             <input id="plan-time" v-model="form.localTime" type="time" :disabled="busy" />
-          </NFormItem>
-          <NFormItem v-else :label="'提醒时间（' + browserZone + '）'" :label-props="{ for: 'plan-due' }">
+          </UiField>
+          <UiField v-else :label="'提醒时间（' + browserZone + '）'" for="plan-due">
             <input id="plan-due" v-model="form.dueAt" type="datetime-local" :disabled="busy" />
-          </NFormItem>
-          <NCheckbox v-model:checked="form.enabled" :disabled="busy">启用计划</NCheckbox>
+          </UiField>
+          <UiCheckbox v-model="form.enabled" :disabled="busy">启用计划</UiCheckbox>
         </div>
         <div class="console-actions">
-          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !payload.success">保存定时任务</NButton>
-          <NButton size="small" :disabled="busy" @click="refreshDraft">重新读取版本</NButton>
-          <NButton :disabled="busy" @click="close">取消</NButton>
+          <UiButton tone="primary" type="submit" :loading="busy" :disabled="busy || !payload.success">保存定时任务</UiButton>
+          <UiButton size="small" :disabled="busy" @click="refreshDraft">重新读取版本</UiButton>
+          <UiButton :disabled="busy" @click="close">取消</UiButton>
         </div>
-      </NForm>
+      </form>
     </section>
     <section v-if="schedules.length" class="console-panel" aria-labelledby="plans-heading">
       <div class="console-section-heading">
@@ -141,8 +141,8 @@ onMounted(() => { void run(load) })
       <ul class="console-record-list">
         <li v-for="item in schedules" :key="item.id">
           <div class="console-actions"><strong>{{ item.scheduleKey }}</strong>
-            <NTag size="small">{{ item.enabled ? '已启用' : '已暂停' }}</NTag>
-            <NButton size="small" :disabled="busy || !!schedule" @click="editSchedule(item)">编辑定时任务</NButton>
+            <UiBadge>{{ item.enabled ? '已启用' : '已暂停' }}</UiBadge>
+            <UiButton size="small" :disabled="busy || !!schedule" @click="editSchedule(item)">编辑定时任务</UiButton>
           </div>
           <span>{{ accountName(item.accountId) }} · {{ item.zone }} · v{{ item.version }}</span>
           <span>{{ item.rule.kind === 'DAILY' ? '每天 ' + item.rule.localTime : '单次 ' + formatTime(item.rule.dueAt) }}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../contracts.js'
 import { focusRecord, formatTime } from '@rica/console-shared/console-data'
@@ -226,18 +226,18 @@ onMounted(() => { void list() })
       <div class="console-section-heading">
         <h3 id="connector-list-heading" ref="listHeading" tabindex="-1">{{ accountId ? '当前账号的 Newbi 提案' : 'Newbi 平台提案' }}</h3>
         <div class="console-actions">
-          <NButton v-if="accountId" size="small" quaternary :disabled="submitting" @click="emit('all')">查看全部账号</NButton>
-          <NButton size="small" quaternary :disabled="loadingList || submitting" @click="list()">刷新列表</NButton>
+          <UiButton v-if="accountId" size="small" variant="quiet" :disabled="submitting" @click="emit('all')">查看全部账号</UiButton>
+          <UiButton size="small" variant="quiet" :disabled="loadingList || submitting" @click="list()">刷新列表</UiButton>
         </div>
       </div>
       <div class="connector-actions">
         <label for="connector-filter">状态</label>
-        <NSelect placeholder="选择提案状态" filterable :value="filter" :options="options" :input-props="{ id: 'connector-filter' }"
-          class="filter" :disabled="loadingList || submitting" @update:value="emit('filter', $event)" />
+        <UiCombobox placeholder="选择提案状态" :model-value="filter" :options="options" :input-attrs="{ id: 'connector-filter' }"
+          class="filter" :disabled="loadingList || submitting" @update:model-value="emit('filter', $event)" />
       </div>
-      <NAlert v-if="listError" type="error" role="alert">{{ listError }}</NAlert>
-      <NSpin v-if="loadingList && !rows.length" />
-      <NEmpty v-else-if="!rows.length && !listError" description="暂无符合条件的提案。" />
+      <UiAlert v-if="listError" tone="error" role="alert">{{ listError }}</UiAlert>
+      <UiSpinner v-if="loadingList && !rows.length" />
+      <UiEmpty v-else-if="!rows.length && !listError" description="暂无符合条件的提案。" />
       <ul v-if="rows.length" class="console-select-list">
         <li v-for="item in rows" :key="item.id">
           <button :id="'connector-row-' + item.id" type="button" class="console-record" :disabled="submitting"
@@ -248,29 +248,29 @@ onMounted(() => { void list() })
               <span class="console-record-meta">帖子 {{ item.postId.slice(0, 8) }} · 账号 {{ item.agentId.slice(0, 8) }}</span>
             </span>
             <span class="console-record-meta">
-              <NTag size="small" :bordered="false">{{ statusText[item.status] }}</NTag>
+              <UiBadge>{{ statusText[item.status] }}</UiBadge>
               <time :datetime="item.createdAt">{{ formatTime(item.createdAt) }}</time>
             </span>
           </button>
         </li>
       </ul>
-      <NButton v-if="cursor" size="small" :disabled="loadingList || submitting" @click="list(true)">加载更多</NButton>
+      <UiButton v-if="cursor" size="small" :disabled="loadingList || submitting" @click="list(true)">加载更多</UiButton>
     </section>
     <section v-if="detailId" class="console-split-detail" aria-labelledby="connector-detail-heading">
       <div class="console-section-heading">
         <h3 id="connector-detail-heading" ref="detailHeading" tabindex="-1">Newbi 公开回复</h3>
-        <NSpace size="small">
-          <NButton size="small" quaternary :disabled="loadingDetail || submitting" @click="detail(detailId)">刷新详情</NButton>
-          <NButton size="small" quaternary :disabled="submitting" @click="emit('open')">返回提案列表</NButton>
-        </NSpace>
+        <div class="console-actions">
+          <UiButton size="small" variant="quiet" :disabled="loadingDetail || submitting" @click="detail(detailId)">刷新详情</UiButton>
+          <UiButton size="small" variant="quiet" :disabled="submitting" @click="emit('open')">返回提案列表</UiButton>
+        </div>
       </div>
-      <NAlert v-if="detailError" type="error" role="alert">{{ detailError }}</NAlert>
-      <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-      <NSpin v-if="loadingDetail" aria-label="正在加载提案" />
+      <UiAlert v-if="detailError" tone="error" role="alert">{{ detailError }}</UiAlert>
+      <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+      <UiSpinner v-if="loadingDetail" aria-label="正在加载提案" />
       <template v-if="reply">
         <div class="console-actions">
-          <NTag size="small" type="warning" :bordered="false">真实平台</NTag>
-          <NTag size="small" :bordered="false">{{ statusText[reply.status] }}</NTag>
+          <UiBadge tone="warning">真实平台</UiBadge>
+          <UiBadge>{{ statusText[reply.status] }}</UiBadge>
         </div>
         <dl>
           <div><dt>平台</dt><dd>Newbi · {{ reply.endpoint }}</dd></div>
@@ -285,23 +285,23 @@ onMounted(() => { void list() })
           <div v-if="reply.closureReason"><dt>结案理由</dt><dd>{{ reply.closureReason }}</dd></div>
         </dl>
         <div v-if="canInspect" class="console-actions">
-          <NButton size="small" quaternary @click="emit('account', reply.accountId)">查看账号读取状态</NButton>
-          <NButton size="small" quaternary @click="emit('audit', reply.id)">查看提案审计</NButton>
+          <UiButton size="small" variant="quiet" @click="emit('account', reply.accountId)">查看账号读取状态</UiButton>
+          <UiButton size="small" variant="quiet" @click="emit('audit', reply.id)">查看提案审计</UiButton>
         </div>
         <section class="thread-preview" aria-labelledby="newbi-thread-heading">
           <div class="console-section-heading">
             <h4 id="newbi-thread-heading">帖子上下文</h4>
-            <NButton v-if="reply.connectorAvailable" size="small" secondary :loading="loadingThread"
+            <UiButton v-if="reply.connectorAvailable" size="small" variant="soft" :loading="loadingThread"
               :disabled="loadingThread || submitting" @click="loadThread">
               {{ thread ? '刷新上下文' : '读取帖子和评论' }}
-            </NButton>
+            </UiButton>
           </div>
-          <NAlert v-if="threadError" type="warning" role="alert">{{ threadError }}</NAlert>
+          <UiAlert v-if="threadError" tone="warning" role="alert">{{ threadError }}</UiAlert>
           <p v-if="!reply.connectorAvailable">请在插件中心核对 Newbi 的启用状态和 Agent API 地址。</p>
           <template v-if="thread">
             <div class="console-actions">
               <strong>{{ thread.post.title }}</strong>
-              <NTag v-if="thread.post.isLocked" size="small" type="warning">帖子已锁定</NTag>
+              <UiBadge v-if="thread.post.isLocked" tone="warning">帖子已锁定</UiBadge>
             </div>
             <p class="console-payload thread-content">{{ thread.post.content }}</p>
             <details v-if="thread.comments.length">
@@ -322,37 +322,36 @@ onMounted(() => { void list() })
         </template>
         <p v-else-if="reply.status === 'WAITING'">当前无法预览正文，暂不能审批。</p>
         <div v-if="canManage && (reply.status === 'READY' || canRetry)" class="send-actions">
-          <NButton v-if="canSend" type="primary" :disabled="submitting" @click="confirmation = true">
+          <UiButton v-if="canSend" tone="primary" :disabled="submitting" @click="confirmation = true">
             {{ canRetry ? '核对后重试' : '发送公开回复' }}
-          </NButton>
-          <NAlert v-else type="warning">
+          </UiButton>
+          <UiAlert v-else tone="warning">
             {{ !reply.connectorAvailable ? '请在插件中心核对 Newbi 的启用状态和 Agent API 地址。'
               : '当前提案暂不可发送。请核对有效期、重试时间和发送次数。' }}
-          </NAlert>
+          </UiAlert>
         </div>
-        <NForm v-if="(canReview && reply.status === 'WAITING' && reply.content) || canClose"
+        <form v-if="(canReview && reply.status === 'WAITING' && reply.content) || canClose"
           @submit.prevent="submit(canClose ? 'CLOSE' : 'APPROVE')">
-          <NAlert v-if="canClose" type="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</NAlert>
-          <NAlert v-else-if="reply.connectorAvailable" type="warning">批准后，管理员可确认向上述 Newbi 帖子公开发布这条回复。</NAlert>
-          <NAlert v-else type="warning">当前 Newbi 配置无法使用此账号。请在插件中心核对启用状态和 Agent API 地址。</NAlert>
-          <NFormItem :label="canClose ? '结案理由' : '审批理由'" :label-props="{ for: 'connector-reason' }">
-            <NInput :placeholder="canClose ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model:value="reason" type="textarea" :rows="2" :maxlength="240" :disabled="submitting"
-              :input-props="{ id: 'connector-reason' }" />
-          </NFormItem>
+          <UiAlert v-if="canClose" tone="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</UiAlert>
+          <UiAlert v-else-if="reply.connectorAvailable" tone="warning">批准后，管理员可确认向上述 Newbi 帖子公开发布这条回复。</UiAlert>
+          <UiAlert v-else tone="warning">当前 Newbi 配置无法使用此账号。请在插件中心核对启用状态和 Agent API 地址。</UiAlert>
+          <UiField :label="canClose ? '结案理由' : '审批理由'" for="connector-reason">
+            <textarea class="ui-control" :placeholder="canClose ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model="reason" :rows="2" :maxlength="240" :disabled="submitting"
+              v-bind="{ id: 'connector-reason' }"></textarea>
+          </UiField>
           <div class="connector-actions">
-            <NButton v-if="canClose || reply.connectorAvailable" :type="canClose ? 'warning' : 'primary'"
-              attr-type="submit" :disabled="submitting || !reason.trim()">
+            <UiButton v-if="canClose || reply.connectorAvailable" :tone="canClose ? 'warning' : 'primary'"
+              type="submit" :disabled="submitting || !reason.trim()">
               {{ canClose ? '确认结案' : '批准公开回复' }}
-            </NButton>
-            <NButton v-if="reply.status === 'WAITING'" type="error" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</NButton>
+            </UiButton>
+            <UiButton v-if="reply.status === 'WAITING'" tone="error" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</UiButton>
           </div>
-        </NForm>
+        </form>
       </template>
     </section>
   </div>
-  <NModal v-model:show="confirmation" preset="card" :title="canRetry ? '确认重试公开回复' : '确认发送公开回复'"
-    :aria-label="canRetry ? '确认重试公开回复' : '确认发送公开回复'" style="width: 36rem; max-width: calc(100% - 2rem)"
-    :mask-closable="!submitting" :close-on-esc="!submitting" :closable="!submitting">
+  <UiDialog v-model:open="confirmation" :title="canRetry ? '确认重试公开回复' : '确认发送公开回复'"
+    :dismiss-outside="!submitting" :busy="submitting">
     <div v-if="reply" class="send-preview">
       <p>{{ canRetry ? '请先核对 Newbi 上的评论。重试会沿用原提案的发送编号。' : '这条回复将发布到真实 Newbi 帖子，所有能查看该帖的人都可见。' }}</p>
       <dl>
@@ -363,20 +362,19 @@ onMounted(() => { void list() })
       </dl>
       <p class="console-payload">{{ reply.content }}</p>
     </div>
-    <template #footer>
-      <div class="connector-actions">
-        <NButton :disabled="submitting" @click="confirmation = false">取消</NButton>
-        <NButton type="primary" :disabled="!canSend || submitting" :loading="submitting" @click="send">
-          {{ canRetry ? '确认重试' : '确认发送' }}
-        </NButton>
-      </div>
-    </template>
-  </NModal>
+    <div class="connector-actions send-confirm-actions">
+      <UiButton :disabled="submitting" @click="confirmation = false">取消</UiButton>
+      <UiButton tone="primary" :disabled="!canSend || submitting" :loading="submitting" @click="send">
+        {{ canRetry ? '确认重试' : '确认发送' }}
+      </UiButton>
+    </div>
+  </UiDialog>
 </template>
 
 <style scoped>
 .connector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .send-actions { margin-block: 1rem; }
+.send-confirm-actions { justify-content: flex-end; margin-top: .875rem; }
 .send-preview { max-height: min(55dvh, 32rem); overflow: auto; }
 .thread-preview { margin-block: 1rem; overflow-wrap: anywhere; }
 .thread-preview h4 { margin: 0; }
@@ -389,6 +387,6 @@ dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; }
 dd { overflow-wrap: anywhere; }
-.n-alert + .n-form-item { margin-block-start: .875rem; }
+.ui-alert + .ui-field { margin-block-start: .875rem; }
 h4 { margin-bottom: .5rem; }
 </style>

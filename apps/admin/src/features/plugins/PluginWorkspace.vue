@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import { deploymentPluginChange, deploymentPluginIds, type DeploymentPluginId, type DeploymentPluginsView } from '../../../../deployment-plugin-contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
@@ -111,13 +111,13 @@ function changeStage(id: DeploymentPluginId) {
       <span v-if="release?.status === 'UNCONFIGURED'" class="plugin-release-note">尚未配置发布清单</span>
       <span v-else-if="release?.status === 'AVAILABLE' && !release.upgrades.length"
         class="plugin-release-note">部署组件目录与发布清单一致，可继续核对运行报告</span>
-      <NButton size="small" quaternary :loading="loading" :disabled="busy" @click="refresh">刷新插件</NButton>
+      <UiButton size="small" variant="quiet" :loading="loading" :disabled="busy" @click="refresh">刷新插件</UiButton>
     </div>
-    <NAlert v-if="loadError" type="error" role="alert">{{ loadError }}</NAlert>
-    <NSpin v-else-if="loading && !deployment" aria-label="正在读取插件" />
-    <NEmpty v-else-if="!deployment" description="暂无部署插件目录。" />
+    <UiAlert v-if="loadError" tone="error" role="alert">{{ loadError }}</UiAlert>
+    <UiSpinner v-else-if="loading && !deployment" aria-label="正在读取插件" />
+    <UiEmpty v-else-if="!deployment" description="暂无部署插件目录。" />
     <template v-else>
-      <NAlert v-if="release?.status === 'UNAVAILABLE'" type="warning" role="status">发布清单暂不可用。部署维护者可核对清单文件，再刷新插件。</NAlert>
+      <UiAlert v-if="release?.status === 'UNAVAILABLE'" tone="warning" role="status">发布清单暂不可用。部署维护者可核对清单文件，再刷新插件。</UiAlert>
       <article v-for="id in deploymentPluginIds" :key="id" class="console-record-workspace plugin-card"
         :aria-labelledby="'plugin-heading-' + id">
         <div class="console-section-heading plugin-title">
@@ -125,9 +125,9 @@ function changeStage(id: DeploymentPluginId) {
             <h3 :id="'plugin-heading-' + id" tabindex="-1">{{ labels[id] }}</h3>
             <p>{{ cards[id].description }}</p>
           </div>
-          <NTag size="small" :bordered="false" :type="deployment.plugins[id] === 'ENABLED' ? 'success' : 'default'">
+          <UiBadge :tone="deployment.plugins[id] === 'ENABLED' ? 'success' : 'default'">
             {{ stages[deployment.plugins[id]] }}
-          </NTag>
+          </UiBadge>
         </div>
 
         <ul class="plugin-components">
@@ -140,26 +140,26 @@ function changeStage(id: DeploymentPluginId) {
         <div v-if="deployment.plugins[id] === 'ENABLED'" class="plugin-integration">
           <span>{{ cards[id].summary(deployment) }}</span>
           <div class="console-actions">
-            <NButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" secondary
+            <UiButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" variant="soft"
               :aria-expanded="editing === id" :disabled="busy || loading" @click="toggleEditor(id)">
               {{ cards[id].configureLabel(deployment) }}
-            </NButton>
-            <NButton v-if="cards[id].accountLink?.(status)" size="small" secondary @click="emit('accounts')">前往平台账号池</NButton>
+            </UiButton>
+            <UiButton v-if="cards[id].accountLink?.(status)" size="small" variant="soft" @click="emit('accounts')">前往平台账号池</UiButton>
           </div>
         </div>
 
         <div v-if="canConfigureModel || (deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id))" class="console-actions">
-          <NButton v-if="canConfigureModel" size="small" :type="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
-            :secondary="deployment.plugins[id] === 'ENABLED'" :disabled="busy || loading"
+          <UiButton v-if="canConfigureModel" size="small" :tone="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
+            :variant="deployment.plugins[id] === 'ENABLED' ? 'soft' : 'solid'" :disabled="busy || loading"
             :loading="busy && changedPlugin === id && editing !== id" @click="changeStage(id)">
             {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装 ' + labels[id]
               : deployment.plugins[id] === 'INSTALLED' ? '启用 ' + labels[id] : '停用 ' + labels[id] }}
-          </NButton>
-          <NButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id)"
-            :id="'plugin-release-toggle-' + id" size="small" secondary
+          </UiButton>
+          <UiButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id)"
+            :id="'plugin-release-toggle-' + id" size="small" variant="soft"
             :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
             {{ releasePreview === id ? '收起版本检查' : upgrades.has(id) ? '检查升级' : '核对运行版本' }}
-          </NButton>
+          </UiButton>
         </div>
 
         <section v-if="releasePreview === id && deployment.plugins[id] !== 'NOT_INSTALLED'
@@ -179,24 +179,24 @@ function changeStage(id: DeploymentPluginId) {
               <span class="plugin-release-note">{{ reportedVersion(id, entry) }}</span>
             </li>
           </ul>
-          <NAlert v-if="releaseBlocked" type="warning" title="当前发布有升级阻碍">
+          <UiAlert v-if="releaseBlocked" tone="warning" title="当前发布有升级阻碍">
             请让部署维护者核对上述组件，修正发布清单或选择兼容的 Rica 版本。
-          </NAlert>
+          </UiAlert>
           <template v-else-if="upgrades.has(id)">
             <template v-if="cards[id].upgradeQueue">
-              <NAlert v-if="upgradeQueue?.length" type="warning" title="当前角色有发送结果需核对">
+              <UiAlert v-if="upgradeQueue?.length" tone="warning" title="当前角色有发送结果需核对">
                 等待在途发送完成，或核对未知结果后恢复或结案。部署前请逐个角色检查。
                 <div class="console-actions">
                   <template v-for="queue in upgradeQueue" :key="queue.status">
-                    <NButton v-if="canReview" size="small" secondary @click="emit('review', id, queue.status)">
+                    <UiButton v-if="canReview" size="small" variant="soft" @click="emit('review', id, queue.status)">
                       {{ queue.count }} 条{{ queue.label }}
-                    </NButton>
+                    </UiButton>
                     <span v-else>{{ queue.count }} 条{{ queue.label }}</span>
                   </template>
                 </div>
-              </NAlert>
+              </UiAlert>
               <p v-else-if="upgradeQueue" class="plugin-release-note">当前角色无在途或待核对发送。发布涉及整个部署，请逐个角色检查。</p>
-              <NAlert v-else type="warning">暂无当前角色的发送状态，请刷新后核对。</NAlert>
+              <UiAlert v-else tone="warning">暂无当前角色的发送状态，请刷新后核对。</UiAlert>
             </template>
             <h4>升级步骤</h4>
             <ol class="plugin-release-steps">
@@ -206,17 +206,17 @@ function changeStage(id: DeploymentPluginId) {
             </ol>
           </template>
           <div class="console-actions plugin-release-actions">
-            <NButton tag="a" :href="release.releaseUrl" target="_blank" rel="noopener noreferrer" size="small"
-              :type="releaseBlocked ? 'default' : 'primary'">
+            <UiButton tag="a" :href="release.releaseUrl" target="_blank" rel="noopener noreferrer" size="small"
+              :tone="releaseBlocked ? 'default' : 'primary'">
               打开发布说明
-            </NButton>
-            <NButton v-if="!releaseBlocked" size="small" secondary
-              :disabled="busy || loading" @click="refresh">刷新组件版本</NButton>
-            <NButton v-if="!releaseBlocked" size="small" quaternary @click="emit('health')">查看系统运行状况</NButton>
+            </UiButton>
+            <UiButton v-if="!releaseBlocked" size="small" variant="soft"
+              :disabled="busy || loading" @click="refresh">刷新组件版本</UiButton>
+            <UiButton v-if="!releaseBlocked" size="small" variant="quiet" @click="emit('health')">查看系统运行状况</UiButton>
           </div>
         </section>
 
-        <NAlert v-if="error && changedPlugin === id" type="error" role="alert">{{ error }}</NAlert>
+        <UiAlert v-if="error && changedPlugin === id" tone="error" role="alert">{{ error }}</UiAlert>
         <component v-if="editing === id && deployment.plugins[id] === 'ENABLED' && cards[id].inlineEditor"
           :is="cards[id].editor" class="plugin-config" v-bind="cards[id].editorProps(deployment)"
           :busy="busy" @close="toggleEditor(id)" @save="saveSettings(id, $event)" />

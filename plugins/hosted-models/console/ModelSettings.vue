@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NForm, NFormItem, NInput, NSpin } from 'naive-ui'
+import { UiAlert, UiButton, UiField, UiSpinner } from '@rica/console-shared/ui'
 import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '../contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
@@ -82,37 +82,37 @@ onMounted(() => { heading.value?.focus(); void load() })
   <section class="model-settings" aria-labelledby="model-settings-heading">
     <div class="console-section-heading">
       <h3 id="model-settings-heading" ref="heading" tabindex="-1">{{ name }} · AI API 设置</h3>
-      <NButton size="small" quaternary :disabled="busy" @click="emit('close')">收起设置</NButton>
+      <UiButton size="small" variant="quiet" :disabled="busy" @click="emit('close')">收起设置</UiButton>
     </div>
-    <NSpin v-if="busy && !current" aria-label="正在读取模型设置" />
-    <NForm v-if="current" :show-feedback="false" @submit.prevent="save">
+    <UiSpinner v-if="busy && !current" aria-label="正在读取模型设置" />
+    <form v-if="current" @submit.prevent="save">
       <p class="model-settings-scope">应用于此部署所有角色的公开模拟草稿。启用外部模型后，模拟消息、身份写作指令及允许公开引用的资料会发送给所选服务。</p>
       <div class="model-settings-fields">
-          <NFormItem label="模型 ID" :label-props="{ for: 'model-settings-name' }">
-            <NInput v-model:value="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
-              :input-props="{ id: 'model-settings-name', required: true }" />
-          </NFormItem>
-          <NFormItem v-if="compatible" label="API 基础地址" :label-props="{ for: 'model-settings-url' }">
-            <NInput v-model:value="form.baseUrl" :disabled="busy" placeholder="https://provider.example/v1"
-              :input-props="{ id: 'model-settings-url', required: true }" />
-          </NFormItem>
-          <NFormItem label="API 密钥" :label-props="{ for: 'model-settings-key' }">
-            <NInput v-model:value="form.apiKey" type="password" :disabled="busy"
+          <UiField label="模型 ID" for="model-settings-name">
+            <input class="ui-control" v-model="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
+              v-bind="{ id: 'model-settings-name', required: true }" />
+          </UiField>
+          <UiField v-if="compatible" label="API 基础地址" for="model-settings-url">
+            <input class="ui-control" v-model="form.baseUrl" :disabled="busy" placeholder="https://provider.example/v1"
+              v-bind="{ id: 'model-settings-url', required: true }" />
+          </UiField>
+          <UiField label="API 密钥" for="model-settings-key">
+            <input class="ui-control" v-model="form.apiKey" type="password" :disabled="busy"
               :placeholder="reuseKey ? '已保存密钥，留空继续使用' : '输入供应商 API 密钥'"
-              :input-props="{ id: 'model-settings-key', autocomplete: 'new-password', required: !reuseKey }" />
-          </NFormItem>
+              v-bind="{ id: 'model-settings-key', autocomplete: 'new-password', required: !reuseKey }" />
+          </UiField>
       </div>
-      <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+      <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
       <div class="model-settings-actions">
-        <NButton type="primary" attr-type="submit" :disabled="busy" :loading="busy && !checking">保存模型设置</NButton>
-        <NButton attr-type="button" :disabled="busy || !canCheck" :loading="checking" @click="testModel">测试模型</NButton>
-        <NButton v-if="error" :disabled="busy" quaternary @click="load">重新读取设置</NButton>
+        <UiButton tone="primary" type="submit" :disabled="busy" :loading="busy && !checking">保存模型设置</UiButton>
+        <UiButton type="button" :disabled="busy || !canCheck" :loading="checking" @click="testModel">测试模型</UiButton>
+        <UiButton v-if="error" :disabled="busy" variant="quiet" @click="load">重新读取设置</UiButton>
       </div>
       <p class="model-settings-scope model-settings-test-hint">
         {{ canCheck ? '测试会向服务商发送一条固定消息，并可能消耗模型额度。' : '保存当前设置后可测试模型。' }}
       </p>
-      <NAlert v-if="checkResult && canCheck" :type="checkResult.status === 'OK' ? 'success' : 'error'" role="status">
+      <UiAlert v-if="checkResult && canCheck" :tone="checkResult.status === 'OK' ? 'success' : 'error'" role="status">
         {{ modelCheckLabels[checkResult.status] }}
         <p v-if="checkResult.reply" class="console-payload model-settings-reply">{{ checkResult.reply }}</p>
         <p v-if="checkResult.status === 'OK'" class="model-settings-reply">
@@ -120,13 +120,13 @@ onMounted(() => { heading.value?.focus(); void load() })
             ? '用当前角色和模拟账号发起一次模拟，就能在提案中查看认知 Worker 生成的草稿。'
             : '请让当前角色的管理员发起模拟，在提案中核对认知 Worker 生成的草稿。' }}
         </p>
-        <NButton v-if="checkResult.status === 'OK' && canStartSimulation" class="model-settings-simulate"
-          size="small" secondary @click="emit('simulate')">发起模拟验证</NButton>
-      </NAlert>
-    </NForm>
+        <UiButton v-if="checkResult.status === 'OK' && canStartSimulation" class="model-settings-simulate"
+          size="small" variant="soft" @click="emit('simulate')">发起模拟验证</UiButton>
+      </UiAlert>
+    </form>
     <template v-else-if="error">
-      <NAlert type="error" role="alert">{{ error }}</NAlert>
-      <NButton class="model-settings-actions" :disabled="busy" @click="load">重新读取设置</NButton>
+      <UiAlert tone="error" role="alert">{{ error }}</UiAlert>
+      <UiButton class="model-settings-actions" :disabled="busy" @click="load">重新读取设置</UiButton>
     </template>
   </section>
 </template>

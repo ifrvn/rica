@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '../../../../../packages/contracts/management.js'
 import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from '@rica/console-shared/console-data'
@@ -32,8 +32,9 @@ const form = reactive({ purpose: 'INTERNAL_CONTEXT' as Purpose, identityId: '', 
 const purposes: Record<Purpose, string> = {
   INTERNAL_CONTEXT: '内部上下文', DECISION_SUPPORT: '决策支持', PUBLIC_REFERENCE: '公开引用', PRIVATE_REPLY: '私聊回复',
 }
-const purposeOptions = computed(() => Object.entries(purposes).filter(([value]) => value !== 'PUBLIC_REFERENCE' || props.memory.visibility === 'PUBLIC')
-  .map(([value, label]) => ({ value, label })))
+const purposeOptions = computed(() => (Object.keys(purposes) as Purpose[])
+  .filter(value => value !== 'PUBLIC_REFERENCE' || props.memory.visibility === 'PUBLIC')
+  .map(value => ({ value, label: purposes[value] })))
 const shareable = computed(() => props.memory.status === 'ACTIVE' && ['PUBLIC', 'PERSONAL'].includes(props.memory.visibility)
   && (!props.memory.expiresAt || Date.parse(props.memory.expiresAt) > Date.now()))
 const channel = computed(() => form.purpose === 'PUBLIC_REFERENCE' ? 'PUBLIC' : form.purpose === 'PRIVATE_REPLY' ? 'PRIVATE' : undefined)
@@ -118,20 +119,20 @@ onMounted(() => { void run(load) })
   <section class="console-stack memory-grants" aria-labelledby="memory-grant-heading">
     <div class="console-section-heading">
       <h3 id="memory-grant-heading" ref="heading" tabindex="-1">使用授权</h3>
-      <NButton v-if="shareable" size="small" type="primary" :disabled="busy" @click="open('grant')">新增授权</NButton>
+      <UiButton v-if="shareable" size="small" tone="primary" :disabled="busy" @click="open('grant')">新增授权</UiButton>
     </div>
-    <NAlert v-if="error && !mode" type="error" role="alert">{{ error }}</NAlert>
-    <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NSpin v-if="busy && !rows.length && !mode" />
-    <NEmpty v-else-if="!rows.length && !error" description="暂无授权。" />
+    <UiAlert v-if="error && !mode" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+    <UiSpinner v-if="busy && !rows.length && !mode" />
+    <UiEmpty v-else-if="!rows.length && !error" description="暂无授权。" />
     <ul v-if="rows.length" class="console-group-list">
       <li v-for="grant in rows" :key="grant.id" class="grant-row">
         <div class="console-actions">
           <strong>{{ name(grant.recipientIdentityId) }}</strong>
-          <NTag size="small">{{ purposes[grant.purpose as Purpose] ?? grant.purpose }}</NTag>
-          <NTag v-if="grant.revokedAt" size="small">已撤销</NTag>
-          <NTag v-else-if="Date.parse(grant.validUntil) <= Date.now()" size="small">已到期</NTag>
-          <NButton v-else size="small" type="error" tertiary :disabled="busy" @click="open('revoke', grant)">撤销授权</NButton>
+          <UiBadge>{{ purposes[grant.purpose as Purpose] ?? grant.purpose }}</UiBadge>
+          <UiBadge v-if="grant.revokedAt">已撤销</UiBadge>
+          <UiBadge v-else-if="Date.parse(grant.validUntil) <= Date.now()">已到期</UiBadge>
+          <UiButton v-else size="small" tone="error" variant="quiet" :disabled="busy" @click="open('revoke', grant)">撤销授权</UiButton>
         </div>
         <span class="console-group-meta">{{ formatTime(grant.validFrom) }} 至 {{ formatTime(grant.validUntil) }}</span>
         <span v-if="grant.recipientAccountId">账号 {{ accounts.find(({ id }) => id === grant.recipientAccountId)?.instanceKey ?? grant.recipientAccountId }}</span>
@@ -139,60 +140,60 @@ onMounted(() => { void run(load) })
         <span v-if="grant.recipientContactId">联系人 {{ grant.recipientContactId }}</span>
       </li>
     </ul>
-    <NButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多授权</NButton>
+    <UiButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多授权</UiButton>
   </section>
-  <NModal :show="!!mode" preset="card" :title="dialogTitle" :aria-label="dialogTitle"
-    class="knowledge-dialog" :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
-    @update:show="show => { if (!show) { mode = undefined; error = '' } }" @after-leave="restoreFocus">
-    <NForm v-if="mode" class="console-stack" @submit.prevent="save">
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+  <UiDialog :open="!!mode" :title="dialogTitle"
+    class="knowledge-dialog" :busy="busy"
+    @update:open="show => { if (!show) { mode = undefined; error = '' } }" @closed="restoreFocus">
+    <form v-if="mode" class="console-stack" @submit.prevent="save">
+      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
       <div v-if="mode === 'grant'" class="console-form-grid">
-        <NFormItem label="用途" :label-props="{ for: 'grant-purpose' }">
-          <NSelect placeholder="选择记忆用途" filterable v-model:value="form.purpose" :options="purposeOptions" :disabled="busy"
-            :input-props="{ id: 'grant-purpose' }" @update:value="resetChoice" />
-        </NFormItem>
-        <NFormItem label="接收身份" :label-props="{ for: 'grant-identity' }">
-          <NSelect placeholder="选择接收身份" filterable v-model:value="form.identityId" :options="identities.map(({ id }) => ({ value: id, label: name(id) }))"
-            :disabled="busy" :input-props="{ id: 'grant-identity' }" @update:value="form.accountId = ''; resetChoice()" />
-        </NFormItem>
-        <NFormItem :label="channel ? '接收账号' : '接收账号（可选）'" :label-props="{ for: 'grant-account' }">
-          <NSelect placeholder="选择接收账号" clearable filterable :value="form.accountId || null" :options="accountOptions" :disabled="busy || !form.identityId"
-            :input-props="{ id: 'grant-account' }" @update:value="form.accountId = $event ?? ''; resetChoice()" />
-        </NFormItem>
-        <NFormItem v-if="channel" :label="channel === 'PUBLIC' ? '公开受众会话' : '私聊会话'" :label-props="{ for: 'grant-conversation' }">
-          <NSelect placeholder="搜索或选择会话" filterable v-model:value="form.conversationId" :disabled="busy || !form.accountId"
+        <UiField label="用途" for="grant-purpose">
+          <UiCombobox placeholder="选择记忆用途" v-model="form.purpose" :options="purposeOptions" :disabled="busy"
+            :input-attrs="{ id: 'grant-purpose' }" @update:model-value="resetChoice" />
+        </UiField>
+        <UiField label="接收身份" for="grant-identity">
+          <UiCombobox placeholder="选择接收身份" v-model="form.identityId" :options="identities.map(({ id }) => ({ value: id, label: name(id) }))"
+            :disabled="busy" :input-attrs="{ id: 'grant-identity' }" @update:model-value="form.accountId = ''; resetChoice()" />
+        </UiField>
+        <UiField :label="channel ? '接收账号' : '接收账号（可选）'" for="grant-account">
+          <UiCombobox placeholder="选择接收账号" clearable :model-value="form.accountId || null" :options="accountOptions" :disabled="busy || !form.identityId"
+            :input-attrs="{ id: 'grant-account' }" @update:model-value="form.accountId = $event ?? ''; resetChoice()" />
+        </UiField>
+        <UiField v-if="channel" :label="channel === 'PUBLIC' ? '公开受众会话' : '私聊会话'" for="grant-conversation">
+          <UiCombobox placeholder="搜索或选择会话" v-model="form.conversationId" :disabled="busy || !form.accountId"
             :options="conversations.map(({ id, channel: kind, contactLabel }) => ({
               value: id, label: (contactLabel || (kind === 'PRIVATE' ? '私聊' : '公开会话')) + ' · ' + id.slice(0, 8),
-            }))" :input-props="{ id: 'grant-conversation' }" />
-        </NFormItem>
+            }))" :input-attrs="{ id: 'grant-conversation' }" />
+        </UiField>
         <div v-if="channel && form.accountId && !busy" class="console-actions">
           <span v-if="selected?.privateContactId">联系人 {{ selected.contactLabel || selected.privateContactId }}</span>
           <span v-if="!conversations.length && !error">此账号暂无符合用途的会话。</span>
-          <NButton v-if="conversationCursor" size="small" @click="run(() => loadChoices(true))">加载更多会话</NButton>
+          <UiButton v-if="conversationCursor" size="small" @click="run(() => loadChoices(true))">加载更多会话</UiButton>
         </div>
-        <NFormItem label="开始时间（本地）" :label-props="{ for: 'grant-from' }">
+        <UiField label="开始时间（本地）" for="grant-from">
           <input id="grant-from" v-model="form.from" type="datetime-local" :disabled="busy" />
-        </NFormItem>
-        <NFormItem label="截止时间（本地）" :label-props="{ for: 'grant-until' }">
+        </UiField>
+        <UiField label="截止时间（本地）" for="grant-until">
           <input id="grant-until" v-model="form.until" type="datetime-local" :disabled="busy" />
-        </NFormItem>
+        </UiField>
       </div>
       <p v-else-if="revoking">撤销 {{ name(revoking.recipientIdentityId) }} 的{{ purposes[revoking.purpose as Purpose] }}授权。</p>
-      <NAlert v-if="mode === 'grant' && badDates" type="warning" role="status">截止时间须晚于开始时间和现在。</NAlert>
-      <NFormItem label="理由" :label-props="{ for: 'grant-reason' }">
-        <NInput :placeholder="revoking ? '例如：协作已结束' : '例如：供该身份回复指定会话'" v-model:value="form.reason" :disabled="busy" maxlength="240" :input-props="{ id: 'grant-reason' }" />
-      </NFormItem>
+      <UiAlert v-if="mode === 'grant' && badDates" tone="warning" role="status">截止时间须晚于开始时间和现在。</UiAlert>
+      <UiField label="理由" for="grant-reason">
+        <input class="ui-control" :placeholder="revoking ? '例如：协作已结束' : '例如：供该身份回复指定会话'" v-model="form.reason" :disabled="busy" maxlength="240" v-bind="{ id: 'grant-reason' }" />
+      </UiField>
       <div class="console-actions grant-actions">
-        <NButton :disabled="busy" @click="mode = undefined">取消</NButton>
-        <NButton :type="mode === 'revoke' ? 'error' : 'primary'" attr-type="submit" :loading="busy" :disabled="!valid">{{ mode === 'grant' ? '保存授权' : '确认撤销' }}</NButton>
+        <UiButton :disabled="busy" @click="mode = undefined">取消</UiButton>
+        <UiButton :tone="mode === 'revoke' ? 'error' : 'primary'" type="submit" :loading="busy" :disabled="!valid">{{ mode === 'grant' ? '保存授权' : '确认撤销' }}</UiButton>
       </div>
-    </NForm>
-  </NModal>
+    </form>
+  </UiDialog>
 </template>
 
 <style scoped>
 .memory-grants { border-top: 1px solid var(--console-line); padding-top: 1rem; }
-.memory-grants > .n-button { justify-self: start; }
+.memory-grants > .ui-button { justify-self: start; }
 .grant-row { display: grid; gap: .35rem; padding: .8rem .75rem; overflow-wrap: anywhere; }
 .grant-actions { justify-content: flex-end; }
 </style>

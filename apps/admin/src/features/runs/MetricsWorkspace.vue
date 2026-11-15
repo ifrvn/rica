@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NSpin } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { simulationDailyMetricsView } from '../../../../../packages/contracts/simulation-observability.js'
 import { characterPath, queryPath, useConsoleTask } from '@rica/console-shared/console-data'
@@ -53,18 +53,18 @@ onMounted(load)
   <div class="console-stack metrics-workspace">
     <section class="console-card console-stack" aria-labelledby="metrics-query-heading">
       <div class="console-section-heading"><h3 id="metrics-query-heading">查询范围</h3></div>
-      <NForm class="metrics-query" @submit.prevent="load">
-        <NFormItem label="起始日期（UTC）" :label-props="{ for: 'metrics-from' }">
+      <form class="metrics-query" @submit.prevent="load">
+        <UiField label="起始日期（UTC）" for="metrics-from">
           <input id="metrics-from" v-model="form.from" type="date" :disabled="busy" />
-        </NFormItem>
-        <NFormItem label="截止日期（UTC）" :label-props="{ for: 'metrics-through' }">
+        </UiField>
+        <UiField label="截止日期（UTC）" for="metrics-through">
           <input id="metrics-through" v-model="form.through" type="date" :disabled="busy" />
-        </NFormItem>
-        <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !valid">查询指标</NButton>
-      </NForm>
-      <NAlert v-if="!valid" type="warning" role="status">请选择不超过 31 天的 UTC 日期范围。</NAlert>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-      <NSpin v-if="busy && !metrics" aria-label="正在查询模拟指标" />
+        </UiField>
+        <UiButton tone="primary" type="submit" :loading="busy" :disabled="busy || !valid">查询指标</UiButton>
+      </form>
+      <UiAlert v-if="!valid" tone="warning" role="status">请选择不超过 31 天的 UTC 日期范围。</UiAlert>
+      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+      <UiSpinner v-if="busy && !metrics" aria-label="正在查询模拟指标" />
     </section>
 
     <section v-if="metrics" class="console-card console-stack" aria-labelledby="metrics-overview-heading">
@@ -79,14 +79,14 @@ onMounted(load)
         <div><dt>预算预留</dt><dd>{{ totals.reserved }}</dd></div>
         <div><dt>预算拒绝</dt><dd>{{ totals.denials }}</dd></div>
       </dl>
-      <NAlert v-if="metrics.alerts.length" type="warning" title="评测告警">
+      <UiAlert v-if="metrics.alerts.length" tone="warning" title="评测告警">
         <ul class="metric-alerts"><li v-for="alert in metrics.alerts" :key="alert">{{ alerts[alert] }}</li></ul>
-      </NAlert>
+      </UiAlert>
     </section>
 
     <section v-if="metrics" class="console-card console-stack" aria-labelledby="metrics-daily-heading">
       <div class="console-section-heading"><h3 id="metrics-daily-heading">每日明细</h3></div>
-      <NEmpty v-if="!metrics.days.length" description="所选日期内暂无指标数据。" />
+      <UiEmpty v-if="!metrics.days.length" description="所选日期内暂无指标数据。" />
       <div v-else class="metrics-table-scroll" tabindex="0" role="region" aria-label="每日模拟指标表">
         <table class="metrics-table">
           <thead><tr><th scope="col">UTC 日期</th><th scope="col">提案</th><th scope="col">批准</th><th scope="col">拒绝</th>
@@ -103,10 +103,10 @@ onMounted(load)
 
 <style scoped>
 .metrics-query { display: flex; flex-wrap: wrap; align-items: start; gap: .75rem; }
-.metrics-query :deep(.n-form-item) { min-width: min(100%, 10rem); }
+.metrics-query :deep(.ui-field) { min-width: min(100%, 10rem); }
 .metrics-query input { box-sizing: border-box; width: 100%; height: 34px; font: inherit; color: inherit;
   border: 1px solid var(--console-field); border-radius: 5px; background: var(--console-surface); padding-inline: .5rem; }
-.metrics-query .n-button { margin-top: 1.5rem; }
+.metrics-query .ui-button { margin-top: 1.5rem; }
 .metric-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
   gap: 1rem; margin: 0; padding-block: .25rem; }
 .metric-totals dt { color: var(--console-muted); font-size: .875rem; }
@@ -122,7 +122,7 @@ onMounted(load)
 .metrics-table tbody tr:last-child :is(th, td) { border-bottom: 0; }
 @media (max-width: 28rem) {
   .metrics-query { display: grid; gap: 0; justify-items: start; }
-  .metrics-query :deep(.n-form-item) { width: 100%; }
-  .metrics-query .n-button { margin-top: 0; }
+  .metrics-query :deep(.ui-field) { width: 100%; }
+  .metrics-query .ui-button { margin-top: 0; }
 }
 </style>

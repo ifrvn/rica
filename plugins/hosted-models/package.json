@@ -21,7 +21,6 @@
     "@rica/contracts": "workspace:*",
     "@rica/plugin-host": "workspace:*",
     "@rica/plugin-simulated-model": "workspace:*",
-    "naive-ui": "^2.45.3",
     "vue": "^3.5.45",
     "zod": "^4.6.7"
   },

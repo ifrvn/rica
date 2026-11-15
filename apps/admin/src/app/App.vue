@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from 'vue'
-import { darkTheme, NButton, NConfigProvider, NGlobalStyle, NTag, zhCN, type GlobalThemeOverrides } from 'naive-ui'
+import { UiButton, UiBadge } from '@rica/console-shared/ui'
 import {
   DropdownMenuContent, DropdownMenuItemIndicator, DropdownMenuPortal, DropdownMenuRadioGroup,
   DropdownMenuRadioItem, DropdownMenuRoot, DropdownMenuTrigger,
@@ -10,6 +10,7 @@ import ReviewDesk from './ReviewDesk.vue'
 import type { Readiness } from '../../../../packages/contracts/health.js'
 import { darkPrimaryButton, palettes, readAppearance, saveAppearance } from './appearance.js'
 import '../styles/console-theme.css'
+import '@rica/console-shared/ui.css'
 
 const appearance = ref(readAppearance())
 const systemPreference = window.matchMedia('(prefers-color-scheme: dark)')
@@ -30,38 +31,13 @@ function updateSystemMode(event: MediaQueryListEvent) {
   systemMode.value = event.matches ? 'dark' : 'light'
 }
 
-const theme = computed<GlobalThemeOverrides>(() => {
-  const key = appearance.value.palette
-  const palette = palettes[key]
-  const [primary, hover] = palette[effectiveMode.value]
-  const button = darkPrimaryButton[key]
-  return {
-    common: {
-      primaryColor: primary, primaryColorHover: hover, primaryColorPressed: hover, primaryColorSuppl: hover,
-      textColorBase: 'var(--console-text)', bodyColor: 'var(--console-page)', cardColor: 'var(--console-surface)',
-      popoverColor: 'var(--console-surface)', borderRadius: '5px',
-    },
-    Card: { borderRadius: '5px', borderColor: 'var(--console-line)' },
-    Button: effectiveMode.value === 'dark' ? {
-      colorPrimary: button.fill,
-      colorHoverPrimary: button.hover,
-      colorFocusPrimary: button.hover,
-      textColorPrimary: '#fff',
-      textColorHoverPrimary: '#fff',
-      textColorFocusPrimary: '#fff',
-      textColorPressedPrimary: '#fff',
-      textColorDisabledPrimary: '#fff',
-      textColorTextPrimary: palette.text.dark,
-      textColorTextHoverPrimary: '#fff',
-      textColorTextFocusPrimary: '#fff',
-      textColorTextPressedPrimary: palette.text.dark,
-    } : undefined,
-  }
-})
-
 watchEffect(() => {
   document.documentElement.dataset.consolePalette = appearance.value.palette
   document.documentElement.dataset.consoleMode = effectiveMode.value
+  const [fill, hover] = palettes[appearance.value.palette].light
+  const primary = effectiveMode.value === 'dark' ? darkPrimaryButton[appearance.value.palette] : { fill, hover }
+  document.documentElement.style.setProperty('--console-primary', primary.fill)
+  document.documentElement.style.setProperty('--console-primary-hover', primary.hover)
   saveAppearance(appearance.value)
 })
 
@@ -105,76 +81,73 @@ onBeforeUnmount(() => systemPreference.removeEventListener('change', updateSyste
 </script>
 
 <template>
-  <NConfigProvider :locale="zhCN" :theme="effectiveMode === 'dark' ? darkTheme : null" :theme-overrides="theme">
-    <NGlobalStyle />
-    <div class="admin-shell">
-      <header class="masthead">
-        <div class="masthead-inner">
-          <div class="brand">
-            <div id="masthead-navigation" />
-            <span class="brand-mark" aria-hidden="true">R</span>
-            <h1>Rica 控制台</h1>
-          </div>
-          <div id="masthead-role" />
-          <div class="masthead-actions" flex="~ wrap" items="center" gap="2">
-            <DropdownMenuRoot>
-              <DropdownMenuTrigger type="button" class="appearance-icon"
-                :aria-label="'切换主题，当前为' + palettes[appearance.palette].label" title="切换主题">
-                <span class="i-lucide-palette" aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent class="theme-menu" align="end" :side-offset="8" :collision-padding="12" aria-label="主题颜色">
-                  <DropdownMenuRadioGroup :model-value="appearance.palette">
-                    <DropdownMenuRadioItem v-for="(palette, key) in palettes" :key="key" :value="key" class="theme-option"
-                      :style="{ color: palette.text[effectiveMode] }" @select="appearance.palette = key">
-                      <span class="theme-swatch" :style="{ backgroundColor: palette.light[0] }" aria-hidden="true" />
-                      <span>{{ palette.label }}</span>
-                      <DropdownMenuItemIndicator class="i-lucide-check theme-indicator" aria-hidden="true" />
-                    </DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenuRoot>
-            <button type="button" class="appearance-icon" :aria-label="modeLabel" :title="modeLabel" @click="appearance.mode = nextMode">
-              <span :class="modes[appearance.mode].icon" aria-hidden="true" />
-            </button>
-            <PopoverRoot>
-              <PopoverTrigger class="service-trigger" type="button" aria-label="服务状态">
-                <span class="service-dot" :data-tone="serviceStatus.tone" aria-hidden="true" />
-                <span aria-live="polite">{{ serviceStatus.label }}</span>
-              </PopoverTrigger>
-              <PopoverPortal>
-                <PopoverContent class="service-panel" align="end" :side-offset="8" :collision-padding="12" aria-label="服务状态详情">
-                  <dl v-if="readiness" class="service-checks">
-                    <div>
-                      <dt>PostgreSQL</dt>
-                      <dd><NTag size="small" :bordered="false" :type="readiness.checks.postgres ? 'success' : 'error'">{{ readiness.checks.postgres ? '已连接' : '未连接' }}</NTag></dd>
-                    </div>
-                    <div>
-                      <dt>Redis</dt>
-                      <dd><NTag size="small" :bordered="false" :type="readiness.checks.redis ? 'success' : 'error'">{{ readiness.checks.redis ? '已连接' : '未连接' }}</NTag></dd>
-                    </div>
-                  </dl>
-                  <p v-else aria-live="polite">{{ serviceStatus.label }}</p>
-                  <NButton size="small" :loading="checking" @click="refresh">刷新状态</NButton>
-                </PopoverContent>
-              </PopoverPortal>
-            </PopoverRoot>
-            <div id="masthead-account" />
-          </div>
+  <div class="admin-shell">
+    <header class="masthead">
+      <div class="masthead-inner">
+        <div class="brand">
+          <div id="masthead-navigation" />
+          <span class="brand-mark" aria-hidden="true">R</span>
+          <h1>Rica 控制台</h1>
         </div>
-      </header>
-      <main class="admin-content">
-        <ReviewDesk :readiness="readiness" :checked-at="checkedAt" :checking-readiness="checking" @check-readiness="refresh" />
-      </main>
-    </div>
-  </NConfigProvider>
+        <div id="masthead-role" />
+        <div class="masthead-actions" flex="~ wrap" items="center" gap="2">
+          <DropdownMenuRoot>
+            <DropdownMenuTrigger type="button" class="appearance-icon"
+              :aria-label="'切换主题，当前为' + palettes[appearance.palette].label" title="切换主题">
+              <span class="i-lucide-palette" aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent class="theme-menu" align="end" :side-offset="8" :collision-padding="12" aria-label="主题颜色">
+                <DropdownMenuRadioGroup :model-value="appearance.palette">
+                  <DropdownMenuRadioItem v-for="(palette, key) in palettes" :key="key" :value="key" class="theme-option"
+                    :style="{ color: palette.text[effectiveMode] }" @select="appearance.palette = key">
+                    <span class="theme-swatch" :style="{ backgroundColor: palette.light[0] }" aria-hidden="true" />
+                    <span>{{ palette.label }}</span>
+                    <DropdownMenuItemIndicator class="i-lucide-check theme-indicator" aria-hidden="true" />
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
+          <button type="button" class="appearance-icon" :aria-label="modeLabel" :title="modeLabel" @click="appearance.mode = nextMode">
+            <span :class="modes[appearance.mode].icon" aria-hidden="true" />
+          </button>
+          <PopoverRoot>
+            <PopoverTrigger class="service-trigger" type="button" aria-label="服务状态">
+              <span class="service-dot" :data-tone="serviceStatus.tone" aria-hidden="true" />
+              <span aria-live="polite">{{ serviceStatus.label }}</span>
+            </PopoverTrigger>
+            <PopoverPortal>
+              <PopoverContent class="service-panel" align="end" :side-offset="8" :collision-padding="12" aria-label="服务状态详情">
+                <dl v-if="readiness" class="service-checks">
+                  <div>
+                    <dt>PostgreSQL</dt>
+                    <dd><UiBadge :tone="readiness.checks.postgres ? 'success' : 'error'">{{ readiness.checks.postgres ? '已连接' : '未连接' }}</UiBadge></dd>
+                  </div>
+                  <div>
+                    <dt>Redis</dt>
+                    <dd><UiBadge :tone="readiness.checks.redis ? 'success' : 'error'">{{ readiness.checks.redis ? '已连接' : '未连接' }}</UiBadge></dd>
+                  </div>
+                </dl>
+                <p v-else aria-live="polite">{{ serviceStatus.label }}</p>
+                <UiButton size="small" :loading="checking" @click="refresh">刷新状态</UiButton>
+              </PopoverContent>
+            </PopoverPortal>
+          </PopoverRoot>
+          <div id="masthead-account" />
+        </div>
+      </div>
+    </header>
+    <main class="admin-content">
+      <ReviewDesk :readiness="readiness" :checked-at="checkedAt" :checking-readiness="checking" @check-readiness="refresh" />
+    </main>
+  </div>
 </template>
 
 <style src="../styles/console-layout.css"></style>
 
 <style>
-body { margin: 0; }
+body { margin: 0; font-family: Inter, system-ui, "Microsoft YaHei", sans-serif; font-size: .875rem; line-height: 1.5; }
 .admin-shell { min-height: 100vh; background: var(--console-page); color: var(--console-text); }
 .masthead { background: var(--console-surface); border-bottom: 1px solid var(--console-line); }
 .masthead-inner { display: flex; flex-wrap: wrap; padding: .75rem clamp(1rem, 4vw, 2.5rem); min-height: 3.75rem; box-sizing: border-box; align-items: center; justify-content: space-between; gap: .75rem; }
@@ -208,7 +181,7 @@ body { margin: 0; }
 .service-panel p, .service-checks, .service-checks dd { margin: 0; }
 .service-checks { display: grid; gap: .5rem; }
 .service-checks div { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.service-panel > .n-button { justify-self: end; }
+.service-panel > .ui-button { justify-self: end; }
 @media (min-width: 44rem) and (max-width: 56rem) {
   .masthead-inner { padding-inline: 1rem; gap: .5rem; }
 }

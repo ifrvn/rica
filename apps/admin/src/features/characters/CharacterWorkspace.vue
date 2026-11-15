@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NSelect, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
 import type { characterView, identityView } from '../../../../../packages/contracts/management.js'
@@ -388,8 +388,8 @@ onMounted(() => { if (props.characterId) void run(load) })
 
 <template>
   <div class="character-workspace">
-    <NAlert v-if="error && !editor" type="error" role="alert">{{ error }}</NAlert>
-    <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
+    <UiAlert v-if="error && !editor" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
     <DialogRoot :open="!!editor" @update:open="updateEditorOpen">
     <DialogPortal>
     <DialogOverlay class="workspace-overlay" />
@@ -397,7 +397,7 @@ onMounted(() => { if (props.characterId) void run(load) })
       @open-auto-focus.prevent="editorHeading?.focus()" @pointer-down-outside.prevent>
       <div class="workspace-editor-scroll">
       <DialogTitle as-child><h3 ref="editorHeading" tabindex="-1">{{ title }}</h3></DialogTitle>
-      <NAlert v-if="error" class="editor-alert" type="error" role="alert">{{ error }}</NAlert>
+      <UiAlert v-if="error" class="editor-alert" tone="error" role="alert">{{ error }}</UiAlert>
       <p v-if="editor === 'control' && target">{{ target.name }} · {{ status(target.status) }}</p>
       <p v-if="target?.revoke">撤销后，原账号不能恢复，可为该身份关联其他账号。历史记录仍可查看。</p>
       <p v-else-if="connectorFor(target?.platform)">{{ target?.status === 'ACTIVE' ? connectorFor(target?.platform)?.plugin.pauseMessage
@@ -405,132 +405,132 @@ onMounted(() => { if (props.characterId) void run(load) })
       <template v-if="editor === 'linked-account' && linkedAccount">
         <p>{{ boundAccountLabel(linkedAccount) }} · {{ status(linkedAccount.status) }}</p>
         <div class="workspace-actions editor-actions">
-          <NButton v-if="['ACTIVE', 'PAUSED'].includes(linkedAccount.status)" secondary
-            :type="linkedAccount.status === 'ACTIVE' ? 'warning' : 'default'" @click="accountControl(linkedAccount)">
+          <UiButton v-if="['ACTIVE', 'PAUSED'].includes(linkedAccount.status)" variant="soft"
+            :tone="linkedAccount.status === 'ACTIVE' ? 'warning' : 'default'" @click="accountControl(linkedAccount)">
             {{ linkedAccount.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
-          </NButton>
-          <NButton type="error" @click="accountControl(linkedAccount, true)">撤销账号</NButton>
-          <NButton @click="closeEditor">关闭</NButton>
+          </UiButton>
+          <UiButton tone="error" @click="accountControl(linkedAccount, true)">撤销账号</UiButton>
+          <UiButton @click="closeEditor">关闭</UiButton>
         </div>
       </template>
       <template v-else-if="editor === 'remove-account' && removingAccount">
         <p class="remove-account-name">{{ accountLabel(removingAccount) }}</p>
         <p>移除后，如需使用此账号，可以重新添加。</p>
         <div class="workspace-actions editor-actions">
-          <NButton :disabled="busy" @click="closeEditor">取消</NButton>
-          <NButton type="error" :loading="busy" :disabled="busy" @click="removeAccount">确认移除</NButton>
+          <UiButton :disabled="busy" @click="closeEditor">取消</UiButton>
+          <UiButton tone="error" :loading="busy" :disabled="busy" @click="removeAccount">确认移除</UiButton>
         </div>
       </template>
-      <NForm v-else @submit.prevent="save">
-        <NFormItem v-if="editor === 'character' || editor === 'identity'" label="唯一标识" :label-props="{ for: 'workspace-slug' }" :validation-status="fieldError('slug') ? 'error' : undefined">
-          <NInput v-model:value="form.slug" :input-props="fieldInput('slug')" @blur="touched.add('slug')" placeholder="小写字母、数字和连字符" maxlength="63" />
+      <form v-else @submit.prevent="save">
+        <UiField v-if="editor === 'character' || editor === 'identity'" label="唯一标识" for="workspace-slug" :invalid="!!fieldError('slug')">
+          <input class="ui-control" v-model="form.slug" v-bind="fieldInput('slug')" @blur="touched.add('slug')" placeholder="小写字母、数字和连字符" maxlength="63" />
           <template v-if="fieldError('slug')" #feedback>
             <span id="workspace-slug-error">{{ fieldError('slug') }}</span>
           </template>
-        </NFormItem>
-        <NFormItem v-if="isCharacter || isIdentity" label="名称" :label-props="{ for: 'workspace-name' }" :validation-status="fieldError('name') ? 'error' : undefined">
-          <NInput placeholder="例如：小黎" v-model:value="form.name" :input-props="fieldInput('name')" @blur="touched.add('name')" maxlength="120" />
+        </UiField>
+        <UiField v-if="isCharacter || isIdentity" label="名称" for="workspace-name" :invalid="!!fieldError('name')">
+          <input class="ui-control" placeholder="例如：小黎" v-model="form.name" v-bind="fieldInput('name')" @blur="touched.add('name')" maxlength="120" />
           <template v-if="fieldError('name')" #feedback>
             <span id="workspace-name-error">{{ fieldError('name') }}</span>
           </template>
-        </NFormItem>
-        <NFormItem v-if="editor === 'character' || isIdentity" label="时区" :label-props="{ for: 'workspace-timezone' }" :validation-status="fieldError('timezone') ? 'error' : undefined">
-          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" to="#character-workspace-editor" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
+        </UiField>
+        <UiField v-if="editor === 'character' || isIdentity" label="时区" for="workspace-timezone" :invalid="!!fieldError('timezone')">
+          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
             :invalid="!!fieldError('timezone')" @blur="touched.add('timezone')" />
           <template v-if="fieldError('timezone')" #feedback>
             <span id="workspace-timezone-error">{{ fieldError('timezone') }}</span>
           </template>
-        </NFormItem>
-        <NFormItem v-if="isCharacter" label="AI 身份说明" :label-props="{ for: 'workspace-disclosure' }" :validation-status="fieldError('disclosure') ? 'error' : undefined">
-          <NInput placeholder="例如：我是由 AI 驱动的虚拟角色" v-model:value="form.disclosure" :input-props="fieldInput('disclosure')" @blur="touched.add('disclosure')" maxlength="240" />
+        </UiField>
+        <UiField v-if="isCharacter" label="AI 身份说明" for="workspace-disclosure" :invalid="!!fieldError('disclosure')">
+          <input class="ui-control" placeholder="例如：我是由 AI 驱动的虚拟角色" v-model="form.disclosure" v-bind="fieldInput('disclosure')" @blur="touched.add('disclosure')" maxlength="240" />
           <template v-if="fieldError('disclosure')" #feedback>
             <span id="workspace-disclosure-error">{{ fieldError('disclosure') }}</span>
           </template>
-        </NFormItem>
-        <NFormItem v-if="isIdentity" label="写作风格" :label-props="{ for: 'workspace-style' }" :validation-status="fieldError('style') ? 'error' : undefined">
-          <NSelect placeholder="选择写作风格" filterable v-model:value="form.style" to="#character-workspace-editor" :options="styles" :input-props="fieldInput('style')" @blur="touched.add('style')" />
+        </UiField>
+        <UiField v-if="isIdentity" label="写作风格" for="workspace-style" :invalid="!!fieldError('style')">
+          <UiCombobox placeholder="选择写作风格" v-model="form.style" :options="styles" :input-attrs="fieldInput('style')" @blur="touched.add('style')" />
           <template v-if="fieldError('style')" #feedback>
             <span id="workspace-style-error">{{ fieldError('style') }}</span>
           </template>
-        </NFormItem>
-        <NFormItem v-if="isIdentity" label="身份提示词（可选）" :label-props="{ for: 'workspace-writingPrompt' }"
-          :validation-status="fieldError('writingPrompt') ? 'error' : undefined">
-          <NInput v-model:value="form.writingPrompt" type="textarea" :rows="4"
-            :maxlength="schemas?.management.maxIdentityWritingPromptLength" :input-props="fieldInput('writingPrompt')"
+        </UiField>
+        <UiField v-if="isIdentity" label="身份提示词（可选）" for="workspace-writingPrompt"
+          :invalid="!!fieldError('writingPrompt')">
+          <textarea class="ui-control" v-model="form.writingPrompt" :rows="4"
+            :maxlength="schemas?.management.maxIdentityWritingPromptLength" v-bind="fieldInput('writingPrompt')"
             placeholder="例如：你负责回答产品使用问题。先给操作步骤，遇到不确定的信息就请对方补充背景。"
-            @blur="touched.add('writingPrompt')" />
+            @blur="touched.add('writingPrompt')"></textarea>
           <template #feedback>
             <span v-if="fieldError('writingPrompt')" id="workspace-writingPrompt-error">{{ fieldError('writingPrompt') }}</span>
             <span v-else>模拟模型仍按模板生成回复。</span>
           </template>
-        </NFormItem>
+        </UiField>
         <template v-if="editor === 'account'">
-          <NFormItem label="平台" :label-props="{ for: 'workspace-platform' }" :validation-status="fieldError('platform') ? 'error' : undefined">
-            <NSelect placeholder="选择平台" filterable v-model:value="form.platform" to="#character-workspace-editor" :input-props="fieldInput('platform')"
-              :disabled="busy" :options="platformChoices" @update:value="resetAccountEditor" @blur="touched.add('platform')" />
+          <UiField label="平台" for="workspace-platform" :invalid="!!fieldError('platform')">
+            <UiCombobox placeholder="选择平台" v-model="form.platform" :input-attrs="fieldInput('platform')"
+              :disabled="busy" :options="platformChoices" @update:model-value="resetAccountEditor" @blur="touched.add('platform')" />
             <template v-if="fieldError('platform')" #feedback>
               <span id="workspace-platform-error">{{ fieldError('platform') }}</span>
             </template>
-          </NFormItem>
+          </UiField>
           <template v-if="registrationConnector">
             <component :is="registrationConnector.plugin.Form" v-bind="registrationConnector.state.formProps()" :busy="busy" />
           </template>
           <template v-else-if="form.platform">
-          <NFormItem label="实例标识" :label-props="{ for: 'workspace-instance' }" :validation-status="fieldError('instance') ? 'error' : undefined">
-            <NInput placeholder="例如：sandbox" v-model:value="form.instance" :input-props="fieldInput('instance')"
+          <UiField label="实例标识" for="workspace-instance" :invalid="!!fieldError('instance')">
+            <input class="ui-control" placeholder="例如：sandbox" v-model="form.instance" v-bind="fieldInput('instance')"
               @blur="touched.add('instance')" :maxlength="120" />
             <template v-if="fieldError('instance')" #feedback>
               <span id="workspace-instance-error">{{ fieldError('instance') }}</span>
             </template>
-          </NFormItem>
-          <NFormItem label="模拟平台账号标识" :label-props="{ for: 'workspace-remote' }" :validation-status="fieldError('remote') ? 'error' : undefined">
-            <NInput placeholder="例如：demo-account" v-model:value="form.remoteId" :input-props="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
+          </UiField>
+          <UiField label="模拟平台账号标识" for="workspace-remote" :invalid="!!fieldError('remote')">
+            <input class="ui-control" placeholder="例如：demo-account" v-model="form.remoteId" v-bind="fieldInput('remote')" @blur="touched.add('remote')" maxlength="240" />
             <template v-if="fieldError('remote')" #feedback>
               <span id="workspace-remote-error">{{ fieldError('remote') }}</span>
             </template>
-          </NFormItem>
+          </UiField>
           </template>
         </template>
         <template v-if="editor === 'associate'">
           <p>关联到 {{ editingIdentity && identityName(editingIdentity) }}</p>
           <p v-if="!accountPool.length" class="workspace-muted">账号池暂无可关联账号，请先登记账号。</p>
-          <NFormItem v-else label="平台账号" :label-props="{ for: 'workspace-registrationId' }"
-            :validation-status="fieldError('registrationId') ? 'error' : undefined">
-            <NSelect v-model:value="form.registrationId" to="#character-workspace-editor" filterable placeholder="从账号池选择未关联账号"
-              :input-props="fieldInput('registrationId')" @blur="touched.add('registrationId')"
+          <UiField v-else label="平台账号" for="workspace-registrationId"
+            :invalid="!!fieldError('registrationId')">
+            <UiCombobox v-model="form.registrationId" placeholder="从账号池选择未关联账号"
+              :input-attrs="fieldInput('registrationId')" @blur="touched.add('registrationId')"
               :options="accountPool.map(item => ({ label: accountLabel(item), value: item.id }))" />
             <template v-if="fieldError('registrationId')" #feedback>
               <span id="workspace-registrationId-error">{{ fieldError('registrationId') }}</span>
             </template>
-          </NFormItem>
+          </UiField>
         </template>
-        <NFormItem v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明（可选）"
-          :label-props="{ for: 'workspace-reason' }" :validation-status="fieldError('reason') ? 'error' : undefined">
-          <NInput :placeholder="editor === 'core' ? '例如：统一 AI 身份披露文案' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model:value="form.reason" :input-props="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
+        <UiField v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明（可选）"
+          for="workspace-reason" :invalid="!!fieldError('reason')">
+          <input class="ui-control" :placeholder="editor === 'core' ? '例如：统一 AI 身份披露文案' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model="form.reason" v-bind="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
           <template v-if="fieldError('reason')" #feedback>
             <span id="workspace-reason-error">{{ fieldError('reason') }}</span>
           </template>
-        </NFormItem>
+        </UiField>
         <div class="workspace-actions editor-actions">
-          <NButton :type="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
-            attr-type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)
+          <UiButton :tone="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
+            type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)
               || (editor === 'account' && (!form.platform || (registrationConnector && !registrationConnector.state.ready())))">
             {{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : editor === 'account' ? '确定' : title }}
-          </NButton>
-          <NButton :disabled="busy" @click="closeEditor">取消</NButton>
+          </UiButton>
+          <UiButton :disabled="busy" @click="closeEditor">取消</UiButton>
         </div>
-      </NForm>
+      </form>
       <div v-if="editor === 'core' && workspace" class="editor-lifecycle">
-        <NButton secondary :type="workspace.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
+        <UiButton variant="soft" :tone="workspace.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
           @click="open('control', undefined, { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
           {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
-        </NButton>
+        </UiButton>
       </div>
       <div v-if="editor === 'identity-edit' && editingIdentity" class="editor-lifecycle">
-        <NButton secondary :type="editingIdentity.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
+        <UiButton variant="soft" :tone="editingIdentity.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
           @click="open('control', undefined, { scope: 'IDENTITY', id: editingIdentity.id, name: identityName(editingIdentity), status: editingIdentity.status })">
           {{ editingIdentity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
-        </NButton>
+        </UiButton>
       </div>
       </div>
     </DialogContent>
@@ -540,15 +540,15 @@ onMounted(() => { if (props.characterId) void run(load) })
       <section class="character-list" aria-labelledby="characters-heading">
         <div class="console-section-heading">
           <h3 id="characters-heading">角色</h3>
-          <NButton v-if="canCreate" size="small" :type="characters.length ? 'default' : 'primary'" :disabled="busy" @click="open('character')">新建角色</NButton>
+          <UiButton v-if="canCreate" size="small" :tone="characters.length ? 'default' : 'primary'" :disabled="busy" @click="open('character')">新建角色</UiButton>
         </div>
-        <NEmpty v-if="!characters.length" :description="canCreate ? '尚未创建角色。' : '当前账号没有可访问的角色。'" />
+        <UiEmpty v-if="!characters.length" :description="canCreate ? '尚未创建角色。' : '当前账号没有可访问的角色。'" />
         <ul v-else class="role-list">
           <li v-for="character in characters" :key="character.id" class="role-row">
             <button type="button" class="role-select" :disabled="busy" :aria-pressed="character.id === characterId"
               @click="emit('selectCharacter', character.id)">
               <span class="role-title"><strong>{{ character.profile?.name || character.slug }}</strong>
-                <NTag size="small" :bordered="false" :type="character.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(character.status) }}</NTag></span>
+                <UiBadge :tone="character.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(character.status) }}</UiBadge></span>
               <span class="role-note workspace-muted">{{ character.profile?.aiDisclosure || character.timezone }}</span>
             </button>
             <button v-if="character.id === characterId && admin && workspace?.version" class="role-settings" type="button"
@@ -557,19 +557,19 @@ onMounted(() => { if (props.characterId) void run(load) })
             </button>
           </li>
         </ul>
-        <NButton v-if="moreCharacters" text size="small" :disabled="busy" @click="emit('loadCharacters')">加载更多角色</NButton>
+        <UiButton v-if="moreCharacters" variant="text" size="small" :disabled="busy" @click="emit('loadCharacters')">加载更多角色</UiButton>
       </section>
       <section class="identity-list" aria-labelledby="identities-heading">
         <div class="console-section-heading">
           <h3 id="identities-heading" ref="workspaceHeading" tabindex="-1">{{ workspace ? (workspace.profile?.name || workspace.slug) + '的身份' : '身份' }}</h3>
           <div v-if="workspace" class="workspace-actions">
             <span class="workspace-muted">{{ identities.length }} 个身份</span>
-            <NButton v-if="admin" size="small" type="primary" :disabled="busy" @click="open('identity')">添加身份</NButton>
+            <UiButton v-if="admin" size="small" tone="primary" :disabled="busy" @click="open('identity')">添加身份</UiButton>
           </div>
         </div>
-        <NSpin v-if="busy && !workspace" aria-label="正在加载身份" />
-        <NButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</NButton>
-        <NEmpty v-else-if="!identities.length" :description="workspace ? '尚未添加身份。' : '选择角色后查看身份。'" />
+        <UiSpinner v-if="busy && !workspace" aria-label="正在加载身份" />
+        <UiButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</UiButton>
+        <UiEmpty v-else-if="!identities.length" :description="workspace ? '尚未添加身份。' : '选择角色后查看身份。'" />
         <ul v-else class="workspace-list">
           <li v-for="identity in identities" :key="identity.id" class="identity-row">
             <div class="workspace-row">
@@ -578,35 +578,35 @@ onMounted(() => { if (props.characterId) void run(load) })
                 {{ identityName(identity) }}<span class="i-lucide-pencil edit-icon" aria-hidden="true" />
               </button>
               <strong v-else>{{ identityName(identity) }}</strong>
-              <NTag size="small" :bordered="false" :type="identity.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(identity.status) }}</NTag>
+              <UiBadge :tone="identity.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(identity.status) }}</UiBadge>
             </div>
             <div v-if="accountsByIdentity.has(identity.id)" class="workspace-actions">
               <template v-for="account in accountsByIdentity.get(identity.id)" :key="account.id">
-                <NButton v-if="admin" text type="primary" :disabled="busy" @click="openLinkedAccount(account)">{{ boundAccountLabel(account) }}</NButton>
+                <UiButton v-if="admin" variant="text" tone="primary" :disabled="busy" @click="openLinkedAccount(account)">{{ boundAccountLabel(account) }}</UiButton>
                 <span v-else>{{ boundAccountLabel(account) }}</span>
               </template>
             </div>
             <div v-else class="workspace-row">
               <span class="workspace-muted">未关联平台账号</span>
-              <NButton v-if="admin" size="small" :disabled="busy" @click="open('associate', identity)">关联账号</NButton>
+              <UiButton v-if="admin" size="small" :disabled="busy" @click="open('associate', identity)">关联账号</UiButton>
             </div>
           </li>
         </ul>
       </section>
     </div>
-    <NSpin v-else-if="busy && !workspace" />
-    <NButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</NButton>
+    <UiSpinner v-else-if="busy && !workspace" />
+    <UiButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</UiButton>
     <template v-else-if="workspace">
       <section class="workspace-card" aria-labelledby="platform-accounts-heading">
         <div class="console-section-heading">
           <h3 id="platform-accounts-heading" :ref="(node) => { if (accountsOnly) workspaceHeading = node as HTMLElement | undefined }" tabindex="-1">平台账号池</h3>
           <div v-if="admin || accountsOnly" class="workspace-actions">
-            <NButton v-if="admin" size="small" type="primary" :disabled="busy || !platformChoices.length"
-              @click="open('account')">添加账号</NButton>
-            <NButton v-if="accountsOnly" text :disabled="busy" @click="run(load)">刷新账号</NButton>
+            <UiButton v-if="admin" size="small" tone="primary" :disabled="busy || !platformChoices.length"
+              @click="open('account')">添加账号</UiButton>
+            <UiButton v-if="accountsOnly" variant="text" :disabled="busy" @click="run(load)">刷新账号</UiButton>
           </div>
         </div>
-        <NAlert v-if="admin && !workspace.simulationPlatforms.length" type="warning">当前部署未启用模拟适配器。</NAlert>
+        <UiAlert v-if="admin && !workspace.simulationPlatforms.length" tone="warning">当前部署未启用模拟适配器。</UiAlert>
         <ul v-if="accountPool.length" class="workspace-list">
           <li v-for="item in accountPool" :key="item.id" class="workspace-row">
             <div class="account-summary">
@@ -616,14 +616,14 @@ onMounted(() => { if (props.characterId) void run(load) })
               <p v-if="connectorFor(item.platform)?.state.accountCheckLabel(item)" class="workspace-muted account-check" role="status">{{ connectorFor(item.platform)?.state.accountCheckLabel(item) }}</p>
             </div>
             <div class="workspace-actions">
-              <NTag size="small" :bordered="false">未关联</NTag>
-              <NButton v-if="admin && connectorFor(item.platform)?.state.canRefreshProfile(item)"
-                size="small" secondary :disabled="busy" @click="connectorFor(item.platform)?.state.check(item)">核验并更新资料</NButton>
-              <NButton v-if="admin" size="small" type="error" secondary :disabled="busy" @click="confirmRemoveAccount(item)">移除账号</NButton>
+              <UiBadge>未关联</UiBadge>
+              <UiButton v-if="admin && connectorFor(item.platform)?.state.canRefreshProfile(item)"
+                size="small" variant="soft" :disabled="busy" @click="connectorFor(item.platform)?.state.check(item)">核验并更新资料</UiButton>
+              <UiButton v-if="admin" size="small" tone="error" variant="soft" :disabled="busy" @click="confirmRemoveAccount(item)">移除账号</UiButton>
             </div>
           </li>
         </ul>
-        <NEmpty v-if="!accounts.length && !accountPool.length" description="暂无平台账号。" />
+        <UiEmpty v-if="!accounts.length && !accountPool.length" description="暂无平台账号。" />
         <ul v-if="accounts.length" class="workspace-list">
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
             <div class="account-summary">
@@ -631,7 +631,7 @@ onMounted(() => { if (props.characterId) void run(load) })
               <component v-if="connectorFor(account.platform)?.plugin.labelProps(account)" :is="connectorFor(account.platform)?.plugin.Label"
                 v-bind="connectorFor(account.platform)?.plugin.labelProps(account)" />
               <strong v-else>{{ boundAccountLabel(account) }}</strong>
-              <NTag size="small">{{ status(account.status) }}</NTag>
+              <UiBadge>{{ status(account.status) }}</UiBadge>
               </div>
               <span class="workspace-muted">{{ workspace.profile?.name || workspace.slug }} / {{
                 identities.find(item => item.id === account.identityId)?.profile?.displayName
@@ -640,19 +640,19 @@ onMounted(() => { if (props.characterId) void run(load) })
               <p v-if="connectorFor(account.platform)?.state.accountCheckLabel(account)" class="workspace-muted account-check" role="status">{{ connectorFor(account.platform)?.state.accountCheckLabel(account) }}</p>
             </div>
             <div class="workspace-actions">
-              <NButton v-if="admin && connectorFor(account.platform)?.state.canCheck(account)"
-                size="small" secondary :disabled="busy" :loading="connectorFor(account.platform)?.state.checkingAccount.value === account.id"
-                @click="connectorFor(account.platform)?.state.check(account)">核验连接</NButton>
-              <NButton v-if="admin && connectorFor(account.platform)" size="small"
-                @click="emit('account', account.id)">查看读取状态</NButton>
-              <NButton v-if="admin && (connectorFor(account.platform) || isSimulationPlatform(account.platform)) && ['ACTIVE', 'PAUSED'].includes(account.status)"
-                size="small" :type="account.status === 'ACTIVE' ? 'warning' : 'default'" secondary :disabled="busy" @click="accountControl(account)">
+              <UiButton v-if="admin && connectorFor(account.platform)?.state.canCheck(account)"
+                size="small" variant="soft" :disabled="busy" :loading="connectorFor(account.platform)?.state.checkingAccount.value === account.id"
+                @click="connectorFor(account.platform)?.state.check(account)">核验连接</UiButton>
+              <UiButton v-if="admin && connectorFor(account.platform)" size="small"
+                @click="emit('account', account.id)">查看读取状态</UiButton>
+              <UiButton v-if="admin && (connectorFor(account.platform) || isSimulationPlatform(account.platform)) && ['ACTIVE', 'PAUSED'].includes(account.status)"
+                size="small" :tone="account.status === 'ACTIVE' ? 'warning' : 'default'" variant="soft" :disabled="busy" @click="accountControl(account)">
                 {{ account.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
-              </NButton>
-              <NButton v-if="admin && account.status !== 'REVOKED'"
-                size="small" type="error" :disabled="busy" @click="accountControl(account, true)">
+              </UiButton>
+              <UiButton v-if="admin && account.status !== 'REVOKED'"
+                size="small" tone="error" :disabled="busy" @click="accountControl(account, true)">
                 撤销账号
-              </NButton>
+              </UiButton>
             </div>
           </li>
         </ul>
@@ -662,7 +662,7 @@ onMounted(() => { if (props.characterId) void run(load) })
         :account-label="boundAccountLabel(connector)" :identity-label="connectorIdentity ? identityName(connectorIdentity) : '身份不可用'"
         :can-propose="canProposeConnectorReply"
         @expired="emit('expired')" @proposals="(accountId: string, proposalId?: string) => emit('proposals', connector!.platform, accountId, proposalId)" />
-      <NAlert v-else-if="accountDetail" type="warning">找不到当前角色的连接器账号。</NAlert>
+      <UiAlert v-else-if="accountDetail" tone="warning">找不到当前角色的连接器账号。</UiAlert>
     </template>
   </div>
 </template>

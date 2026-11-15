@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCheckbox, NEmpty, NForm, NFormItem, NInput, NModal, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiCheckbox, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { accountView, identityView } from '../../../../../packages/contracts/management.js'
 import { planInput, type planView } from '../../../../../packages/contracts/plans.js'
@@ -131,24 +131,24 @@ onMounted(() => { void run(load) })
     <div class="console-section-heading">
       <h3 id="collaborative-plans-heading" ref="heading" tabindex="-1">计划</h3>
       <div class="console-actions">
-        <NButton size="small" quaternary :disabled="busy" @click="run(load)">刷新计划</NButton>
-        <NButton size="small" type="primary" :disabled="busy || !available" @click="open()">新建计划</NButton>
+        <UiButton size="small" variant="quiet" :disabled="busy" @click="run(load)">刷新计划</UiButton>
+        <UiButton size="small" tone="primary" :disabled="busy || !available" @click="open()">新建计划</UiButton>
       </div>
     </div>
-    <NAlert v-if="error && !editor" type="error" role="alert">{{ error }}</NAlert>
-    <NAlert v-if="notice && !editor" type="success" role="status">{{ notice }}</NAlert>
-    <NSpin v-if="busy && !plans.length" aria-label="正在读取计划" />
-    <NEmpty v-else-if="!plans.length && !error" :description="available ? '暂无计划。' : '先为至少一个身份关联平台账号，再新建计划。'" />
+    <UiAlert v-if="error && !editor" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiAlert v-if="notice && !editor" tone="success" role="status">{{ notice }}</UiAlert>
+    <UiSpinner v-if="busy && !plans.length" aria-label="正在读取计划" />
+    <UiEmpty v-else-if="!plans.length && !error" :description="available ? '暂无计划。' : '先为至少一个身份关联平台账号，再新建计划。'" />
     <ul v-else-if="plans.length" class="plan-list">
       <li v-for="item in plans" :key="item.id">
         <div class="plan-title">
           <h4>{{ item.title }}</h4>
           <div class="console-actions">
-            <NTag size="small" :type="item.source === 'AI' ? 'info' : 'default'" :bordered="false">
+            <UiBadge :tone="item.source === 'AI' ? 'info' : 'default'">
               {{ item.source === 'AI' ? 'AI 自主设定' : '人工创建' }}
-            </NTag>
-            <NTag v-if="item.humanEdited" size="small" :bordered="false">已人工编辑</NTag>
-            <NTag size="small" :type="item.enabled ? 'success' : 'default'" :bordered="false">{{ item.enabled ? '已启用' : '已暂停' }}</NTag>
+            </UiBadge>
+            <UiBadge v-if="item.humanEdited">已人工编辑</UiBadge>
+            <UiBadge :tone="item.enabled ? 'success' : 'default'">{{ item.enabled ? '已启用' : '已暂停' }}</UiBadge>
           </div>
         </div>
         <p class="plan-muted">{{ item.rule.kind === 'DAILY' ? '每天 ' + item.rule.localTime + ' · ' + item.zone : '单次 · ' + formatTime(item.rule.dueAt) }}</p>
@@ -162,66 +162,65 @@ onMounted(() => { void run(load) })
               <small v-else-if="item.enabled && target.nextAt" class="plan-muted">下次 {{ formatTime(target.nextAt) }}</small>
             </div>
             <p>{{ target.task }}</p>
-            <NButton v-if="target.lastRunId" size="small" text @click="emit('run', target.lastRunId)">查看最近运行</NButton>
+            <UiButton v-if="target.lastRunId" size="small" variant="text" @click="emit('run', target.lastRunId)">查看最近运行</UiButton>
           </li>
         </ul>
         <div class="console-actions">
-          <NButton size="small" :disabled="busy" @click="open(item)">编辑计划</NButton>
-          <NButton size="small" secondary :type="item.enabled ? 'warning' : 'default'"
+          <UiButton size="small" :disabled="busy" @click="open(item)">编辑计划</UiButton>
+          <UiButton size="small" variant="soft" :tone="item.enabled ? 'warning' : 'default'"
             :disabled="busy || (!item.enabled && item.participants.some(target => byIdentity.get(target.identityId)?.id !== target.accountId))"
-            @click="toggle(item)">{{ item.enabled ? '暂停计划' : '恢复计划' }}</NButton>
+            @click="toggle(item)">{{ item.enabled ? '暂停计划' : '恢复计划' }}</UiButton>
         </div>
       </li>
     </ul>
   </section>
 
-  <NModal :show="!!editor" preset="card" :title="editor?.plan ? '编辑计划' : '新建计划'"
-    :aria-label="editor?.plan ? '编辑计划' : '新建计划'"
-    style="width: 36rem; max-width: calc(100% - 2rem)" :mask-closable="!busy" :close-on-esc="!busy" :closable="!busy"
-    @update:show="!$event && close()">
-    <NForm v-if="editor" class="plan-editor" :show-feedback="false" @submit.prevent="save">
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-      <NAlert v-if="notice" type="info" role="status">{{ notice }}</NAlert>
-      <NFormItem label="名称" :label-props="{ for: 'collaborative-plan-title' }">
-        <NInput ref="titleField" v-model:value="form.title" :maxlength="72" :disabled="busy"
-          :input-props="{ id: 'collaborative-plan-title', required: true }" />
-      </NFormItem>
+  <UiDialog :open="!!editor" :title="editor?.plan ? '编辑计划' : '新建计划'"
+    style="width: 36rem; max-width: calc(100% - 2rem)" :dismiss-outside="!busy" :busy="busy"
+    @update:open="!$event && close()">
+    <form v-if="editor" class="plan-editor" @submit.prevent="save">
+      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+      <UiAlert v-if="notice" tone="info" role="status">{{ notice }}</UiAlert>
+      <UiField label="名称" for="collaborative-plan-title">
+        <input class="ui-control" ref="titleField" v-model="form.title" :maxlength="72" :disabled="busy"
+          v-bind="{ id: 'collaborative-plan-title', required: true }" />
+      </UiField>
       <div class="console-form-grid plan-time">
-        <NFormItem :label="'触发时间（' + (form.date ? browserZone : form.zone) + '）'" :label-props="{ for: 'collaborative-plan-time' }">
+        <UiField :label="'触发时间（' + (form.date ? browserZone : form.zone) + '）'" for="collaborative-plan-time">
           <input id="collaborative-plan-time" v-model="form.time" type="time" :disabled="busy" required />
-        </NFormItem>
-        <NFormItem label="触发日期（留空则每天）" :label-props="{ for: 'collaborative-plan-date' }">
+        </UiField>
+        <UiField label="触发日期（留空则每天）" for="collaborative-plan-date">
           <input id="collaborative-plan-date" v-model="form.date" type="date" :disabled="busy" />
-        </NFormItem>
+        </UiField>
       </div>
-      <NFormItem v-if="!form.date" label="时区" :label-props="{ for: 'collaborative-plan-zone' }">
+      <UiField v-if="!form.date" label="时区" for="collaborative-plan-zone">
         <TimeZoneSelect v-model:value="form.zone" id="collaborative-plan-zone" :disabled="busy" />
-      </NFormItem>
+      </UiField>
       <fieldset class="plan-participants">
         <legend>参与身份和平台</legend>
         <p class="plan-muted">模拟账号会在触发时间准备运行上下文。标为人工执行的事项由人工跟进。</p>
         <p v-if="staleBindings" class="plan-muted">原有账号绑定已变化，请重新勾选当前平台账号。</p>
         <div v-for="identity in identities" :key="identity.id" class="plan-participant">
-          <NCheckbox :checked="checked.includes(identity.id)" :disabled="busy || !byIdentity.has(identity.id)"
+          <UiCheckbox :model-value="checked.includes(identity.id)" :disabled="busy || !byIdentity.has(identity.id)"
             :aria-disabled="busy || !byIdentity.has(identity.id)"
-            @update:checked="value => { checked = value ? [...checked, identity.id] : checked.filter(id => id !== identity.id) }">
+            @update:model-value="value => { checked = value ? [...checked, identity.id] : checked.filter(id => id !== identity.id) }">
             {{ identityName(identity.id) }} · {{ byIdentity.get(identity.id)?.platform ?? '未绑定平台' }}
             <template v-if="byIdentity.has(identity.id) && !usesSimulation(byIdentity.get(identity.id)!.platform)"> · 人工执行</template>
-          </NCheckbox>
-          <NFormItem v-if="checked.includes(identity.id)" :label="identityName(identity.id) + '的执行事项'"
-            :label-props="{ for: 'plan-task-' + identity.id }">
-            <NInput v-model:value="tasks[identity.id]" type="textarea" :rows="2" :maxlength="300" :disabled="busy"
-              :input-props="{ id: 'plan-task-' + identity.id, required: true }" />
-          </NFormItem>
+          </UiCheckbox>
+          <UiField v-if="checked.includes(identity.id)" :label="identityName(identity.id) + '的执行事项'"
+            :for="'plan-task-' + identity.id">
+            <textarea class="ui-control" v-model="tasks[identity.id]" :rows="2" :maxlength="300" :disabled="busy"
+              v-bind="{ id: 'plan-task-' + identity.id, required: true }"></textarea>
+          </UiField>
         </div>
       </fieldset>
       <div class="console-actions">
-        <NButton type="primary" attr-type="submit" :loading="busy">保存计划</NButton>
-        <NButton v-if="error && editor.plan" size="small" :disabled="busy" @click="refreshEditor">重新读取版本</NButton>
-        <NButton :disabled="busy" @click="close">取消</NButton>
+        <UiButton tone="primary" type="submit" :loading="busy">保存计划</UiButton>
+        <UiButton v-if="error && editor.plan" size="small" :disabled="busy" @click="refreshEditor">重新读取版本</UiButton>
+        <UiButton :disabled="busy" @click="close">取消</UiButton>
       </div>
-    </NForm>
-  </NModal>
+    </form>
+  </UiDialog>
 </template>
 
 <style scoped>

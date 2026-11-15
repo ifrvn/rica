@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NSpin } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiSpinner } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { auditView } from '../../../../../packages/contracts/management.js'
 import { platformReviews, pluginAuditLabels } from '../../app/plugin-integrations.js'
@@ -81,14 +81,14 @@ onMounted(() => { void load() })
     <div class="console-section-heading">
       <h3 id="audit-records-heading">{{ runId ? '此运行的审计记录' : targetId ? '此目标的审计记录' : '操作记录' }}</h3>
       <div class="console-actions">
-        <NButton size="small" quaternary :disabled="busy" @click="load()">刷新记录</NButton>
-        <NButton v-if="runId || targetId" size="small" quaternary @click="emit('all')">查看全部审计</NButton>
-        <NButton v-if="runId" size="small" @click="emit('openRun', runId)">返回运行详情</NButton>
+        <UiButton size="small" variant="quiet" :disabled="busy" @click="load()">刷新记录</UiButton>
+        <UiButton v-if="runId || targetId" size="small" variant="quiet" @click="emit('all')">查看全部审计</UiButton>
+        <UiButton v-if="runId" size="small" @click="emit('openRun', runId)">返回运行详情</UiButton>
       </div>
     </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-    <NSpin v-if="busy && !items.length" />
-    <NEmpty v-else-if="!items.length && !error" description="暂无审计记录。" />
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiSpinner v-if="busy && !items.length" />
+    <UiEmpty v-else-if="!items.length && !error" description="暂无审计记录。" />
     <ul v-if="items.length" class="console-group-list">
       <li v-for="item in items" :key="item.id">
         <div class="console-group-row">
@@ -100,10 +100,10 @@ onMounted(() => { void load() })
             </div>
           </div>
           <div class="console-actions">
-            <NButton v-if="!runId && item.operation === 'simulation.start'" size="small" quaternary
-              @click="emit('openRun', item.targetId)">查看运行</NButton>
-            <NButton v-if="reviewFor(item)" size="small" quaternary
-              @click="openProposal(item)">查看平台提案</NButton>
+            <UiButton v-if="!runId && item.operation === 'simulation.start'" size="small" variant="quiet"
+              @click="emit('openRun', item.targetId)">查看运行</UiButton>
+            <UiButton v-if="reviewFor(item)" size="small" variant="quiet"
+              @click="openProposal(item)">查看平台提案</UiButton>
           </div>
         </div>
         <details class="audit-details">
@@ -118,7 +118,7 @@ onMounted(() => { void load() })
         </details>
       </li>
     </ul>
-    <NButton v-if="cursor" size="small" :disabled="busy" @click="load(true)">加载更多</NButton>
+    <UiButton v-if="cursor" size="small" :disabled="busy" @click="load(true)">加载更多</UiButton>
   </section>
 </template>
 

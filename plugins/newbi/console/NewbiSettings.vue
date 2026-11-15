@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NButton, NForm, NFormItem, NInput } from 'naive-ui'
+import { UiButton, UiField } from '@rica/console-shared/ui'
 const props = defineProps<{ value: string; busy: boolean }>()
 const emit = defineEmits<{ close: []; save: [endpoint: string] }>()
 const endpoint = ref(props.value)
@@ -12,15 +12,15 @@ onMounted(() => heading.value?.focus())
   <section aria-labelledby="newbi-settings-heading">
     <div class="console-section-heading">
       <h3 id="newbi-settings-heading" ref="heading" tabindex="-1">Newbi · Agent API 设置</h3>
-      <NButton size="small" quaternary :disabled="busy" @click="emit('close')">收起设置</NButton>
+      <UiButton size="small" variant="quiet" :disabled="busy" @click="emit('close')">收起设置</UiButton>
     </div>
-    <NForm class="newbi-form" @submit.prevent="emit('save', endpoint.trim())">
-      <NFormItem label="本机 API 地址" :label-props="{ for: 'newbi-endpoint' }">
-        <NInput v-model:value="endpoint" placeholder="http://127.0.0.1:5000/agent-api/v1" :disabled="busy"
-          :input-props="{ id: 'newbi-endpoint', required: true }" />
-      </NFormItem>
-      <NButton type="primary" attr-type="submit" :loading="busy">保存 Newbi 设置</NButton>
-    </NForm>
+    <form class="newbi-form" @submit.prevent="emit('save', endpoint.trim())">
+      <UiField label="本机 API 地址" for="newbi-endpoint">
+        <input class="ui-control" v-model="endpoint" placeholder="http://127.0.0.1:5000/agent-api/v1" :disabled="busy"
+          v-bind="{ id: 'newbi-endpoint', required: true }" />
+      </UiField>
+      <UiButton tone="primary" type="submit" :loading="busy">保存 Newbi 设置</UiButton>
+    </form>
   </section>
 </template>
 

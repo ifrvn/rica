@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiBadge } from '@rica/console-shared/ui'
 import type { PluginService } from '../../../../../packages/contracts/plugin-status.js'
 import type { Readiness } from '../../../../../packages/contracts/health.js'
 import { platformHealth, hostedModelHealth, hasAccountHealthLink } from '../../app/plugin-integrations.js'
@@ -86,10 +86,10 @@ const detail = computed(() => {
 <template>
   <div class="console-stack health-workspace">
     <div class="console-actions health-toolbar">
-      <NButton size="small" quaternary @click="emit('plugins')">插件中心</NButton>
-      <NButton size="small" secondary :disabled="checking || busy" @click="refresh">刷新状态</NButton>
+      <UiButton size="small" variant="quiet" @click="emit('plugins')">插件中心</UiButton>
+      <UiButton size="small" variant="soft" :disabled="checking || busy" @click="refresh">刷新状态</UiButton>
     </div>
-    <NAlert v-if="error" type="warning" role="status">进程报告读取失败。{{ error }}</NAlert>
+    <UiAlert v-if="error" tone="warning" role="status">进程报告读取失败。{{ error }}</UiAlert>
     <section class="console-record-workspace health-map" aria-label="分层运行图">
       <template v-for="layer in layers" :key="layer.label">
         <div v-if="layer.edge" class="health-edge">
@@ -110,7 +110,7 @@ const detail = computed(() => {
     <section class="console-record-workspace health-detail" aria-label="组件详情">
       <div class="console-section-heading">
         <h3>{{ detail.label }}</h3>
-        <NTag size="small" :type="detail.tone" :bordered="false" aria-live="polite">{{ detail.state }}</NTag>
+        <UiBadge :tone="detail.tone" aria-live="polite">{{ detail.state }}</UiBadge>
       </div>
       <p>{{ detail.description }}</p>
       <p v-if="detail.at">最近检查或报告 <time :datetime="detail.at">{{ formatTime(detail.at) }}</time></p>
@@ -121,14 +121,14 @@ const detail = computed(() => {
         <p v-else-if="detail.state === '无近期报告'">请确认模拟执行器已启动并连接到本部署的 Redis，再刷新状态。</p>
         <p v-else-if="detail.state === '已就绪'">仍在等待的提案可能受角色当地 22:00 至次日 08:00 的静默时段、账号额度或其他尚未结束的执行影响。</p>
       </template>
-      <NButton v-if="hasAccountHealthLink(detail.id)" size="small" secondary
-        @click="emit('accounts')">查看平台账号池</NButton>
-      <NButton v-if="detail.id.startsWith('model-api-')" size="small" secondary
+      <UiButton v-if="hasAccountHealthLink(detail.id)" size="small" variant="soft"
+        @click="emit('accounts')">查看平台账号池</UiButton>
+      <UiButton v-if="detail.id.startsWith('model-api-')" size="small" variant="soft"
         @click="detail.state === '待配置' ? emit('plugins') : emit('runs')">
         {{ detail.state === '待配置' ? '前往插件中心' : '查看运行记录' }}
-      </NButton>
-      <NButton v-if="detail.id === 'postgres' || detail.id === 'redis'" size="small" secondary
-        :disabled="checking" @click="emit('check')">重试探测</NButton>
+      </UiButton>
+      <UiButton v-if="detail.id === 'postgres' || detail.id === 'redis'" size="small" variant="soft"
+        :disabled="checking" @click="emit('check')">重试探测</UiButton>
     </section>
   </div>
 </template>
@@ -154,7 +154,7 @@ const detail = computed(() => {
 .health-dot[data-tone='error'] { background: #bd454c; }
 .health-edge { display: flex; align-items: center; gap: .375rem; padding-inline-start: 7.125rem; }
 .health-detail p { margin: .4rem 0 0; }
-.health-detail .n-button { margin-block-start: .75rem; }
+.health-detail .ui-button { margin-block-start: .75rem; }
 @media (max-width: 40rem) {
   .health-layer { grid-template-columns: minmax(0, 1fr); gap: .375rem; }
   .health-edge { padding-inline-start: .5rem; }

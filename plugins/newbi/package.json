@@ -35,7 +35,6 @@
     "@rica/console-shared": "workspace:*",
     "@rica/contracts": "workspace:*",
     "@rica/plugin-host": "workspace:*",
-    "naive-ui": "^2.45.3",
     "vue": "^3.5.45"
   },
   "devDependencies": {

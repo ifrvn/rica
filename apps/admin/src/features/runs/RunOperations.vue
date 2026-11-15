@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '../../../../../packages/contracts/simulation-observability.js'
 import { request, RequestError } from '@rica/console-shared/request'
@@ -138,10 +138,10 @@ onMounted(() => { void act(load) })
   <section v-if="mode === 'backlog'" class="console-card console-stack run-summary" aria-labelledby="run-summary-heading">
     <div class="console-section-heading">
       <h3 id="run-summary-heading">待处理</h3>
-      <NButton size="small" quaternary :disabled="busy" @click="act(load)">刷新待处理</NButton>
+      <UiButton size="small" variant="quiet" :disabled="busy" @click="act(load)">刷新待处理</UiButton>
     </div>
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-    <NSpin v-if="busy && !backlog" />
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiSpinner v-if="busy && !backlog" />
     <dl v-if="backlog" class="metrics">
       <div v-for="item in metrics" :key="item.label">
         <dt>{{ item.label }}</dt>
@@ -150,21 +150,21 @@ onMounted(() => { void act(load) })
       </div>
     </dl>
     <div class="operations-actions">
-      <NButton size="small" @click="emit('openOutbox')">
+      <UiButton size="small" @click="emit('openOutbox')">
         查看失败任务<template v-if="backlog">（{{ backlog.outbox.quarantined }}）</template>
-      </NButton>
-      <NButton v-if="backlog?.reconciliation.count" size="small" @click="emit('openReconciliation')">查看待对账</NButton>
+      </UiButton>
+      <UiButton v-if="backlog?.reconciliation.count" size="small" @click="emit('openReconciliation')">查看待对账</UiButton>
     </div>
   </section>
   <section v-else class="console-card console-stack" aria-labelledby="outbox-list-heading">
     <div class="console-section-heading">
       <h3 id="outbox-list-heading" ref="listHeading" tabindex="-1">待恢复任务</h3>
-      <NButton size="small" quaternary :disabled="busy" @click="act(load)">刷新任务</NButton>
+      <UiButton size="small" variant="quiet" :disabled="busy" @click="act(load)">刷新任务</UiButton>
     </div>
-    <NAlert v-if="error && !selected" type="error" role="alert">{{ error }}</NAlert>
-    <NAlert v-if="notice" type="success" role="status">{{ notice }}</NAlert>
-    <NSpin v-if="busy && !events.length" aria-label="正在加载失败任务" />
-    <NEmpty v-else-if="!events.length && !error" description="暂无失败任务。" />
+    <UiAlert v-if="error && !selected" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+    <UiSpinner v-if="busy && !events.length" aria-label="正在加载失败任务" />
+    <UiEmpty v-else-if="!events.length && !error" description="暂无失败任务。" />
     <ul v-if="events.length" class="console-group-list">
       <li v-for="event in events" :key="event.id" class="console-group-row">
         <div class="event-info">
@@ -175,37 +175,37 @@ onMounted(() => { void act(load) })
           </div>
         </div>
         <div class="operations-actions">
-          <NButton size="small" quaternary @click="emit('openRun', event.runId)">查看运行</NButton>
-          <NButton v-if="canRetry" size="small" secondary type="primary" :disabled="busy || !!selected"
-            @click="select(event)">恢复任务</NButton>
+          <UiButton size="small" variant="quiet" @click="emit('openRun', event.runId)">查看运行</UiButton>
+          <UiButton v-if="canRetry" size="small" variant="soft" tone="primary" :disabled="busy || !!selected"
+            @click="select(event)">恢复任务</UiButton>
         </div>
       </li>
     </ul>
-    <NButton v-if="cursor" class="load-more" size="small" :disabled="busy" @click="act(() => load(true))">加载更多</NButton>
+    <UiButton v-if="cursor" class="load-more" size="small" :disabled="busy" @click="act(() => load(true))">加载更多</UiButton>
 
-    <NModal :show="!!selected" preset="card" title="恢复失败任务" aria-label="恢复失败任务"
-      class="recovery-dialog" :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
-      @update:show="show => { if (!show) closeRetry() }" @after-leave="restoreFocus">
-      <NForm v-if="selected" class="console-stack" @submit.prevent="retry">
+    <UiDialog :open="!!selected" title="恢复失败任务"
+      class="recovery-dialog" :busy="busy"
+      @update:open="show => { if (!show) closeRetry() }" @closed="restoreFocus">
+      <form v-if="selected" class="console-stack" @submit.prevent="retry">
         <div class="event-info">
           <strong>{{ eventType[selected.type] }}</strong>
           <span class="console-group-meta">第 {{ selected.generation }} 代 · 已尝试 {{ selected.attempts }} 次</span>
         </div>
         <p>确认后，Worker 会重新处理此任务。</p>
-        <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+        <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
         <p v-if="stale && !currentEvent">此任务已离开失败列表。</p>
-        <NFormItem label="恢复理由" :label-props="{ for: 'outbox-reason' }">
-          <NInput v-model:value="reason" placeholder="例如：已排除故障，可以重新处理"
-            :input-props="{ id: 'outbox-reason' }" :maxlength="240" :disabled="busy" />
-        </NFormItem>
+        <UiField label="恢复理由" for="outbox-reason">
+          <input class="ui-control" v-model="reason" placeholder="例如：已排除故障，可以重新处理"
+            v-bind="{ id: 'outbox-reason' }" :maxlength="240" :disabled="busy" />
+        </UiField>
         <div class="operations-actions recovery-actions">
-          <NButton :disabled="busy" @click="closeRetry">取消</NButton>
-          <NButton v-if="stale && currentEvent" type="primary" :disabled="busy" @click="select(currentEvent)">重新核对</NButton>
-          <NButton v-else-if="!stale" type="primary" attr-type="submit" :loading="busy"
-            :disabled="busy || !reason.trim()">确认恢复</NButton>
+          <UiButton :disabled="busy" @click="closeRetry">取消</UiButton>
+          <UiButton v-if="stale && currentEvent" tone="primary" :disabled="busy" @click="select(currentEvent)">重新核对</UiButton>
+          <UiButton v-else-if="!stale" tone="primary" type="submit" :loading="busy"
+            :disabled="busy || !reason.trim()">确认恢复</UiButton>
         </div>
-      </NForm>
-    </NModal>
+      </form>
+    </UiDialog>
   </section>
 </template>
 

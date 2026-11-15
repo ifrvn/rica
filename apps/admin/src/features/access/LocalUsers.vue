@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NForm, NFormItem, NInput, NModal, NSpin, NTag } from 'naive-ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import { queryPath, useConsoleTask } from '@rica/console-shared/console-data'
 import { request, RequestError } from '@rica/console-shared/request'
 import { localUserCreate, localUserPassword, type LocalUser } from '../../../../../packages/contracts/local-users.js'
@@ -87,59 +87,58 @@ onMounted(() => { void run(load) })
 </script>
 
 <template>
-  <NModal :show="true" preset="card" title="本地登录账号" aria-label="本地登录账号"
-    :style="{ width: 'min(36rem, calc(100vw - 2rem))', maxHeight: 'calc(100dvh - 2rem)', overflow: 'auto' }"
-    :mask-closable="false" :close-on-esc="!busy" :closable="!busy"
-    @update:show="show => { if (!show) emit('close') }">
+  <UiDialog :open="true" title="本地登录账号"
+    :style="{ width: 'min(36rem, calc(100vw - 2rem))', maxHeight: 'calc(100dvh - 2rem)', overflow: 'auto' }" :busy="busy"
+    @update:open="show => { if (!show) emit('close') }">
     <div class="console-stack">
-      <NAlert v-if="error" role="alert" type="error">{{ error }}</NAlert>
-      <NAlert v-if="notice" role="status" type="success">{{ notice }}</NAlert>
-      <NForm v-if="action" @submit.prevent="save" aria-labelledby="local-user-editor-heading">
+      <UiAlert v-if="error" role="alert" tone="error">{{ error }}</UiAlert>
+      <UiAlert v-if="notice" role="status" tone="success">{{ notice }}</UiAlert>
+      <form v-if="action" @submit.prevent="save" aria-labelledby="local-user-editor-heading">
         <h3 id="local-user-editor-heading" ref="editorHeading" tabindex="-1">
           {{ action === 'create' ? '创建本地账号' : '重置 ' + username + ' 的密码' }}
         </h3>
         <p v-if="action === 'reset'">重置后，此账号的所有会话和已登记的通行密钥都会失效。</p>
-        <NFormItem v-if="action === 'create'" label="用户名" :label-props="{ for: 'local-user-name' }">
-          <NInput v-model:value="username" maxlength="64" :disabled="busy" placeholder="3–64 个字母、数字及 . _ -"
-            :input-props="{ id: 'local-user-name', autocomplete: 'off' }" />
-        </NFormItem>
-        <NFormItem label="新密码" :label-props="{ for: 'local-user-new-password' }">
-          <NInput v-model:value="password" type="password" maxlength="128" :disabled="busy" placeholder="12–128 个字符"
-            :input-props="{ id: 'local-user-new-password', autocomplete: 'new-password' }" />
-        </NFormItem>
-        <NFormItem label="你的当前密码" :label-props="{ for: 'local-user-current-password' }">
-          <NInput v-model:value="currentPassword" type="password" maxlength="128" :disabled="busy"
-            :input-props="{ id: 'local-user-current-password', autocomplete: 'current-password' }" />
-        </NFormItem>
+        <UiField v-if="action === 'create'" label="用户名" for="local-user-name">
+          <input class="ui-control" v-model="username" maxlength="64" :disabled="busy" placeholder="3–64 个字母、数字及 . _ -"
+            v-bind="{ id: 'local-user-name', autocomplete: 'off' }" />
+        </UiField>
+        <UiField label="新密码" for="local-user-new-password">
+          <input class="ui-control" v-model="password" type="password" maxlength="128" :disabled="busy" placeholder="12–128 个字符"
+            v-bind="{ id: 'local-user-new-password', autocomplete: 'new-password' }" />
+        </UiField>
+        <UiField label="你的当前密码" for="local-user-current-password">
+          <input class="ui-control" v-model="currentPassword" type="password" maxlength="128" :disabled="busy"
+            v-bind="{ id: 'local-user-current-password', autocomplete: 'current-password' }" />
+        </UiField>
         <div class="console-actions">
-          <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || !valid">
+          <UiButton tone="primary" type="submit" :loading="busy" :disabled="busy || !valid">
             {{ action === 'create' ? '创建账号' : '确认重置' }}
-          </NButton>
-          <NButton :disabled="busy" @click="clearEditor">取消</NButton>
+          </UiButton>
+          <UiButton :disabled="busy" @click="clearEditor">取消</UiButton>
         </div>
-      </NForm>
+      </form>
       <template v-else>
         <div class="console-section-heading">
           <h3 ref="listHeading" tabindex="-1">账号列表</h3>
           <div class="console-actions">
-            <NButton size="small" quaternary :disabled="busy" @click="run(() => load())">刷新账号</NButton>
-            <NButton size="small" type="primary" :disabled="busy" @click="edit('create')">创建本地账号</NButton>
+            <UiButton size="small" variant="quiet" :disabled="busy" @click="run(() => load())">刷新账号</UiButton>
+            <UiButton size="small" tone="primary" :disabled="busy" @click="edit('create')">创建本地账号</UiButton>
           </div>
         </div>
-        <NSpin v-if="busy && !rows.length" aria-label="正在读取账号" />
-        <NEmpty v-else-if="!rows.length && !error" description="暂无本地账号。" />
+        <UiSpinner v-if="busy && !rows.length" aria-label="正在读取账号" />
+        <UiEmpty v-else-if="!rows.length && !error" description="暂无本地账号。" />
         <ul v-if="rows.length" class="console-record-list">
           <li v-for="row in rows" :key="row.username">
             <div class="console-actions">
               <strong>{{ row.username }}</strong>
-              <NTag v-if="row.canCreate" size="small">部署管理员</NTag>
-              <NButton v-else size="small" quaternary :aria-label="'重置 ' + row.username + ' 的密码'" :disabled="busy"
-                @click="edit('reset', row.username)">重置密码</NButton>
+              <UiBadge v-if="row.canCreate">部署管理员</UiBadge>
+              <UiButton v-else size="small" variant="quiet" :aria-label="'重置 ' + row.username + ' 的密码'" :disabled="busy"
+                @click="edit('reset', row.username)">重置密码</UiButton>
             </div>
           </li>
         </ul>
-        <NButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多</NButton>
+        <UiButton v-if="cursor" size="small" :disabled="busy" @click="run(() => load(true))">加载更多</UiButton>
       </template>
     </div>
-  </NModal>
+  </UiDialog>
 </template>
