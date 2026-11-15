@@ -26,6 +26,7 @@ type PluginCard = {
   editorProps(deployment: DeploymentPluginsView): object
   accountLink?(status?: ConnectorCardStatus): boolean
   settingsChange?(value: string): unknown
+  upgradeQueue?(status?: ConnectorCardStatus): { label: string; status: string; count: number }[] | undefined
 }
 
 export const pluginCards: Record<DeploymentPluginId, PluginCard> = { [newbiConsole.id]: newbiCard, ...hostedModelCards }

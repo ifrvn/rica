@@ -601,8 +601,9 @@ async function decide(decision: Decision) {
         @expired="resetSession" @all="changeTab('audit')" @open-run="openRun"
         @proposal="(plugin, proposalId) => navigate({ characterId, page: 'connector', reviewPlugin: plugin, detail: proposalId })" />
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId && canReadRuns" :key="characterId"
-        :character-id="characterId" :can-configure-model="canCreate" :can-start-simulation="roles.includes('ADMIN')" @expired="resetSession"
+        :character-id="characterId" :can-configure-model="canCreate" :can-start-simulation="roles.includes('ADMIN')" :can-review="canReview" @expired="resetSession"
         @deployment-changed="refreshReviewTabs"
+        @review="(plugin, status) => navigate({ characterId, page: 'connector', reviewPlugin: plugin, reviewStatus: status })"
         @simulate="navigate({ characterId, page: 'runs', startSimulation: true })"
         @accounts="changeTab('accounts')" @health="changeTab('health')" />
       <SystemHealth v-else-if="tab === 'health' && characterId && canReadRuns" :key="characterId + '/' + (healthNode ?? '')"

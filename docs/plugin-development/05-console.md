@@ -18,6 +18,7 @@
 | `accountLink?(status?)` | 返回是否显示账号池入口的布尔值。 |
 | `settingsChange?(value)` | 卡片内模式使用，把表单提交的单个字符串转换为部署动作对象。 |
 | `upgradeStep?` / `invalidSettings?` | 自定义升级步骤和无效配置提示。 |
+| `upgradeQueue?(status?)` | 返回当前角色需核对的队列 `{ label: string, status: string, count: number }[]`。未取得数据时返回 `undefined`。有审核权限时，`status` 用于打开对应的提案筛选。 |
 
 | 编辑器模式 | 额外 props | 宿主监听 |
 | --- | --- | --- |

@@ -101,6 +101,11 @@ export const newbiConnectionsView = z.object({
   hasUnknown: z.boolean(),
 })
 
+export const newbiPendingDeliveries = z.object({
+  inFlight: z.number().int().nonnegative(),
+  unknown: z.number().int().nonnegative(),
+})
+
 export const newbiDeploymentChange = z.strictObject({ action: z.literal('CONFIGURE_NEWBI'), endpoint: newbiEndpoint })
 
 export const newbiStoredConfig = z.object({ endpoint: newbiEndpoint })

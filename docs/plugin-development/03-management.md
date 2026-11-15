@@ -187,6 +187,8 @@ export const acmeConfiguration = {
 
 插件状态必含 `services: { service, catalog, report }[]`。组件目录和报告见[进程状态报告](#进程状态报告)。启用部署配置时会返回 `deployment`，包含 `version: number`、`plugins` 状态映射、`configuredModel: string | null`，以及当前部署声明的公开设置字段。配置了发布查询时可返回 `release`。插件声明的状态字段合并到根对象，其参数由贡献的 schema 决定。
 
+`release.status` 为 `UNCONFIGURED`、`UNAVAILABLE` 或 `AVAILABLE`。可用时还包含 `ricaVersion`、`releaseUrl`、`upgrades`（目录与目标有差异的组件）和 `aligned`（目录与目标一致的组件）。两个列表都以 `{ id, components }` 按插件返回，组件项为 `{ service, current, target, problem }`。`target` 缺失时为 `null`，`problem` 为 `null` 或 `MISSING_COMPONENT`、`INCOMPATIBLE_CONTRACT`、`DOWNGRADE`。运行核对使用独立的 `services[].report`。
+
 以下命令适用于已随部署交付的插件。输入 `GET /plugins` 所列的部署 ID。
 
 ```powershell

@@ -4,7 +4,11 @@ import { newbiDeployment } from '../catalog.js'
 import { newbiConsole } from './labels.js'
 import NewbiSettings from './NewbiSettings.vue'
 
-export type ConnectorCardStatus = { services: { service: string; catalog: PluginMetadata[] }[]; newbiRegistrationAvailable?: boolean }
+export type ConnectorCardStatus = {
+  services: { service: string; catalog: PluginMetadata[] }[]
+  newbiRegistrationAvailable?: boolean
+  newbiPendingDeliveries?: { inFlight: number; unknown: number }
+}
 
 export const registrationAvailable = (deployment: NewbiDeploymentView) => ({
   newbiRegistrationAvailable: deployment.plugins.newbi === 'ENABLED' && !!deployment.newbi.endpoint,
@@ -22,5 +26,13 @@ export const newbiCard = {
   configureLabel: ({ newbi }: NewbiDeploymentView) => newbi.endpoint ? '查看 Agent API 设置' : '配置 Agent API',
   editorProps: ({ newbi }: NewbiDeploymentView) => ({ value: newbi.endpoint ?? '' }),
   accountLink: (status?: ConnectorCardStatus) => !!status?.newbiRegistrationAvailable,
+  upgradeQueue(status?: ConnectorCardStatus) {
+    const pending = status?.newbiPendingDeliveries
+    if (!pending) return
+    return [
+      { label: '发送中', status: 'IN_FLIGHT', count: pending.inFlight },
+      { label: '待核对', status: 'UNKNOWN', count: pending.unknown },
+    ]
+  },
   settingsChange: (endpoint: string) => ({ action: 'CONFIGURE_NEWBI', endpoint }),
 }

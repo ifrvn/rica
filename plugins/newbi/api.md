@@ -15,6 +15,8 @@ Newbi 专用动作只传 `endpoint`，长度最多 160，接受 `http://localhos
 
 Newbi 提供 `newbiRegistrationAvailable: boolean` 和可选的 `newbiConnections: { activeAccounts, readFailures, lastReadAt, hasReceipt, hasUnknown }`。其中两个计数是非负整数，时间为 ISO 字符串或 `null`，最后两个字段为布尔值。
 
+升级检查使用 `newbiPendingDeliveries: { inFlight: number, unknown: number }`，两个计数分别对应当前角色全部端点的 `IN_FLIGHT` 和 `UNKNOWN` 提案。
+
 从当前状态安装、启用并保存 Newbi 接入点。
 
 ```powershell

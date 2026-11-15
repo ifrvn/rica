@@ -160,6 +160,16 @@ export async function readNewbiConnections(db: PrismaClient, characterId: string
     hasReceipt: !!confirmed, hasUnknown: !!unknown }
 }
 
+export async function readPendingDeliveries(db: PrismaClient, characterId: string) {
+  const counts = await db.newbiReply.groupBy({
+    by: ['status'], where: { characterId, status: { in: ['IN_FLIGHT', 'UNKNOWN'] } }, _count: true,
+  })
+  return {
+    inFlight: counts.find(({ status }) => status === 'IN_FLIGHT')?._count ?? 0,
+    unknown: counts.find(({ status }) => status === 'UNKNOWN')?._count ?? 0,
+  }
+}
+
 export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: (endpoint: string, agentId: string) => Promise<boolean>) {
   const account = await db.$transaction(async (tx) => {
     await authorize(tx, scope, ['ADMIN'])

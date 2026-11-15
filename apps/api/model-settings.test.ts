@@ -218,6 +218,14 @@ test('release previews detect both Newbi components and reject incompatible upgr
   assert.deepEqual(available.upgrades.map(({ id }) => id), ['newbi'])
   assert.ok(available.upgrades[0].components.every(({ problem }) => problem === null))
 
+  await writeFile(path, JSON.stringify({ ...manifest, components: [reader, executor, ...models] }))
+  const aligned = await readPluginRelease(path, services)
+  assert.equal(aligned.status, 'AVAILABLE')
+  if (aligned.status !== 'AVAILABLE') return
+  assert.deepEqual(aligned.upgrades, [])
+  assert.deepEqual(aligned.aligned.find(({ id }) => id === 'newbi')?.components.map(({ current, target }) => [current, target]),
+    [[reader, reader], [executor, executor]])
+
   await writeFile(path, JSON.stringify({ ...manifest, components: [nextReader, { ...executor, version: '0.9.0' }, ...models] }))
   const downgrade = await readPluginRelease(path, services)
   assert.equal(downgrade.status, 'AVAILABLE')

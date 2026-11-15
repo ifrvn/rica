@@ -28,7 +28,9 @@ export async function readPluginRelease(path: string | undefined, services: Serv
   if (!path) return { status: 'UNCONFIGURED' }
   try {
     const manifest = await readManifest(path)
-    const upgrades = deploymentPlugins.flatMap(({ id, ownsComponent }) => {
+    const upgrades: Extract<PluginReleaseView, { status: 'AVAILABLE' }>['upgrades'] = []
+    const aligned: typeof upgrades = []
+    for (const { id, ownsComponent } of deploymentPlugins) {
       const deployed = services.flatMap(({ service, catalog }) => catalog.filter((component) => ownsComponent(service, component))
         .map((current) => ({ service, current })))
       const components = deployed.map(({ service, current }) => {
@@ -38,11 +40,12 @@ export async function readPluginRelease(path: string | undefined, services: Serv
             : compareVersions(target.version, current.version) < 0 ? 'DOWNGRADE' : null
         return { service, current, target, problem } as const
       })
-      return components.some(({ target, current }) => !target
-        || target.version !== current.version || target.contractVersion !== current.contractVersion)
-        ? [{ id, components }] : []
-    })
-    return { status: 'AVAILABLE', ricaVersion: manifest.ricaVersion, releaseUrl: manifest.releaseUrl, upgrades }
+      if (!components.length) continue
+      if (components.some(({ target, current }) => !target
+        || target.version !== current.version || target.contractVersion !== current.contractVersion)) upgrades.push({ id, components })
+      else aligned.push({ id, components })
+    }
+    return { status: 'AVAILABLE', ricaVersion: manifest.ricaVersion, releaseUrl: manifest.releaseUrl, upgrades, aligned }
   } catch {
     return { status: 'UNAVAILABLE' }
   }

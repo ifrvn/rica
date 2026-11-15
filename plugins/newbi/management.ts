@@ -5,8 +5,8 @@ import * as management from '../../packages/persistence/management.js'
 import type { PrismaClient, Prisma } from '../../packages/persistence/generated/client.js'
 import { body, character, characterParams, error, errors, security, success, failure, type ManagementEnvironment, type ManagementPlugin } from '../../packages/runtime/management-http.js'
 import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
-import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections } from './persistence/management.js'
-import { newbiAccountProfile, newbiConnectionsView, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from './contracts.js'
+import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections, readPendingDeliveries } from './persistence/management.js'
+import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from './contracts.js'
 import type { newbiCatalog } from './catalog.js'
 
 export type NewbiDeploymentView = { plugins: { newbi: 'NOT_INSTALLED' | 'INSTALLED' | 'ENABLED' }; newbi: { endpoint: string | null } }
@@ -71,8 +71,12 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
 
   async function status(characterId: string) {
     const endpoint = (await deploymentPlugins?.readNewbi())?.endpoint
+    const [newbiConnections, pendingDeliveries] = await Promise.all([
+      endpoint ? readNewbiConnections(db, characterId, endpoint) : undefined,
+      readPendingDeliveries(db, characterId),
+    ])
     return { newbiRegistrationAvailable: !!endpoint,
-      newbiConnections: endpoint ? await readNewbiConnections(db, characterId, endpoint) : undefined }
+      newbiConnections, newbiPendingDeliveries: pendingDeliveries }
   }
 
   function registerRoutes(app: OpenAPIHono<ManagementEnvironment>) {
@@ -266,6 +270,8 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
     accountFields: { newbiProfile: newbiAccountProfile.optional() },
     workspace: { fields: { newbiInstalled: z.boolean() },
       read: async () => ({ newbiInstalled: await deploymentPlugins?.isInstalled() ?? true }) },
-    status: { fields: { newbiRegistrationAvailable: z.boolean(), newbiConnections: newbiConnectionsView.optional() }, read: status },
+    status: { fields: {
+      newbiRegistrationAvailable: z.boolean(), newbiConnections: newbiConnectionsView.optional(), newbiPendingDeliveries,
+    }, read: status },
   }
 }

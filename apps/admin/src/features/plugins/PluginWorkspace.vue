@@ -6,9 +6,13 @@ import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
 import { pluginCards as cards, pluginServiceNames, registrationAvailable } from '../../app/plugin-integrations.js'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
+import type { PluginMetadata } from '../../../../../packages/contracts/plugin-status.js'
 
-const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean }>()
-const emit = defineEmits<{ expired: []; accounts: []; health: []; simulate: []; deploymentChanged: [deployment: DeploymentPluginsView] }>()
+const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean; canReview: boolean }>()
+const emit = defineEmits<{
+  expired: []; accounts: []; health: []; simulate: []; deploymentChanged: [deployment: DeploymentPluginsView]
+  review: [plugin: string, status: string]
+}>()
 const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
@@ -21,14 +25,31 @@ const operations = { NOT_INSTALLED: 'INSTALL', INSTALLED: 'ENABLE', ENABLED: 'DI
 const release = computed(() => status.value?.release)
 const upgrades = computed(() => new Map(release.value?.status === 'AVAILABLE'
   ? release.value.upgrades.map((item) => [item.id, item] as const) : []))
+const versions = computed(() => new Map(release.value?.status === 'AVAILABLE'
+  ? [...release.value.upgrades, ...release.value.aligned].map((item) => [item.id, item] as const) : []))
 const releaseBlocked = computed(() => !!releasePreview.value
   && !!upgrades.value.get(releasePreview.value)?.components.some(({ problem }) => problem))
+const upgradeQueue = computed(() => releasePreview.value
+  ? cards[releasePreview.value].upgradeQueue?.(status.value)?.filter(({ count }) => count > 0) : undefined)
 const upgradeProblems = {
   MISSING_COMPONENT: '目标发布缺少此组件',
   INCOMPATIBLE_CONTRACT: '宿主契约版本不兼容',
   DOWNGRADE: '目标发布会降级此组件',
 }
 const serviceNames: Record<string, string> = { api: '管理 API', worker: '认知 Worker', 'simulation-executor': '模拟执行器', ...pluginServiceNames }
+
+function reportedVersion(id: DeploymentPluginId, entry: { service: string; current: PluginMetadata; target: PluginMetadata | null }) {
+  if (deployment.value?.plugins[id] !== 'ENABLED') return '插件未启用'
+  if (entry.current.kind === 'model' && deployment.value.configuredModel !== id) return '当前未选用此模型'
+  const report = status.value?.services.find(({ service }) => service === entry.service)?.report
+  if (!report) return '暂无近期运行报告'
+  if (report.status === 'FAILED') return '最近运行报告失败'
+  const observed = report.plugins.find(({ id, kind }) => id === entry.current.id && kind === entry.current.kind)
+  if (!observed) return '近期报告未包含此组件'
+  const version = '报告 v' + observed.version + ' · 契约 ' + observed.contractVersion
+  return observed.version === entry.target?.version && observed.contractVersion === entry.target.contractVersion
+    ? version + ' · 符合目标' : version + ' · 与目标不同'
+}
 
 function toggleRelease(id: DeploymentPluginId) {
   releasePreview.value = releasePreview.value === id ? undefined : id
@@ -89,7 +110,7 @@ function changeStage(id: DeploymentPluginId) {
     <div class="console-actions plugin-toolbar">
       <span v-if="release?.status === 'UNCONFIGURED'" class="plugin-release-note">尚未配置发布清单</span>
       <span v-else-if="release?.status === 'AVAILABLE' && !release.upgrades.length"
-        class="plugin-release-note">当前插件组件与发布清单一致</span>
+        class="plugin-release-note">部署组件目录与发布清单一致，可继续核对运行报告</span>
       <NButton size="small" quaternary :loading="loading" :disabled="busy" @click="refresh">刷新插件</NButton>
     </div>
     <NAlert v-if="loadError" type="error" role="alert">{{ loadError }}</NAlert>
@@ -127,40 +148,56 @@ function changeStage(id: DeploymentPluginId) {
           </div>
         </div>
 
-        <div v-if="canConfigureModel || (deployment.plugins[id] !== 'NOT_INSTALLED' && upgrades.has(id))" class="console-actions">
+        <div v-if="canConfigureModel || (deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id))" class="console-actions">
           <NButton v-if="canConfigureModel" size="small" :type="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
             :secondary="deployment.plugins[id] === 'ENABLED'" :disabled="busy || loading"
             :loading="busy && changedPlugin === id && editing !== id" @click="changeStage(id)">
             {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装 ' + labels[id]
               : deployment.plugins[id] === 'INSTALLED' ? '启用 ' + labels[id] : '停用 ' + labels[id] }}
           </NButton>
-          <NButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && upgrades.has(id)"
+          <NButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id)"
             :id="'plugin-release-toggle-' + id" size="small" secondary
             :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
-            {{ releasePreview === id ? '收起版本检查' : '检查升级' }}
+            {{ releasePreview === id ? '收起版本检查' : upgrades.has(id) ? '检查升级' : '核对运行版本' }}
           </NButton>
         </div>
 
         <section v-if="releasePreview === id && deployment.plugins[id] !== 'NOT_INSTALLED'
-          && release?.status === 'AVAILABLE' && upgrades.has(id)" :id="'plugin-release-' + id"
+          && release?.status === 'AVAILABLE' && versions.has(id)" :id="'plugin-release-' + id"
           class="plugin-config" :aria-labelledby="'plugin-release-heading-' + id">
           <div class="console-section-heading">
-            <h3 :id="'plugin-release-heading-' + id" tabindex="-1">Rica {{ release.ricaVersion }} · {{ labels[id] }} 版本变更</h3>
+            <h3 :id="'plugin-release-heading-' + id" tabindex="-1">Rica {{ release.ricaVersion }} · {{ labels[id] }} 版本检查</h3>
           </div>
           <ul class="console-record-list">
-            <li v-for="entry in upgrades.get(id)?.components" :key="entry.service + '/' + entry.current.id">
+            <li v-for="entry in versions.get(id)?.components" :key="entry.service + '/' + entry.current.id">
               <strong>{{ serviceNames[entry.service] ?? entry.service }} · {{ entry.current.id }}</strong>
               <span class="plugin-release-note">
-                当前 v{{ entry.current.version }} · 契约 {{ entry.current.contractVersion }}
+                部署目录 v{{ entry.current.version }} · 契约 {{ entry.current.contractVersion }}
                 <template v-if="entry.target"> → 目标 v{{ entry.target.version }} · 契约 {{ entry.target.contractVersion }}</template>
               </span>
               <span v-if="entry.problem">{{ upgradeProblems[entry.problem] }}</span>
+              <span class="plugin-release-note">{{ reportedVersion(id, entry) }}</span>
             </li>
           </ul>
           <NAlert v-if="releaseBlocked" type="warning" title="当前发布有升级阻碍">
             请让部署维护者核对上述组件，修正发布清单或选择兼容的 Rica 版本。
           </NAlert>
-          <template v-else>
+          <template v-else-if="upgrades.has(id)">
+            <template v-if="cards[id].upgradeQueue">
+              <NAlert v-if="upgradeQueue?.length" type="warning" title="当前角色有发送结果需核对">
+                等待在途发送完成，或核对未知结果后恢复或结案。部署前请逐个角色检查。
+                <div class="console-actions">
+                  <template v-for="queue in upgradeQueue" :key="queue.status">
+                    <NButton v-if="canReview" size="small" secondary @click="emit('review', id, queue.status)">
+                      {{ queue.count }} 条{{ queue.label }}
+                    </NButton>
+                    <span v-else>{{ queue.count }} 条{{ queue.label }}</span>
+                  </template>
+                </div>
+              </NAlert>
+              <p v-else-if="upgradeQueue" class="plugin-release-note">当前角色无在途或待核对发送。发布涉及整个部署，请逐个角色检查。</p>
+              <NAlert v-else type="warning">暂无当前角色的发送状态，请刷新后核对。</NAlert>
+            </template>
             <h4>升级步骤</h4>
             <ol class="plugin-release-steps">
               <li v-if="cards[id].upgradeStep">{{ cards[id].upgradeStep }}</li>

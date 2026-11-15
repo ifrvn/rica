@@ -2704,6 +2704,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
   let writes = 0
   let reads = 0
   let dropResponse = false
+  let observeSend: (() => Promise<void>) | undefined
   let preflightLimit = false
   let writeFailure: 'LIMIT' | 'LOCKED' | 'DROP' | undefined
   let locked = false
@@ -2741,6 +2742,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
       if (previous && previous.content !== content) return res.writeHead(409).end()
       const id = previous?.id ?? randomUUID()
       sent.set(key, { id, content })
+      await observeSend?.()
       if (writeFailure === 'DROP' || (dropResponse && !previous)) return res.destroy()
       return reply({ id, postId, replayed: !!previous }, 201)
     }
@@ -2923,10 +2925,22 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
 
     const lost = await propose('Lost response fixture reply', 'newbi-unknown')
     assert.equal((await lost.decide('APPROVE')).status, 200)
+    const pluginStatusPath = characterPath(a) + '/plugins'
+    let inFlightDuringSend: unknown
+    observeSend = async () => {
+      inFlightDuringSend = (await request('GET', pluginStatusPath, { target: sendApp })).body.newbiPendingDeliveries
+    }
     dropResponse = true
     assert.deepEqual((await sendFromConsole(lost.path)).body, { status: 'UNKNOWN' })
+    observeSend = undefined
+    assert.deepEqual(inFlightDuringSend, { inFlight: 1, unknown: 0 })
     assert.equal(sendReports.at(-1), false)
     assert.equal((await request('GET', lost.path)).body.status, 'UNKNOWN')
+    const pending = await request('GET', pluginStatusPath, { target: sendApp })
+    assert.equal(pending.status, 200)
+    assert.deepEqual(pending.body.newbiPendingDeliveries, { inFlight: 0, unknown: 1 })
+    assert.deepEqual((await request('GET', characterPath(b) + '/plugins', { target: sendApp, actor: 'admin-b' })).body.newbiPendingDeliveries,
+      { inFlight: 0, unknown: 0 })
     assert.equal(sent.get(lost.id)?.content, lost.content)
     const waiting = await propose('Fixture queued behind unknown result', 'newbi-waiting')
     assert.equal((await waiting.decide('APPROVE')).status, 200)
@@ -2945,6 +2959,7 @@ test('Newbi pilot binds an agent, enforces independent approval and recovers the
     const receipt = await request('GET', lost.path)
     assert.equal(receipt.body.remoteCommentId, sent.get(lost.id)?.id)
     assert.equal(receipt.body.attempts, 2)
+    assert.deepEqual((await request('GET', pluginStatusPath, { target: sendApp })).body.newbiPendingDeliveries, { inFlight: 0, unknown: 0 })
     assert.equal(sent.size, 2)
     assert.equal(writes, 3)
     assert.ok(reads >= 8)

@@ -36,7 +36,10 @@ const pluginUpgrade = z.object({
 })
 export const pluginReleaseView = z.discriminatedUnion('status', [
   z.object({ status: z.enum(['UNCONFIGURED', 'UNAVAILABLE']) }),
-  z.object({ status: z.literal('AVAILABLE'), ricaVersion: releaseVersion, releaseUrl, upgrades: z.array(pluginUpgrade) }),
+  z.object({
+    status: z.literal('AVAILABLE'), ricaVersion: releaseVersion, releaseUrl,
+    upgrades: z.array(pluginUpgrade), aligned: z.array(pluginUpgrade),
+  }),
 ])
 export type PluginReleaseView = z.infer<typeof pluginReleaseView>
 
