@@ -1,5 +1,7 @@
 # Rica 插件架构重构计划
 
+开发新插件时参阅[插件开发手册](plugin-development/README.md)。
+
 依据[系统设计规范第 17 章](多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md#sec-17)，并沿用第 09 章的平台契约、第 10 章的审批执行规则和第 13 章的事务出箱。本文补充实施顺序与验收，现有 M1–M4 的行为以[开发路线图](roadmap.md)为回归基线。
 
 ## 1. 重构起点
@@ -20,8 +22,8 @@
 
 | 工作区包 | 职责 |
 | --- | --- |
-| `@rica/plugin-newbi` | Newbi 专用契约、协议、管理路由、账号资料、事件游标、发送账本、清理任务、命令和控制台组件。读取与发送分别注册和报告。 |
-| `@rica/plugin-hosted-models` | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的协议适配、模型配置契约与存储、测试路由、控制台设置和健康节点。 |
+| [`@rica/plugin-newbi`](../plugins/newbi/README.md) | Newbi 专用契约、协议、管理路由、账号资料、事件游标、发送账本、清理任务、命令和控制台组件。读取与发送分别注册和报告。 |
+| [`@rica/plugin-hosted-models`](../plugins/hosted-models/README.md) | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的协议适配、模型配置契约与存储、测试路由、控制台设置和健康节点。 |
 | `@rica/plugin-simulated-model` | 模拟决策与本地模板回复。外部模型复用这里的本地决策。 |
 | `@rica/plugin-simulated-platforms` | mock-a 与 mock-b 的模拟事件适配器。 |
 | `@rica/contracts`、`@rica/plugin-host` | 共用输入输出、插件定义、注册校验和生命周期。 |

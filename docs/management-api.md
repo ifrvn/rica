@@ -30,6 +30,8 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 以下 `/c` 表示 `/v1/characters/{characterId}`。
 
+插件专用接口见 [Newbi API](../plugins/newbi/api.md) 和[外部模型 API](../plugins/hosted-models/README.md)。
+
 | 入口 | 权限与操作 |
 | --- | --- |
 | `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。角色详情附当前主体的权限，ADMIN 还可读取已启用的模拟适配器选项。 |
@@ -39,20 +41,13 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/plugins` | ADMIN 或 AUDITOR 查看部署插件状态、配置是否存在、各进程的脱敏报告，以及可选发布清单的升级预览。预览标出目标组件缺失、降级和契约不兼容。 |
 | `GET /c/plans`、`POST /c/plans`、`PUT /c/plans/{planId}` | ADMIN 浏览、创建和编辑跨身份计划。每个参与项包含同角色下当前绑定的身份、账号和执行事项。创建使用幂等键，编辑使用计划版本。 |
 | `PUT /c/plans/{planId}/state` | ADMIN 按版本暂停或恢复计划。暂停取消尚未执行的模拟运行，恢复前核对参与账号绑定。 |
-| `PUT /v1/deployment-plugins` | 具有创建角色权限的本地部署操作者提交 `INSTALL`、`ENABLE`、`DISABLE` 或 `CONFIGURE_NEWBI`。使用 `If-Match` 指定 `deployment.version`。返回更新后的版本与脱敏设置。 |
-| `GET /v1/model-settings`、`PUT /v1/model-settings` | 具有创建角色权限的本地部署操作者查看和保存已启用的模型配置。密钥可写，读取仅返回 `hasKey`。 |
-| `POST /v1/model-settings/check` | 部署操作者用已保存的 `version` 发送固定测试消息，查看脱敏回复或诊断。 |
+| `PUT /v1/deployment-plugins` | 具有创建角色权限的本地部署操作者提交 `INSTALL`、`ENABLE`、`DISABLE` 或已登记的插件配置动作。使用 `If-Match` 指定 `deployment.version`。返回更新后的版本与脱敏设置。 |
 | `GET /c/account-pool` | ADMIN 或 AUDITOR 查询该角色尚未关联身份的账号。 |
-| `POST /c/account-pool/newbi/test` | ADMIN 提交 `credential`，在插件接入点核验 Agent Key，获得 Agent ID、用户名和头像。 |
-| `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。Newbi 提交 `platform: "newbi"`、`credential` 和测试返回的 `agentId`。Rica 重新核验身份后再保存账号和密钥。 |
+| `POST /c/account-pool` | ADMIN 登记账号。模拟账号提交 `platform`、`instanceKey` 和 `remoteAccountId`。其他平台的请求体由对应插件定义。 |
 | `POST /c/account-pool/associations` | ADMIN 提交 `registrationId` 和 `identityId`。两者须属于当前角色，关联后初始为暂停。身份已有未撤销账号时返回 `409 IDENTITY_ALREADY_BOUND`。撤销原账号后可关联另一个账号，历史记录保留原绑定。 |
-| `DELETE /c/account-pool/{registrationId}` | ADMIN 提供 `Idempotency-Key` 移除当前角色的未关联账号。Newbi 账号的密钥一并清理。 |
+| `DELETE /c/account-pool/{registrationId}` | ADMIN 提供 `Idempotency-Key` 移除当前角色的未关联账号，并在同一事务调用已登记的平台清理回调。 |
 | `GET /c/accounts`、`POST /c/accounts` | 成员读取已关联账号的脱敏列表。ADMIN 也可通过此接口在一个请求中登记并关联模拟账号。 |
 | `GET /c/accounts/{accountId}/automation-eligibility` | ADMIN 或 AUDITOR 查询指定账号的低风险外部自动执行资格与原因。 |
-| `POST /c/newbi/accounts/{accountId}/check` | ADMIN 核验当前角色已绑定账号的 Newbi 读取连接。返回核验结果和时间，账号状态保持原值。 |
-| `POST /c/newbi/accounts/{accountId}/events/poll` | ADMIN 拉取当前角色下已启用的 Newbi 账号的一页事件。返回保存事件数量或下次可读时间，复用原有游标和限流。 |
-| `POST /c/newbi/replies/{replyId}/send` | ADMIN 单次发送当前角色已审批的 Newbi 公开回复。提交 `{"retry":false}` 首次发送，或 `{"retry":true}` 重试一次待核对或发送许可已过期的提案。成功返回评论 ID。 |
-| `GET /c/newbi/replies/{replyId}/thread` | ADMIN 或 REVIEWER 读取当前角色提案所指向的帖子和可见评论。返回帖子锁定状态和评论者用户名。 |
 | `POST /c/controls` | ADMIN 暂停或恢复角色、身份、模拟账号，也可撤销账号。恢复真实账号须走平台授权。可省略 `reason`。 |
 | `GET /c/memories`、`GET /c/memories/{memoryId}` | ADMIN 或 AUDITOR 读取脱敏元数据和来源。列表支持身份、作用域和状态筛选。 |
 | `GET /c/memory-grants` | ADMIN 读取共享授权和接收绑定，可按 `memoryId` 筛选。 |

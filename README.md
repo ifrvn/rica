@@ -6,6 +6,8 @@ Rica 是面向多平台、多身份 AI 虚拟角色的运行系统。同一个�
 
 当前已通过 M1–M4 模拟验收，覆盖入站、记忆检索、人工审批、模拟回执、调度、反思、观点演化和自主目标。[开发路线图](docs/roadmap.md) · [系统设计规范](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md)
 
+[插件开发手册](docs/plugin-development/README.md)
+
 ## 1. 安装并启动
 
 需要 Node.js 22.12+（22.x）、24.x 或 26.x，**pnpm**（版本见 `package.json`），以及带 Compose 的 Docker。以下命令使用 PowerShell。克隆后，其余操作都在仓库根目录运行。已有 `.env` 时会保留现有配置。

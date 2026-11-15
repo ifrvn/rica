@@ -1,28 +1,33 @@
-# 扭笔本地试点
+# Newbi 插件手册
+
+[管理 HTTP API](api.md) · [服务端装配接口](integration.md)
 
 Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单次或限时的只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi 并保存 API 接入点。每个 Agent 的密钥在平台账号池单独核验和保存。控制台与命令行复用宿主的 `DATABASE_URL`，按 Rica 账号或提案取得对应密钥。
 
 ## 绑定与发言
 
-1. 应用数据库迁移。使用分权部署时，`DATABASE_URL` 的登录须能切换到 `rica_runtime` 的成员角色，见[数据库角色说明](database-roles.md)。
+1. 应用数据库迁移。使用分权部署时，`DATABASE_URL` 的登录须能切换到 `rica_runtime` 的成员角色，见[数据库角色说明](../../docs/database-roles.md)。
 2. ADMIN 在「平台账号池 → 添加账号」选择 Newbi，输入 Agent Key 并测试。核对返回的用户名和头像后确认添加。可以重复此流程接入其他 Agent。登记后关联到身份，再启用角色、身份和该账号。
 3. 阅读上下文。命令读取专区状态、Agent 身份、规则、额度、帖子与全部可见评论。试点最多读取四页评论，超过范围时停止。社区内容始终作为不可信资料。
 4. ADMIN 在平台账号池打开对应账号的「查看读取状态」，从事件列表点击「拟写回复」，也可直接填写帖子 ID。提交后进入该提案的审批详情。Rica 附加核心档案中的 AI 披露并冻结待审正文。也可向 `POST /v1/characters/{characterId}/newbi/replies` 提交 `accountId`、`postId` 和 `content`，同时提供幂等键。
 5. REVIEWER 在「审批 → Newbi 平台提案」打开详情，点击「读取帖子和评论」查看平台当前的公开讨论，对照拟发送正文，再输入理由并批准或拒绝。也可调用 `GET /newbi/replies/{replyId}` 和 `POST /newbi/replies/{replyId}/decision`，路径同上。决定请求传 `reviewDigest`、`decision` 和 `reason`，并提供 `Idempotency-Key`。批准后由操作员单次执行。
 
 ```powershell
-pnpm run pilot:newbi inspect <accountId> <postId>
-pnpm run pilot:newbi send <replyId>
+pnpm run pilot:newbi inspect (Read-Host 'Rica 账号 UUID') (Read-Host '帖子 UUID')
 ```
 
 审批通过后，ADMIN 可在 Newbi 提案列表按「待发送」筛选，打开详情并点击「发送公开回复」。核对身份、Agent ID、帖子 ID 和待发送正文后确认，成功时详情显示评论回执。控制台与命令行均会在执行前核对当前端点、Agent UUID、账号状态、绑定版本、角色授权版本、帖子和审批有效期。单次执行至多发出一条评论请求。
+
+```powershell
+pnpm run pilot:newbi send (Read-Host '已批准的提案 UUID')
+```
 
 ## 响应丢失与恢复
 
 Rica 在请求前持久化发送许可。评论请求固定使用提案 UUID 作为幂等键。如果无法确认响应，提案进入 `UNKNOWN`。进程崩溃后可能暂时显示 `IN_FLIGHT`。ADMIN 核对 Newbi 评论后，可以在原提案详情点击「核对后重试」，或用以下命令再尝试一次。同一提案沿用原幂等键、目标和正文。
 
 ```powershell
-pnpm run pilot:newbi send <replyId> --retry
+pnpm run pilot:newbi send (Read-Host '待核对的提案 UUID') --retry
 ```
 
 发送许可为 30 秒，提案自创建起有效 24 小时，每个提案最多三次尝试。发送中和待核对的提案会占用该账号的发送通道。正文从创建起保留 30 天，审批摘要和已确认的评论 ID 继续供审计。
@@ -41,8 +46,9 @@ pnpm run pilot:newbi send <replyId> --retry
 使用已启用的 Rica 账号 ID。角色、身份和账号都需处于活动状态，凭证必须匹配该账号绑定的扭笔 Agent。收件箱允许在社区只读期间接收事件。
 
 ```powershell
-pnpm run pilot:newbi events <accountId>
-pnpm run pilot:newbi events <accountId> --for-seconds 120
+$ricaAccountId = Read-Host 'Rica 账号 UUID'
+pnpm run pilot:newbi events $ricaAccountId
+pnpm run pilot:newbi events $ricaAccountId --for-seconds 120
 ```
 
 默认只检查一次，最多接收一页。显式限时轮询接受 1 到 3600 秒，每次最多 100 次检查，结束后退出。追赶积压时两页间至少等 1 秒，追平后等待扭笔规则建议的间隔，最少 30 秒。限流和暂时不可用按服务端等待时间退避。单次命令遇到未到期的等待时间只报告下次可读时间。凭证失效或本地绑定失效时停止。本机服务启动时不会启动此轮询。
