@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { UiAlert, UiButton, UiField, UiSpinner } from '@rica/console-shared/ui'
-import { modelSettingsInput, type ModelCheckResult, type ModelSettingsInput, type ModelSettingsView } from '../contracts.js'
+import type { ModelPluginOption } from '@rica/contracts/model-provider'
+import { createModelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
 import { modelCheckLabels } from './labels.js'
 
-const props = defineProps<{ provider: Exclude<ModelSettingsInput['provider'], 'simulated'>; name: string; canStartSimulation: boolean }>()
+const props = defineProps<{ option: ModelPluginOption; canStartSimulation: boolean }>()
 const emit = defineEmits<{ close: []; expired: []; saved: []; simulate: [] }>()
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
 const path = '/v1/model-settings'
@@ -14,15 +15,15 @@ const current = ref<ModelSettingsView>()
 const checkResult = ref<ModelCheckResult>()
 const checking = ref(false)
 const form = reactive({ model: '', baseUrl: '', apiKey: '' })
-const compatible = computed(() => props.provider === 'openai-compatible')
-const reuseKey = computed(() => current.value?.hasKey && current.value.provider === props.provider
-  && (!compatible.value || current.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
+const modelSettingsInput = computed(() => createModelSettingsContracts([props.option]).modelSettingsInput)
+const reuseKey = computed(() => current.value?.hasKey && current.value.provider === props.option.id
+  && (!props.option.requiresBaseUrl || current.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
 const canCheck = computed(() => reuseKey.value && !form.apiKey && current.value?.model === form.model.trim())
 
 function setCurrent(value: ModelSettingsView) {
   current.value = value
   checkResult.value = undefined
-  const same = value.provider === props.provider
+  const same = value.provider === props.option.id
   Object.assign(form, { model: same ? value.model ?? '' : '', baseUrl: same ? value.baseUrl ?? '' : '', apiKey: '' })
 }
 
@@ -35,9 +36,9 @@ function load() {
 
 function save() {
   if (!current.value || busy.value) return
-  const input = modelSettingsInput.safeParse({
-    provider: props.provider, model: form.model, apiKey: form.apiKey || undefined,
-    baseUrl: compatible.value ? form.baseUrl.trim() : undefined,
+  const input = modelSettingsInput.value.safeParse({
+    provider: props.option.id, model: form.model, apiKey: form.apiKey || undefined,
+    baseUrl: props.option.requiresBaseUrl ? form.baseUrl.trim() : undefined,
   })
   notice.value = ''
   if (!input.success || (!input.data.apiKey && !reuseKey.value)) {
@@ -81,7 +82,7 @@ onMounted(() => { heading.value?.focus(); void load() })
 <template>
   <section class="model-settings" aria-labelledby="model-settings-heading">
     <div class="console-section-heading">
-      <h3 id="model-settings-heading" ref="heading" tabindex="-1">{{ name }} · AI API 设置</h3>
+      <h3 id="model-settings-heading" ref="heading" tabindex="-1">{{ option.name }} · AI API 设置</h3>
       <UiButton size="small" variant="quiet" :disabled="busy" @click="emit('close')">收起设置</UiButton>
     </div>
     <UiSpinner v-if="busy && !current" aria-label="正在读取模型设置" />
@@ -92,7 +93,7 @@ onMounted(() => { heading.value?.focus(); void load() })
             <input class="ui-control" v-model="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
               v-bind="{ id: 'model-settings-name', required: true }" />
           </UiField>
-          <UiField v-if="compatible" label="API 基础地址" for="model-settings-url">
+          <UiField v-if="option.requiresBaseUrl" label="API 基础地址" for="model-settings-url">
             <input class="ui-control" v-model="form.baseUrl" :disabled="busy" placeholder="https://provider.example/v1"
               v-bind="{ id: 'model-settings-url', required: true }" />
           </UiField>

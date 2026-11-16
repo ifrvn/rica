@@ -1,12 +1,12 @@
 import type { PluginMetadata } from '../../../packages/contracts/plugin-status.js'
-import { hostedModelIds, hostedModelNames } from '../catalog.js'
+import type { ModelPluginOption } from '@rica/contracts/model-provider'
 import ModelSettings from './ModelSettings.vue'
 
 type Deployment = { configuredModel: string | null }
 type Status = { services: { service: string; catalog: PluginMetadata[] }[] }
 
-function modelCard(id: keyof typeof hostedModelNames) {
-  const name = hostedModelNames[id]
+function modelCard(option: ModelPluginOption) {
+  const { id, name } = option
   return {
     description: '模型提供方 · 用于公开模拟草稿', editor: ModelSettings,
     components(status?: Status) {
@@ -16,9 +16,10 @@ function modelCard(id: keyof typeof hostedModelNames) {
     },
     summary: (deployment: Deployment) => deployment.configuredModel === id ? '已选为草稿模型' : '已注册到认知 Worker · 待配置',
     configureLabel: (deployment: Deployment) => deployment.configuredModel === id ? '查看 AI API 设置' : '配置 AI API',
-    editorProps: () => ({ provider: id, name }),
+    editorProps: () => ({ option }),
   }
 }
 
-export const hostedModelCards = Object.fromEntries(hostedModelIds.map((id) => [id, modelCard(id)])) as
-  Record<keyof typeof hostedModelNames, ReturnType<typeof modelCard>>
+export function createModelCards<Id extends string>(catalog: readonly (ModelPluginOption & { id: Id })[]) {
+  return Object.fromEntries(catalog.map((option) => [option.id, modelCard(option)])) as Record<Id, ReturnType<typeof modelCard>>
+}

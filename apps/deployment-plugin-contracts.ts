@@ -1,10 +1,15 @@
 import { z } from '@hono/zod-openapi'
 import { newbiDeployment } from '@rica/plugin-newbi/catalog'
-import { hostedModelDeployments } from '@rica/plugin-hosted-models/catalog'
+import { modelPluginCatalog } from './model-plugin-catalog.js'
 import { newbiConfiguration } from '@rica/plugin-newbi/settings'
 import { pluginStage } from '../packages/contracts/deployment-plugins.js'
 
-export const deploymentPlugins = [newbiDeployment, ...hostedModelDeployments] as const
+const modelDeployments = modelPluginCatalog.map(({ id }) => ({
+  id,
+  ownsComponent: (service: string, component: { kind: string; id: string }) =>
+    service === 'worker' && component.kind === 'model' && component.id === id,
+}))
+export const deploymentPlugins = [newbiDeployment, ...modelDeployments] as const
 export const deploymentPluginIds = deploymentPlugins.map(({ id }) => id)
 export const deploymentPluginId = z.enum(deploymentPluginIds)
 export type DeploymentPluginId = z.infer<typeof deploymentPluginId>

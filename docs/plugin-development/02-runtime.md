@@ -5,8 +5,8 @@
 组件实现版本用于依赖追踪和审批绑定。更新会影响已批准操作的实现时，验证旧许可如何处理。
 
 1. 按能力索引定义，检查重复 ID、契约版本与选择项。
-2. 调用可选的 `validateConfig`，检查 `requires` 中的服务名是否出现在宿主传入的 `services` 集合。配置缺省时可省略校验器。资源由装配入口注入，服务名集合用于检查依赖是否可用。
-3. 调用 `create` 取得 `implementation` 以及可选的 `start`、`stop`。异步资源在 `start` 打开，并由 `stop` 释放。组件启动后通过 `find(id)` 取得。
+2. 有配置的组件通过 `prepare` 解析配置，并返回持有已解析值的工厂。无配置的组件直接声明 `create`。宿主同时用 `services` 检查 `requires` 声明的服务是否可用。
+3. 调用工厂取得 `implementation` 以及可选的 `start`、`stop`。异步资源在 `start` 打开，并由 `stop` 释放。组件启动后通过 `find(id)` 取得。
 4. 必需组件故障会中止启动并清理已启动资源。可选组件的配置、依赖或启动失败通过 `report` 上报，该组件不可用。宿主停止时先移除查找条目，再按相反顺序清理。
 
 从 `@rica/plugin-host` 导入类型和函数。
@@ -14,15 +14,16 @@
 ```ts
 type PluginIdentity = { id: string; version: string; contractVersion: number }
 type Plugin<T> = PluginIdentity & Readonly<{ implementation: T }>
-type PluginDefinition<T> = PluginIdentity & Readonly<{
-  requires?: readonly string[]
-  validateConfig?: (value: unknown) => boolean
-  create(config: unknown): Readonly<{
-    implementation: T
-    start?: () => void | Promise<void>
-    stop?: () => void | Promise<void>
-  }>
+type PluginInstance<T> = Readonly<{
+  implementation: T
+  start?: () => void | Promise<void>
+  stop?: () => void | Promise<void>
 }>
+type CreatePlugin<T> = () => PluginInstance<T>
+type PluginDefinition<T> = PluginIdentity & Readonly<{ requires?: readonly string[] } & (
+  { create: CreatePlugin<T>; prepare?: never } |
+  { prepare: (config: unknown) => CreatePlugin<T>; create?: never }
+)>
 ```
 
 | 参数 | 类型与含义 |
@@ -31,8 +32,8 @@ type PluginDefinition<T> = PluginIdentity & Readonly<{
 | `version` | 组件实现版本。状态目录和发布清单使用三段数字。 |
 | `contractVersion` | 当前必须为 `1`。 |
 | `requires` | 必需服务名列表，逐一匹配启动时的 `options.services`。 |
-| `validateConfig(value)` | 接受或拒绝传入配置。省略时只接受 `undefined`。在 `create` 中仍需将 `unknown` 转换成可信的配置类型。 |
-| `create(config)` | 创建实例与可选的生命周期函数。实例的异步初始化放入 `start()`，资源释放放入 `stop()`。 |
+| `prepare(config)` | 解析配置并返回工厂。配置无效时抛出异常，宿主报告 `INVALID_CONFIG`。在此阶段只解析配置。 |
+| `create()` | 无配置插件使用的工厂。此时宿主只接受 `undefined`。 |
 
 ```ts
 startPluginHost<T>(
@@ -68,11 +69,12 @@ const counter: PluginDefinition<Counter> = {
   id: 'demo-counter',
   version: '1.0.0',
   contractVersion: 1,
-  validateConfig: (value) => Number.isSafeInteger(value),
-  create(config) {
-    if (typeof config !== 'number') throw new Error('Expected an integer')
-    let current = config
-    return { implementation: { next: () => ++current } }
+  prepare(config) {
+    if (typeof config !== 'number' || !Number.isSafeInteger(config)) throw new Error('Expected an integer')
+    return () => {
+      let current = config
+      return { implementation: { next: () => ++current } }
+    }
   },
 }
 
@@ -159,7 +161,11 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 
 ## ModelProvider
 
-外部模型可以在本地判断是否回复，由供应商生成公开模拟的正文。`hostedModel` 标记使用外部写作的实现，供宿主选择私密场景的本地模型和记录版本。新增独立包时，在[模型装配入口](../../apps/runtime-plugins.ts)登记定义与配置转换。设置 schema、提供方请求构造与响应解析由插件维护。
+外部模型可以在本地判断是否回复，由供应商生成公开模拟的正文。`hostedModel` 标记使用外部写作的实现，供宿主选择私密场景的本地模型和记录版本。
+
+1. 插件导出浏览器可用的 `ModelPluginOption`，包含 `id`、`name` 和 `requiresBaseUrl`。在[模型目录](../../apps/model-plugin-catalog.ts)登记这份声明，部署选项、设置校验、控制台卡片和健康节点据此生成。现有表单支持模型 ID、API 密钥和由 `requiresBaseUrl` 控制的 HTTPS 基础地址。
+2. 插件导出同一 ID 的 `PluginDefinition<ModelProvider>`，在[模型装配入口](../../apps/runtime-plugins.ts)登记。`prepare` 接收保存后的 `{ model, apiKey, baseUrl? }`，解析为实现所需的配置并返回工厂。提供方的请求构造与响应解析留在插件包中。
+3. 在插件中心安装并启用后，保存配置并运行连接检查。[模型设置测试](../../plugins/hosted-models/model-settings.test.ts)包含无需外部请求的独立插件示例。
 
 供应商请求使用本次写作所需的消息、写作指令和获准公开引用的摘录。外部回复应通过响应结构校验，错误用 [ModelProviderError](../../packages/contracts/model-provider.ts) 的脱敏错误码表示。连接测试使用固定输入，与角色运行、记忆检索和真实发言分开。
 

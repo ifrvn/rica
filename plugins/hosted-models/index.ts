@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import type { ModelSettingsInput } from './contracts.js'
+import { modelSettingsFields } from './contracts.js'
+import { hostedModelCatalog } from './catalog.js'
 import { ModelProviderError, type ModelProvider } from '@rica/contracts/model-provider'
 import type { PluginDefinition } from '@rica/plugin-host'
 import { simulatedModel } from '@rica/plugin-simulated-model'
@@ -8,27 +9,16 @@ const providers = {
   openai: 'https://api.openai.com/v1/chat/completions',
   anthropic: 'https://api.anthropic.com/v1/messages',
   gemini: 'https://generativelanguage.googleapis.com/v1beta/models/',
-  'openai-compatible': '',
+  'openai-compatible': undefined,
 } as const
-type Provider = keyof typeof providers
+type Provider = (typeof hostedModelCatalog)[number]['id']
 
 const configSchema = z.object({
-  model: z.string().trim().min(1).max(160).regex(/^[\w./:-]+$/),
-  key: z.string().trim().min(1).regex(/^[\x21-\x7e]+$/),
-  url: z.url({ protocol: /^https$/ }).refine((value) => {
-    const url = new URL(value)
-    return !url.username && !url.password && !url.search && !url.hash
-  }),
+  ...modelSettingsFields,
+  model: modelSettingsFields.model.unwrap(),
+  apiKey: modelSettingsFields.apiKey.unwrap(),
 })
-type Config = z.infer<typeof configSchema>
-
-export function hostedModelConfig({ provider, model, apiKey, baseUrl }: ModelSettingsInput) {
-  if (provider === 'simulated') return undefined
-  return {
-    model, key: apiKey,
-    url: provider === 'openai-compatible' && baseUrl ? baseUrl.replace(/\/+$/, '') + '/chat/completions' : providers[provider],
-  }
-}
+type Config = { model: string; key: string; url: string }
 
 export class HostedModelError extends ModelProviderError {}
 
@@ -153,8 +143,13 @@ function createHostedModel(id: Provider, config: Config): ModelProvider {
 }
 
 export const hostedModelDefinitions: readonly PluginDefinition<ModelProvider>[] =
-  (Object.keys(providers) as Provider[]).map((id) => ({
+  hostedModelCatalog.map(({ id, requiresBaseUrl }) => ({
     id, version: '1.0.0', contractVersion: 1,
-    validateConfig: (config) => configSchema.safeParse(config).success,
-    create: (config) => ({ implementation: createHostedModel(id, configSchema.parse(config)) }),
+    prepare(config) {
+      const { model, apiKey: key, baseUrl } = configSchema.parse(config)
+      if (requiresBaseUrl !== (baseUrl !== undefined)) throw new Error('Invalid base URL configuration')
+      const url = baseUrl === undefined ? providers[id] : baseUrl + '/chat/completions'
+      if (!url) throw new Error('Missing model endpoint')
+      return () => ({ implementation: createHostedModel(id, { model, key, url }) })
+    },
   }))

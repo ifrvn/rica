@@ -13,13 +13,13 @@ test('registration rejects duplicate IDs, incompatible contracts and unknown mod
   assert.equal(selected.resolveAdapter('mock-a'), undefined)
   assert.equal(selected.resolveAdapter('mock-b')?.adapterVersion, '1.0.0')
   await selected.stop()
-  await assert.rejects(startCognitionPlugins({}, undefined, { provider: 'unregistered' as never }), /UNKNOWN_PLUGIN/)
+  await assert.rejects(startCognitionPlugins({}, undefined, { provider: 'unregistered' }), /UNKNOWN_PLUGIN/)
   const builtin = definition('builtin')
   await assert.rejects(startPluginHost('model', [builtin, builtin], []), /DUPLICATE_PLUGIN/)
   await assert.rejects(startPluginHost('model', [{ ...builtin, contractVersion: 2 }], []), /INCOMPATIBLE_CONTRACT/)
 })
 
-function definition(id: string, overrides: Partial<PluginDefinition<string>> = {}): PluginDefinition<string> {
+function definition(id: string, overrides: Pick<PluginDefinition<string>, 'create' | 'requires'> = {}): PluginDefinition<string> {
   return { id, version: '1.0.0', contractVersion: 1, create: () => ({ implementation: id }), ...overrides }
 }
 
@@ -27,7 +27,13 @@ test('host validates required configuration before startup and reports unavailab
   const diagnostics: string[] = []
   const starts: string[] = []
   const ready = definition('ready', { create: () => ({ implementation: 'ready', start: () => { starts.push('ready') } }) })
-  const dependent = definition('dependent', { requires: ['limited-reader'], validateConfig: (value) => value === true })
+  const dependent: PluginDefinition<string> = {
+    id: 'dependent', version: '1.0.0', contractVersion: 1, requires: ['limited-reader'],
+    prepare(value) {
+      if (value !== true) throw new Error('Invalid configuration')
+      return () => ({ implementation: 'dependent' })
+    },
+  }
   const options = { report: ({ id, code }: { id: string; code: string }) => { diagnostics.push(id + ':' + code) } }
   await assert.rejects(startPluginHost('platform', [ready, dependent], [{ id: 'ready' }, { id: 'dependent', config: 'secret' }], options),
     (error) => error instanceof PluginHostError && error.diagnostic.code === 'INVALID_CONFIG' && !error.message.includes('secret'))

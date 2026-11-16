@@ -7,6 +7,11 @@ import type { PrismaClient } from '../../packages/persistence/generated/client.j
 import { createModelSettingsStore, enabledModelSettings } from './settings.js'
 import { createDeploymentPluginStore } from '../../apps/deployment-plugins.js'
 import { startConfiguredModel, startModelPlugin } from '../../apps/runtime-plugins.js'
+import { modelPluginCatalog, modelSettingsContracts } from '../../apps/model-plugin-catalog.js'
+import { createModelSettingsContracts } from './contracts.js'
+import type { ModelPluginOption, ModelProvider } from '@rica/contracts/model-provider'
+import type { PluginDefinition } from '@rica/plugin-host'
+import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
 import { localIssuer } from '../../apps/api/admin-auth.js'
 import { createHostedModelManagement } from './management.js'
 import { denyPermission } from '../../packages/persistence/management.js'
@@ -17,10 +22,10 @@ const path = '/model-settings'
 const secret = 'fixture-api-secret'
 const openai = { provider: 'openai', model: 'fixture-model', apiKey: secret } as const
 
-async function fixture(t: TestContext, managePlugins = false) {
+async function fixture(t: TestContext, managePlugins = false, contracts = modelSettingsContracts, start = startModelPlugin) {
   const directory = await mkdtemp(join(tmpdir(), 'rica-model-settings-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const store = createModelSettingsStore(directory)
+  const store = createModelSettingsStore(directory, contracts)
   const plugins = createDeploymentPluginStore(directory)
   const activeModel = async () => (await store.status()).provider
   const app = createManagementApp({
@@ -28,7 +33,7 @@ async function fixture(t: TestContext, managePlugins = false) {
       managementMembership: { findUnique: async () => ({ subject: 'admin' }) },
     }) } as unknown as PrismaClient,
     origin, cookie: 'rica_session', resolveAdapter: () => undefined, activeModel,
-    plugins: [createHostedModelManagement({ modelSettings: store, startModelPlugin,
+    plugins: [createHostedModelManagement({ modelSettings: store, startModelPlugin: start,
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
       isEnabled: (id) => managePlugins ? plugins.isEnabled(id, activeModel) : Promise.resolve(true),
     })],
@@ -78,7 +83,7 @@ test('stale writes cannot overwrite settings and changing endpoints requires a n
   assert.equal(saved.includes(secret), false)
   assert.equal((await put({ ...current, baseUrl: 'https://other.example/v1' }, 1)).status, 422)
   assert.equal((await put({ ...current, model: 'other-model' }, 1)).status, 200)
-  const store = createModelSettingsStore(directory)
+  const store = createModelSettingsStore(directory, modelSettingsContracts)
   assert.equal((await store.read()).configuration.apiKey, secret)
   assert.equal((await put({ provider: 'simulated' }, 2)).status, 200)
   assert.equal((await store.read()).configuration.apiKey, undefined)
@@ -86,7 +91,7 @@ test('stale writes cannot overwrite settings and changing endpoints requires a n
 
 test('a running Worker model loader uses saved settings on the next draft', async (t) => {
   const { put, directory } = await fixture(t)
-  const configured = await startConfiguredModel(createModelSettingsStore(directory))
+  const configured = await startConfiguredModel(createModelSettingsStore(directory, modelSettingsContracts))
   t.after(configured.stop)
   assert.equal((await configured.read()).id, 'simulated')
   assert.equal((await put(openai, 0)).status, 200)
@@ -116,6 +121,43 @@ test('only the deployment operator can install and enable models; stopping a mod
   assert.equal((await put(openai, 1)).status, 409)
   assert.equal((await change('ENABLE', 3)).status, 200)
   assert.equal((await model.read()).id, 'openai')
+})
+
+test('a separately registered model appears in settings and is loaded and checked through its own factory', async (t) => {
+  const option = { id: 'fixture-model-provider', name: 'Fixture model', requiresBaseUrl: true } satisfies ModelPluginOption
+  const definition: PluginDefinition<ModelProvider> = {
+    id: option.id, version: '1.0.0', contractVersion: 1,
+    prepare(config) {
+      assert.deepEqual(config, { model: 'fixture-model', apiKey: secret, baseUrl: 'https://fixture.example/v1' })
+      return () => ({
+        implementation: {
+          async decide() { return 'REPLY' },
+          async write() { return { text: 'Fixture reply', evidenceIds: [] } },
+        },
+      })
+    },
+  }
+  const contracts = createModelSettingsContracts([...modelPluginCatalog, option])
+  const start: typeof startModelPlugin = (configuration, service) =>
+    startModelPlugin(configuration, service, [simulatedModelDefinition, definition])
+  const { check, get, health, put, store } = await fixture(t, false, contracts, start)
+  const configured = await startConfiguredModel(store, undefined, start)
+  t.after(configured.stop)
+
+  assert.ok(contracts.modelSettingsInput.shape.provider.options.includes(option.id))
+  assert.equal((await configured.read()).id, 'simulated')
+  const input = { provider: option.id, model: 'fixture-model', apiKey: secret }
+  assert.equal((await put(input, 0)).status, 422)
+  assert.equal((await put({ ...input, baseUrl: 'https://fixture.example/v1/' }, 0)).status, 200)
+  assert.deepEqual(await (await get()).json(), {
+    version: 1, provider: option.id, model: input.model, baseUrl: 'https://fixture.example/v1', hasKey: true,
+  })
+  assert.equal((await configured.read()).id, option.id)
+  const result = await (await check(1)).json()
+  assert.equal(result.reply, 'Fixture reply')
+  assert.deepEqual(await (await health()).json().then(({ modelCheck }) => modelCheck), {
+    provider: option.id, status: 'OK', checkedAt: result.checkedAt,
+  })
 })
 
 test('model checks use the saved configuration and disclose only a redacted reply to the operator', async (t) => {

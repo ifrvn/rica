@@ -17,6 +17,8 @@ type ModelInput = Readonly<{
 
 export type WritingStyle = 'neutral' | 'formal' | 'casual' | 'concise'
 
+export type ModelPluginOption = Readonly<{ id: string; name: string; requiresBaseUrl: boolean }>
+
 export type ModelProvider = Readonly<{
   hostedModel?: string
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>

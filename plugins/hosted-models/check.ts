@@ -1,10 +1,9 @@
-import type { ModelProvider } from '@rica/contracts/model-provider'
+import { ModelProviderError, type ModelProvider } from '@rica/contracts/model-provider'
 import type { Plugin } from '@rica/plugin-host'
 import type { ModelCheckResult, ModelSettingsInput } from './contracts.js'
-import { HostedModelError } from './index.js'
 
 function failureStatus(cause: unknown): ModelCheckResult['status'] {
-  if (!(cause instanceof HostedModelError)) return 'PROVIDER_ERROR'
+  if (!(cause instanceof ModelProviderError)) return 'PROVIDER_ERROR'
   if (cause.code === 'INVALID_OUTPUT') return 'INVALID_OUTPUT'
   if (cause.code === 'REQUEST_FAILED') return 'CONNECTION_FAILED'
   if (cause.status === 401 || cause.status === 403) return 'AUTH_FAILED'
@@ -13,7 +12,7 @@ function failureStatus(cause: unknown): ModelCheckResult['status'] {
   return 'PROVIDER_ERROR'
 }
 
-export async function checkModel(configuration: ModelSettingsInput & { provider: ModelCheckResult['provider'] },
+export async function checkModel(configuration: ModelSettingsInput,
   startModelPlugin: (configuration: ModelSettingsInput) => Promise<{ model: Plugin<ModelProvider>; stop: () => Promise<void> }>,
 ): Promise<ModelCheckResult> {
   const { provider, apiKey } = configuration
@@ -29,7 +28,7 @@ export async function checkModel(configuration: ModelSettingsInput & { provider:
         time: { now, occurredAt: now, localDate: date, eventLocalDate: date, timezone: 'UTC', localHour: Number(now.slice(11, 13)) },
       }, AbortSignal.timeout(15_000))
       if (!result || typeof result !== 'object' || !('text' in result) || typeof result.text !== 'string' || !result.text.trim()) {
-        throw new HostedModelError('INVALID_OUTPUT')
+        throw new ModelProviderError('INVALID_OUTPUT')
       }
       reply = (apiKey ? result.text.replaceAll(apiKey, '[已隐藏]') : result.text).slice(0, 500)
     } finally {

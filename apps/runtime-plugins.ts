@@ -1,9 +1,10 @@
 import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
 import type { ModelSettingsInput } from '@rica/plugin-hosted-models/contracts'
 import type { createModelSettingsStore } from '@rica/plugin-hosted-models/settings'
+import type { ModelProvider } from '@rica/contracts/model-provider'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
-import { hostedModelConfig, hostedModelDefinitions } from '@rica/plugin-hosted-models'
+import { hostedModelDefinitions } from '@rica/plugin-hosted-models'
 import { simulatedPlatformDefinitions } from '@rica/plugin-simulated-platforms'
 
 import type { PluginMetadata } from '../packages/contracts/plugin-status.js'
@@ -41,25 +42,28 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
   return { ...host, resolveAdapter, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
 }
 
-export async function startModelPlugin(configuration: ModelSettingsInput, service?: string) {
-  const id = configuration.provider
-  const host = await startHost('model', modelDefinitions, [{ id, config: hostedModelConfig(configuration) }], service)
+export async function startModelPlugin({ provider: id, ...configuration }: ModelSettingsInput, service?: string,
+  definitions: readonly PluginDefinition<ModelProvider>[] = modelDefinitions,
+) {
+  const config = id === 'simulated' ? undefined : configuration
+  const host = await startHost('model', definitions, [{ id, config }], service)
   const model = host.find(id)!
   return { model, metadata: metadata('model', model), stop: host.stop }
 }
 
 export async function startConfiguredModel(
   settings: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>, service?: string,
+  start: typeof startModelPlugin = startModelPlugin,
 ) {
   const initial = await settings.read()
-  let selected = await startModelPlugin(initial.configuration, service)
+  let selected = await start(initial.configuration, service)
   let version = initial.version
   return {
     get metadata() { return selected.metadata },
     async read() {
       const record = await settings.read()
       if (record.version !== version || record.configuration.provider !== selected.metadata.id) {
-        const next = await startModelPlugin(record.configuration, service)
+        const next = await start(record.configuration, service)
         await selected.stop()
         selected = next
         version = record.version

@@ -1,14 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { modelSettingsInput, type ModelSettingsInput, type ModelSettingsView } from './contracts.js'
+import type { ModelSettingsContracts, ModelSettingsInput, ModelSettingsView } from './contracts.js'
 import { writeSettings } from '../../packages/runtime/write-settings.js'
 
-const recordSchema = z.strictObject({
-  version: z.number().int().positive(),
-  configuration: modelSettingsInput.refine((value) => value.provider === 'simulated' || !!value.apiKey),
-})
-type Record = z.infer<typeof recordSchema>
+type Record = { version: number; configuration: ModelSettingsInput }
 
 export class ModelSettingsError extends Error {
   constructor(readonly code: 'VERSION_CONFLICT' | 'KEY_REQUIRED') { super(code) }
@@ -20,7 +16,11 @@ function view({ version, configuration }: Record): ModelSettingsView {
 }
 
 // The deployment runs one settings writer. Workers read complete records using atomic replacement.
-export function createModelSettingsStore(directory: string) {
+export function createModelSettingsStore(directory: string, contracts: ModelSettingsContracts) {
+  const recordSchema = z.strictObject({
+    version: z.number().int().positive(),
+    configuration: contracts.modelSettingsInput.refine((value) => value.provider === 'simulated' || !!value.apiKey),
+  })
   const path = join(directory, 'settings.json')
   let writes: Promise<unknown> = Promise.resolve()
 
@@ -49,7 +49,7 @@ export function createModelSettingsStore(directory: string) {
     return write
   }
 
-  return { read, async status() { return view(await read()) }, save }
+  return { contracts, read, async status() { return view(await read()) }, save }
 }
 
 export function enabledModelSettings(store: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>,

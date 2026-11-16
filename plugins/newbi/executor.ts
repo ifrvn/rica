@@ -11,13 +11,15 @@ export async function startNewbiExecutor(connection: NewbiConnection, beforeRequ
   const definition: PluginDefinition<ReturnType<typeof createNewbiReplyExecutor>> = {
     ...newbiExecutorIdentity,
     requires: [credentialService],
-    validateConfig: (value) => newbiEndpoint.safeParse(value).success,
-    create(config) {
-      const stop = new AbortController()
-      return {
-        implementation: createNewbiReplyExecutor(newbiEndpoint.parse(config), credential,
-          signal ? AbortSignal.any([signal, stop.signal]) : stop.signal, beforeRequest),
-        stop: () => stop.abort(),
+    prepare(config) {
+      const endpoint = newbiEndpoint.parse(config)
+      return () => {
+        const stop = new AbortController()
+        return {
+          implementation: createNewbiReplyExecutor(endpoint, credential,
+            signal ? AbortSignal.any([signal, stop.signal]) : stop.signal, beforeRequest),
+          stop: () => stop.abort(),
+        }
       }
     },
   }

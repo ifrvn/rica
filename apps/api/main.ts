@@ -13,6 +13,7 @@ import { createNewbiOperations } from '@rica/plugin-newbi/operations'
 import { connectNewbiSettings } from '@rica/plugin-newbi/settings'
 import { startModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore } from '@rica/plugin-hosted-models/settings'
+import { modelSettingsContracts } from '../model-plugin-catalog.js'
 import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
@@ -40,7 +41,7 @@ const auth = managementConfig && managementDb ? createAdminAuth(managementDb, re
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
-const modelSettings = createModelSettingsStore(settingsDirectory)
+const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsContracts)
 const activeModel = async () => (await modelSettings.status()).provider
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,

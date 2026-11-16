@@ -14,8 +14,9 @@ import type { Component } from 'vue'
 import { newbiCard, type ConnectorCardStatus } from '@rica/plugin-newbi/console/card'
 import { newbiConsole } from '@rica/plugin-newbi/console/labels'
 import { newbiReview } from '@rica/plugin-newbi/console/review'
-import { hostedModelNames } from '@rica/plugin-hosted-models/catalog'
-import { hostedModelCards } from '@rica/plugin-hosted-models/console/cards'
+import { createModelCards } from '@rica/plugin-hosted-models/console/cards'
+import { modelHealth } from '@rica/plugin-hosted-models/console/health'
+import { modelPluginCatalog } from '../../../model-plugin-catalog.js'
 import type { DeploymentPluginId, DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 
 type PluginCard = {
@@ -29,7 +30,7 @@ type PluginCard = {
   upgradeQueue?(status?: ConnectorCardStatus): { label: string; status: string; count: number }[] | undefined
 }
 
-export const pluginCards: Record<DeploymentPluginId, PluginCard> = { [newbiConsole.id]: newbiCard, ...hostedModelCards }
+export const pluginCards: Record<DeploymentPluginId, PluginCard> = { [newbiConsole.id]: newbiCard, ...createModelCards(modelPluginCatalog) }
 export const pluginServiceNames = newbiConsole.serviceNames
 
 type AccountBase = Pick<ConnectorAccount, 'id' | 'platform' | 'instanceKey'> & { version?: number; status?: string }
@@ -71,6 +72,10 @@ export const platformReviews: readonly {
   workbench?(characterId: string, canManage: boolean): Promise<ReviewQueue[]>
 }[] = [newbiReview]
 
-export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, ...hostedModelNames }
-export { hostedModelHealth } from '@rica/plugin-hosted-models/console/health'
+const modelNames = Object.fromEntries(modelPluginCatalog.map(({ id, name }) => [id, name])) as
+  Record<(typeof modelPluginCatalog)[number]['id'], string>
+export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, ...modelNames }
+export function hostedModelHealth(status: Parameters<typeof modelHealth>[1], external: Parameters<typeof modelHealth>[2]) {
+  return modelHealth(modelPluginCatalog, status, external)
+}
 export { isSimulationPlatform } from '@rica/contracts/simulation-platform'

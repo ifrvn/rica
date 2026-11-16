@@ -1,6 +1,6 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import { versionHeader } from '@rica/contracts/management'
-import { modelCheckInput, modelCheckResult, modelCheckStatus, modelSettingsInput, modelSettingsView, type ModelCheckStatus } from './contracts.js'
+import { modelCheckInput, type ModelCheckStatus } from './contracts.js'
 import { checkModel } from './check.js'
 import { ModelSettingsError, type createModelSettingsStore } from './settings.js'
 import { ManagementError } from '../../packages/persistence/management.js'
@@ -12,6 +12,7 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
   isEnabled(provider: string): Promise<boolean>
   startModelPlugin: Parameters<typeof checkModel>[1]
 }): ManagementPlugin {
+  const { modelCheckResult, modelCheckStatus, modelSettingsInput, modelSettingsView } = modelSettings.contracts
   let checkingModel = false
   let latestModelCheck: { version: number; result: ModelCheckStatus } | undefined
 
@@ -70,7 +71,7 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
           || !await isEnabled(provider)) {
           throw new ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable and configure the model plugin first')
         }
-        const result = await checkModel({ ...configuration, provider }, startModelPlugin)
+        const result = await checkModel(configuration, startModelPlugin)
         const { reply: _reply, ...status } = result
         latestModelCheck = { version: expected, result: status }
         return c.json(result, 200)

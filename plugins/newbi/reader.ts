@@ -28,13 +28,15 @@ export async function startNewbiReader(connection: NewbiConnection, signal?: Abo
   const definition: PluginDefinition<ReturnType<typeof createNewbiReadClient>> = {
     ...newbiReaderIdentity,
     requires: [credentialService],
-    validateConfig: (value) => newbiEndpoint.safeParse(value).success,
-    create(config) {
-      const stop = new AbortController()
-      const requestSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
-      return {
-        implementation: createNewbiReadClient(newbiEndpoint.parse(config), credential, requestSignal, beforeRequest),
-        stop: () => stop.abort(),
+    prepare(config) {
+      const endpoint = newbiEndpoint.parse(config)
+      return () => {
+        const stop = new AbortController()
+        const requestSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
+        return {
+          implementation: createNewbiReadClient(endpoint, credential, requestSignal, beforeRequest),
+          stop: () => stop.abort(),
+        }
       }
     },
   }

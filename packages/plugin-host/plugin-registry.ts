@@ -2,15 +2,19 @@ type PluginIdentity = Readonly<{ id: string; version: string; contractVersion: n
 
 export type Plugin<T> = PluginIdentity & Readonly<{ implementation: T }>
 
+type PluginInstance<T> = Readonly<{
+  implementation: T
+  start?: () => void | Promise<void>
+  stop?: () => void | Promise<void>
+}>
+type CreatePlugin<T> = () => PluginInstance<T>
+
 export type PluginDefinition<T> = PluginIdentity & Readonly<{
   requires?: readonly string[]
-  validateConfig?: (value: unknown) => boolean
-  create(config: unknown): Readonly<{
-    implementation: T
-    start?: () => void | Promise<void>
-    stop?: () => void | Promise<void>
-  }>
-}>
+} & (
+  { create: CreatePlugin<T>; prepare?: never } |
+  { prepare: (config: unknown) => CreatePlugin<T>; create?: never }
+)>
 
 type Selection = Readonly<{ id: string; config?: unknown; optional?: boolean }>
 type Diagnostic = Readonly<{ kind: string; id: string; version?: string; code: string }>
@@ -39,23 +43,26 @@ export async function startPluginHost<T>(
 ) {
   const registered = indexPlugins(kind, definitions)
   const selected = new Set<string>()
-  const prepared: { definition: PluginDefinition<T>; config: unknown; optional: boolean }[] = []
+  const prepared: { definition: PluginDefinition<T>; create: CreatePlugin<T>; optional: boolean }[] = []
   for (const { id, config, optional = false } of selections) {
     const definition = registered.get(id)
     if (selected.has(id)) throw new PluginHostError({ kind, id: definition?.id ?? '(unregistered)', code: 'DUPLICATE_SELECTION' })
     selected.add(id)
-    let valid = false
-    try { valid = definition?.validateConfig ? definition.validateConfig(config) : config === undefined }
+    let create: CreatePlugin<T> | undefined
+    try {
+      if (definition?.prepare) create = definition.prepare(config)
+      else if (config === undefined && definition?.create) create = definition.create.bind(definition)
+    }
     catch { /* Configuration values are excluded from diagnostics. */ }
     const code = !definition ? 'UNKNOWN_PLUGIN'
-      : !valid ? 'INVALID_CONFIG'
+      : !create ? 'INVALID_CONFIG'
       : definition.requires?.some((service) => !options.services?.has(service)) ? 'MISSING_SERVICE' : null
-    if (!definition || code) {
+    if (!definition || !create || code) {
       const diagnostic = { kind, id: definition?.id ?? '(unregistered)', version: definition?.version, code: code ?? 'UNKNOWN_PLUGIN' }
       if (!optional) throw new PluginHostError(diagnostic)
       options.report?.(diagnostic)
     } else {
-      prepared.push({ definition, config, optional })
+      prepared.push({ definition, create, optional })
     }
   }
 
@@ -73,10 +80,10 @@ export async function startPluginHost<T>(
     })()
   }
 
-  for (const { definition, config, optional } of prepared) {
+  for (const { definition, create, optional } of prepared) {
     const { id, version, contractVersion } = definition
     try {
-      const instance = definition.create(config)
+      const instance = create()
       try { await instance.start?.() }
       catch (error) {
         try { await instance.stop?.() }
