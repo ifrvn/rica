@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "tsx --test settings.test.ts",
+    "test:integration": "node --env-file-if-exists=../../.env --import tsx --test management.integration.test.ts"
+  },
   "exports": {
     "./reader": "./reader.ts",
     "./executor": "./executor.ts",
@@ -10,7 +14,6 @@
     "./management": "./management.ts",
     "./operations": "./operations.ts",
     "./database": "./database.ts",
-    "./pilot": "./pilot.ts",
     "./console/ConnectorReview.vue": "./console/ConnectorReview.vue",
     "./console/ConnectorAccountStatus.vue": "./console/ConnectorAccountStatus.vue",
     "./console/NewbiAccountLabel.vue": "./console/NewbiAccountLabel.vue",

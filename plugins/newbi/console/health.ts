@@ -7,8 +7,8 @@ export function newbiHealth(status: { deployment?: { plugins: { newbi: string };
   external: (id: string, label: string, description: string, configured: boolean) => HealthNode) {
   const deployment = status?.deployment
   if (deployment?.plugins.newbi !== 'ENABLED') return { readers: [], executors: [], dependencies: [] }
-  const reader = processNode('connector-reader', '读取 Newbi 消息', '网页或命令行最近一次读取操作。账号读取记录可在平台账号池查看。')
-  const executor = processNode('connector-executor', '发送 Newbi 回复', '网页或命令行最近一次发送操作。回执与待核对结果可在审批页查看。')
+  const reader = processNode('connector-reader', '读取 Newbi 消息', '最近一次读取操作。账号读取记录可在平台账号池查看。')
+  const executor = processNode('connector-executor', '发送 Newbi 回复', '最近一次发送操作。回执与待核对结果可在审批页查看。')
   const configured = !!deployment?.newbi.endpoint
   const read = external('newbi-read', 'Newbi 读取 API', '按当前角色已启用的账号汇总。可在平台账号池查看每个账号的读取结果。', configured)
   const write = external('newbi-write', 'Newbi 发送 API', '依据当前角色的发送结果。可在审批页查看对应的 Newbi 回执。', configured)

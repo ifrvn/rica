@@ -15,9 +15,12 @@ jobs:
       - run: pnpm run db:generate
       - run: pnpm run typecheck
       - run: pnpm test
+      - run: pnpm --filter @rica/plugin-hosted-models test
+      - run: pnpm --filter @rica/plugin-newbi test
       - run: pnpm run build
       - run: docker compose up -d --wait
       - run: pnpm run db:migrate
       - run: pnpm run test:integration
+      - run: pnpm --filter @rica/plugin-newbi run test:integration
       - if: always()
         run: docker compose down

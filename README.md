@@ -120,6 +120,14 @@ pnpm run test:integration
 
 集成测试使用独立的已迁移 PostgreSQL 和 Redis，运行自带的身份和平台夹具，可以验证审批及回执全链路。请为测试设置专用 `DATABASE_URL` 和 `REDIS_URL`。`pnpm run build` 生成控制台静态文件，位于 `apps/admin/dist`。
 
+插件测试通过对应工作区运行。
+
+```powershell
+pnpm --filter @rica/plugin-hosted-models test
+pnpm --filter @rica/plugin-newbi test
+pnpm --filter @rica/plugin-newbi run test:integration
+```
+
 版本切换使用新的开发数据库和 Redis 队列，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供控制台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
 
 ## 代码入口

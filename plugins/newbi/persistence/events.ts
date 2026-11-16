@@ -1,5 +1,4 @@
 import { newbiReadError, type NewbiReadError } from '../contracts.js'
-import { setTimeout as sleep } from 'node:timers/promises'
 import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '@rica/contracts/platform-reader'
 import type { RawQueryClient } from '../../../packages/persistence/client.js'
 
@@ -57,17 +56,4 @@ export async function pollNewbiEvents(db: RawQueryClient, reader: PlatformEventR
 
   const result = await finish(claim, page, page.hasMore ? 1 : interval)
   return result ? { status: 'READ', ...result } : { status: 'STOPPED' }
-}
-
-export async function runNewbiEventPoller(
-  db: RawQueryClient, reader: PlatformEventReader, accountId: string, report: (result: PollResult) => void, stop?: AbortSignal,
-) {
-  for (let check = 0; check < (stop ? 100 : 1) && !stop?.aborted; check++) {
-    const result = await pollNewbiEvents(db, reader, accountId, stop)
-    report(result)
-    if (!stop || result.status === 'STOPPED') return
-    const delay = Math.min(2_147_483_647, Math.max(1, Date.parse(result.nextAt) - Date.now()))
-    try { await sleep(delay, undefined, { signal: stop }) }
-    catch (error) { if (!stop.aborted) throw error }
-  }
 }
