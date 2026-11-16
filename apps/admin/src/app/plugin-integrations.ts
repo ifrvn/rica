@@ -1,23 +1,19 @@
 import type { z } from '@hono/zod-openapi'
-import type { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@rica/plugin-newbi/contracts'
-import { newbiAccounts } from '@rica/plugin-newbi/console/account-integration'
+import type { Component } from 'vue'
+import type { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@rica/plugin-newbi/shared'
+import { newbiAccounts, newbiCard, newbiConsole, newbiReview, type ConnectorCardStatus } from '@rica/plugin-newbi/console'
+import { createModelCards, modelHealth } from '@rica/plugin-hosted-models/console'
+import { modelPluginCatalog } from '../../../model-plugin-catalog.js'
+import type { DeploymentPluginId, DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 
 export type ConnectorAccount = z.infer<typeof newbiAccountView>
 export type ConnectorRegistration = z.infer<typeof newbiAccountRegistrationView>
 export type ConsoleWorkspace = z.infer<typeof newbiCharacterWorkspaceView>
 
-export { registrationAvailable } from '@rica/plugin-newbi/console/card'
-export { newbiAuditLabels as pluginAuditLabels } from '@rica/plugin-newbi/console/labels'
-export { newbiHealth as platformHealth, isNewbiReadNode as hasAccountHealthLink } from '@rica/plugin-newbi/console/health'
-
-import type { Component } from 'vue'
-import { newbiCard, type ConnectorCardStatus } from '@rica/plugin-newbi/console/card'
-import { newbiConsole } from '@rica/plugin-newbi/console/labels'
-import { newbiReview } from '@rica/plugin-newbi/console/review'
-import { createModelCards } from '@rica/plugin-hosted-models/console/cards'
-import { modelHealth } from '@rica/plugin-hosted-models/console/health'
-import { modelPluginCatalog } from '../../../model-plugin-catalog.js'
-import type { DeploymentPluginId, DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
+export {
+  registrationAvailable, newbiAuditLabels as pluginAuditLabels,
+  newbiHealth as platformHealth, isNewbiReadNode as hasAccountHealthLink,
+} from '@rica/plugin-newbi/console'
 
 type PluginCard = {
   description: string; editor: Component; inlineEditor?: boolean; upgradeStep?: string; invalidSettings?: string

@@ -1,5 +1,5 @@
 import { Redis } from 'ioredis'
-import { newbiCatalog } from '@rica/plugin-newbi/catalog'
+import { newbiCatalog } from '@rica/plugin-newbi/shared'
 import { pluginDiagnostic, pluginReport, type PluginDiagnostic, type PluginMetadata,
   type PluginReport, type PluginService } from '../packages/contracts/plugin-status.js'
 import { PluginHostError } from '@rica/plugin-host'

@@ -1,4 +1,4 @@
-import type { ModelCheckStatus } from '../contracts.js'
+import type { ModelCheckStatus } from '../management/contracts.js'
 
 export const modelCheckLabels: Record<ModelCheckStatus['status'], string> = {
   OK: '模型已返回回复',

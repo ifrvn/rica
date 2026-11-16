@@ -12,9 +12,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": {
-    "./management": "./management.ts"
-  },
+  "exports": "./index.ts",
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3"
   }
@@ -23,7 +21,7 @@
 
 ## 实现后端
 
-创建 `plugins/demo-echo/management.ts`。这里的 `db` 由启动入口传入。预览操作只读取角色授权。
+创建 `plugins/demo-echo/index.ts`。这里的 `db` 由启动入口传入。预览操作只读取角色授权。
 
 ```ts
 import { createRoute, z } from '@hono/zod-openapi'
@@ -61,7 +59,7 @@ export function createDemoEcho(db: PrismaClient): ManagementPlugin {
 }
 ```
 
-在 `apps/api/main.ts` 增加 `import { createDemoEcho } from '@rica/plugin-demo-echo/management'`，再将 `createDemoEcho(managementDb)` 加到 `createManagementApp({ ..., plugins: [...] })` 的列表。管理 API 启用时，宿主会把插件路由挂在 `/v1` 下。
+在 `apps/api/main.ts` 增加 `import { createDemoEcho } from '@rica/plugin-demo-echo'`，再将 `createDemoEcho(managementDb)` 加到 `createManagementApp({ ..., plugins: [...] })` 的列表。管理 API 启用时，宿主会把插件路由挂在 `/v1` 下。
 
 ## 发请求
 
@@ -83,7 +81,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createManagementApp } from '../../apps/api/management.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { createDemoEcho } from './management.js'
+import { createDemoEcho } from './index.js'
 
 test('echo preview requires an authenticated role administrator', async () => {
   const origin = 'http://localhost:5173'

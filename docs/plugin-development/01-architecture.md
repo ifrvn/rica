@@ -24,7 +24,7 @@
 
 ## 建包和装配
 
-1. 在 `plugins/<plugin-name>/` 新建私有 ESM 包。包名用 `@rica/plugin-<plugin-name>`。按实际用途建立 `index.ts`、`contracts.ts`、`management.ts`、`settings.ts`、`persistence/` 或 `console/`，并在 `package.json` 的 `exports` 中公开宿主需要的入口。
+1. 在 `plugins/<plugin-name>/` 新建私有 ESM 包。包名用 `@rica/plugin-<plugin-name>`。在 `index.ts` 集中导出服务端使用的接口，`package.json` 的根入口指向该文件。需要跨服务端和浏览器共享契约时增加 `/shared`，需要挂载界面时增加 `/console`。每个入口只导出宿主实际使用的内容。
 2. 在插件清单声明本包直接使用的依赖，内部工作区包使用 `workspace:*`。宿主的依赖声明位于仓库根目录的 [package.json](../../package.json)。新插件路径已包含在 [pnpm 工作区](../../pnpm-workspace.yaml)及 TypeScript 检查范围中。
 3. 在 [运行时装配](../../apps/runtime-plugins.ts)、[管理 API 入口](../../apps/api/main.ts)、[部署目录](../../apps/deployment-plugin-contracts.ts)和[控制台装配](../../apps/admin/src/app/plugin-integrations.ts)中登记实际提供的能力。专用协议、文案、表单和持久化代码放在插件包内。
 4. 修改依赖后运行 `pnpm install` 更新根锁文件，再用 `pnpm install --frozen-lockfile` 验证。

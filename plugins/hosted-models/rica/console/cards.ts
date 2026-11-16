@@ -1,4 +1,4 @@
-import type { PluginMetadata } from '../../../packages/contracts/plugin-status.js'
+import type { PluginMetadata } from '../../../../packages/contracts/plugin-status.js'
 import type { ModelPluginOption } from '@rica/contracts/model-provider'
 import ModelSettings from './ModelSettings.vue'
 

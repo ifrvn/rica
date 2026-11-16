@@ -1,6 +1,6 @@
 import type { HealthNode } from '@rica/console-shared/health'
-import type { PluginReport } from '../../../packages/contracts/plugin-status.js'
-import type { ModelCheckStatus } from '../contracts.js'
+import type { PluginReport } from '../../../../packages/contracts/plugin-status.js'
+import type { ModelCheckStatus } from '../management/contracts.js'
 import type { ModelPluginOption } from '@rica/contracts/model-provider'
 import { modelCheckLabels } from './labels.js'
 

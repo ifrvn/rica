@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { ModelSettingsContracts, ModelSettingsInput, ModelSettingsView } from './contracts.js'
-import { writeSettings } from '../../packages/runtime/write-settings.js'
+import { writeSettings } from '../../../../packages/runtime/write-settings.js'
 
 type Record = { version: number; configuration: ModelSettingsInput }
 

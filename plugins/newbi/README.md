@@ -6,6 +6,8 @@ Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单页只�
 
 ## 代码从哪里看起
 
+包的入口见 [服务端 index.ts](index.ts)、[共用契约和目录](rica/shared.ts)及[控制台 index.ts](rica/console/index.ts)。
+
 | 要改的内容 | 入口 |
 | --- | --- |
 | 扭笔 Agent API 的请求路径、鉴权、分页、响应校验和错误 | [agent-api/client.ts](agent-api/client.ts) · [连接校验](agent-api/connection.ts) |

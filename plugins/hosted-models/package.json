@@ -4,19 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tsx --test providers.test.ts model-settings.test.ts"
+    "test": "tsx --test tests/providers.test.ts tests/model-settings.test.ts"
   },
   "exports": {
     ".": "./index.ts",
-    "./console/ModelSettings.vue": "./console/ModelSettings.vue",
-    "./console/labels": "./console/labels.ts",
-    "./check": "./check.ts",
-    "./catalog": "./catalog.ts",
-    "./console/cards": "./console/cards.ts",
-    "./contracts": "./contracts.ts",
-    "./settings": "./settings.ts",
-    "./management": "./management.ts",
-    "./console/health": "./console/health.ts"
+    "./shared": "./rica/shared.ts",
+    "./console": "./rica/console/index.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",

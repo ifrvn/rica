@@ -1,7 +1,6 @@
 import { z } from '@hono/zod-openapi'
-import { newbiDeployment } from '@rica/plugin-newbi/catalog'
+import { newbiConfiguration, newbiDeployment } from '@rica/plugin-newbi/shared'
 import { modelPluginCatalog } from './model-plugin-catalog.js'
-import { newbiConfiguration } from '@rica/plugin-newbi/settings'
 import { pluginStage } from '../packages/contracts/deployment-plugins.js'
 
 const modelDeployments = modelPluginCatalog.map(({ id }) => ({

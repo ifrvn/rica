@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { UiAlert, UiButton, UiField, UiSpinner } from '@rica/console-shared/ui'
 import type { ModelPluginOption } from '@rica/contracts/model-provider'
-import { createModelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../contracts.js'
+import { createModelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../management/contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
 import { modelCheckLabels } from './labels.js'

@@ -1,19 +1,6 @@
 import { z } from 'zod'
 import type { ModelPluginOption } from '@rica/contracts/model-provider'
-
-const model = z.string().trim().min(1).max(160).regex(/^[\w./:-]+$/)
-const apiKey = z.string().trim().min(1).max(4096).regex(/^[\x21-\x7e]+$/)
-const baseUrl = z.url({ protocol: /^https$/ }).max(2048).refine((value) => {
-  if (!URL.canParse(value)) return false
-  const url = new URL(value)
-  return !url.username && !url.password && !url.search && !url.hash
-}).transform((value) => new URL(value).href.replace(/\/+$/, ''))
-
-export const modelSettingsFields = {
-  model: model.optional(),
-  apiKey: apiKey.optional(),
-  baseUrl: baseUrl.optional(),
-}
+import { modelSettingsFields } from '../../providers/config.js'
 
 export function createModelSettingsContracts(catalog: readonly ModelPluginOption[]) {
   const options = new Map(catalog.map((option) => [option.id, option]))

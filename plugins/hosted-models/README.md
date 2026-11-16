@@ -2,6 +2,13 @@
 
 [宿主请求约定与 PowerShell 会话](../../docs/plugin-development/03-management.md#建立-powershell-会话)
 
+## 代码入口
+
+- [providers/](providers/) 负责提供方地址、配置校验、HTTP 请求和响应解析。
+- [rica/model.ts](rica/model.ts) 组装角色提示和公开证据，将提供方回复转换为 Rica 草稿。
+- [rica/management/](rica/management/) 负责配置存储、管理路由和连接测试，[rica/console/](rica/console/) 负责控制台设置与健康状态。
+- [index.ts](index.ts) 提供服务端入口，[shared](rica/shared.ts) 提供共用契约和提供方目录，[console](rica/console/index.ts) 提供控制台入口。
+
 ## 管理 HTTP API
 
 | 方法与路径 | 权限 | 请求 | 成功响应 |

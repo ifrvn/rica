@@ -1,10 +1,9 @@
 import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
-import type { ModelSettingsInput } from '@rica/plugin-hosted-models/contracts'
-import type { createModelSettingsStore } from '@rica/plugin-hosted-models/settings'
+import type { ModelSettingsInput } from '@rica/plugin-hosted-models/shared'
 import type { ModelProvider } from '@rica/contracts/model-provider'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
-import { hostedModelDefinitions } from '@rica/plugin-hosted-models'
+import { hostedModelDefinitions, type createModelSettingsStore } from '@rica/plugin-hosted-models'
 import { simulatedPlatformDefinitions } from '@rica/plugin-simulated-platforms'
 
 import type { PluginMetadata } from '../packages/contracts/plugin-status.js'

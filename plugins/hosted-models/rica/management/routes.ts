@@ -3,8 +3,8 @@ import { versionHeader } from '@rica/contracts/management'
 import { modelCheckInput, type ModelCheckStatus } from './contracts.js'
 import { checkModel } from './check.js'
 import { ModelSettingsError, type createModelSettingsStore } from './settings.js'
-import { ManagementError } from '../../packages/persistence/management.js'
-import { body, errors, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '../../packages/runtime/management-http.js'
+import { ManagementError } from '../../../../packages/persistence/management.js'
+import { body, errors, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '../../../../packages/runtime/management-http.js'
 
 export function createHostedModelManagement({ modelSettings, authorize, isEnabled, startModelPlugin }: {
   modelSettings: ReturnType<typeof createModelSettingsStore>
