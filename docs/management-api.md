@@ -50,7 +50,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 
 以下 `/c` 表示 `/v1/characters/{characterId}`。
 
-插件专用接口见 [Newbi API](../plugins/newbi/api.md) 和[外部模型 API](../plugins/hosted-models/README.md)。
+插件专用接口见 [Rica 的 Newbi 管理 API](../plugins/newbi/rica/management/api.md) 和[外部模型 API](../plugins/hosted-models/README.md)。
 
 | 入口 | 权限与操作 |
 | --- | --- |

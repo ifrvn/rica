@@ -1,8 +1,21 @@
 # Newbi 插件手册
 
-[管理 HTTP API](api.md) · [服务端装配接口](integration.md)
+[Rica 管理 API](rica/management/api.md) · [Rica 服务端装配](rica/integration.md)
 
 Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单页只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi 并保存 API 接入点。每个 Agent 的密钥在平台账号池单独核验和保存。插件复用宿主的 `DATABASE_URL`，按 Rica 账号或提案取得对应密钥。
+
+## 代码从哪里看起
+
+| 要改的内容 | 入口 |
+| --- | --- |
+| 扭笔 Agent API 的请求路径、鉴权、分页、响应校验和错误 | [agent-api/client.ts](agent-api/client.ts) · [连接校验](agent-api/connection.ts) |
+| Rica 如何启动读取与发送、转换 Agent API 错误 | [rica/runtime/](rica/runtime/) · [平台适配器](rica/runtime/agent-adapter.ts) |
+| Rica 的启停、部署配置、插件目录 | [rica/deployment/](rica/deployment/) |
+| Rica 管理路由、请求与响应、操作装配 | [rica/management/](rica/management/) |
+| Rica 账号绑定、事件游标、发送许可与回执 | [rica/persistence/](rica/persistence/) |
+| Rica 管理台的配置、账号和审批界面 | [rica/console/](rica/console/) |
+
+`agent-api/` 只包含 Agent API 协议代码。一次读取或发送从 [Rica 管理操作](rica/management/operations.ts) 进入，经 [数据库连接与账号凭证](rica/persistence/database.ts) 启动相应的运行时组件，最后由 Agent API 客户端发出 HTTP 请求。
 
 ## 绑定与发言
 
