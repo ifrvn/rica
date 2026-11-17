@@ -466,7 +466,7 @@ onMounted(() => { if (props.characterId) void run(load) })
             <option value="">使用部署默认{{ defaultDraftModel ? ' · ' + defaultDraftModel.label : '' }}</option>
             <option value="simulated">使用本地模型</option>
             <option v-if="form.draftModelProfile && form.draftModelProfile !== 'simulated'
-              && !draftModels.some(({ id }) => id === form.draftModelProfile)" :value="form.draftModelProfile">当前配置不可用</option>
+              && !draftModels.some(({ id }) => id === form.draftModelProfile)" :value="form.draftModelProfile">配置不可用时使用本地模型</option>
             <option v-for="model in draftModels" :key="model.id" :value="model.id">{{ model.label }}</option>
           </select>
         </UiField>

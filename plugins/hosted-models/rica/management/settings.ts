@@ -88,13 +88,21 @@ export function createModelSettingsStore(directory: string, contracts: ModelSett
     })
   }
 
+  function remove(id: string, expected: number) {
+    return update(expected, (current) => {
+      if (!Object.hasOwn(current.profiles, id)) throw new ModelSettingsError('MODEL_NOT_CONFIGURED')
+      delete current.profiles[id]
+      if (current.defaultProfileId === id) current.defaultProfileId = null
+    })
+  }
+
   async function read(selection?: string): Promise<ActiveSettings> {
     const { defaultProfileId, profiles } = await readSettings()
     const id = selection ?? defaultProfileId
     return id && Object.hasOwn(profiles, id) ? profiles[id]! : { version: 0, configuration: simulated }
   }
 
-  return { contracts, read, readSettings, async status() { return view(await readSettings()) }, save, activate }
+  return { contracts, read, readSettings, async status() { return view(await readSettings()) }, save, activate, remove }
 }
 
 export function enabledModelSettings(store: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>,

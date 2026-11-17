@@ -136,30 +136,29 @@ function changeStage(id: DeploymentPluginId) {
           </li>
         </ul>
 
-        <div v-if="deployment.plugins[id] === 'ENABLED'" class="plugin-integration">
-          <span>{{ cards[id].summary(deployment) }}</span>
+        <div v-if="deployment.plugins[id] === 'ENABLED' || canConfigureModel
+          || (deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id))" class="plugin-integration">
+          <span v-if="deployment.plugins[id] === 'ENABLED'">{{ cards[id].summary(deployment) }}</span>
           <div class="console-actions">
-            <UiButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" variant="soft"
+            <UiButton v-if="canConfigureModel && deployment.plugins[id] === 'ENABLED'" :id="'configure-plugin-' + id" size="small" variant="soft"
               :aria-expanded="editing === id" :aria-controls="editing === id ? 'plugin-config-' + id : undefined"
               :disabled="busy || loading" @click="toggleEditor(id)">
-              {{ cards[id].configureLabel(deployment) }}
+              {{ editing === id ? '收起配置' : cards[id].configureLabel(deployment) }}
             </UiButton>
-            <UiButton v-if="cards[id].accountLink?.(status)" size="small" variant="soft" @click="emit('accounts')">前往平台账号池</UiButton>
+            <UiButton v-if="deployment.plugins[id] === 'ENABLED' && cards[id].accountLink?.(status)"
+              size="small" variant="soft" @click="emit('accounts')">前往平台账号池</UiButton>
+            <UiButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id)"
+              :id="'plugin-release-toggle-' + id" size="small" variant="quiet"
+              :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
+              {{ releasePreview === id ? '收起版本检查' : upgrades.has(id) ? '检查升级' : '核对运行版本' }}
+            </UiButton>
+            <UiButton v-if="canConfigureModel" size="small" :tone="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
+              :variant="deployment.plugins[id] === 'ENABLED' ? 'quiet' : 'solid'" :disabled="busy || loading"
+              :loading="busy && changedPlugin === id && editing !== id" @click="changeStage(id)">
+              {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装 ' + labels[id]
+                : deployment.plugins[id] === 'INSTALLED' ? '启用 ' + labels[id] : '停用 ' + labels[id] }}
+            </UiButton>
           </div>
-        </div>
-
-        <div v-if="canConfigureModel || (deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id))" class="console-actions">
-          <UiButton v-if="canConfigureModel" size="small" :tone="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
-            :variant="deployment.plugins[id] === 'ENABLED' ? 'soft' : 'solid'" :disabled="busy || loading"
-            :loading="busy && changedPlugin === id && editing !== id" @click="changeStage(id)">
-            {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装 ' + labels[id]
-              : deployment.plugins[id] === 'INSTALLED' ? '启用 ' + labels[id] : '停用 ' + labels[id] }}
-          </UiButton>
-          <UiButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id)"
-            :id="'plugin-release-toggle-' + id" size="small" variant="soft"
-            :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
-            {{ releasePreview === id ? '收起版本检查' : upgrades.has(id) ? '检查升级' : '核对运行版本' }}
-          </UiButton>
         </div>
 
         <section v-if="releasePreview === id && deployment.plugins[id] !== 'NOT_INSTALLED'

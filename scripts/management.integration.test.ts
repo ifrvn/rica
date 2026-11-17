@@ -2457,6 +2457,22 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   assert.deepEqual(upstream.mock.calls.map(({ arguments: [url] }) => url), [
     'https://shared.example/v1/chat/completions', 'https://separate.example/v1/chat/completions', 'https://shared.example/v1/chat/completions',
   ])
+  const sharedIdentity = await owner.identity.findFirstOrThrow({
+    where: { characterId: firstRole, slug: 'model-persona-0' },
+  })
+  const identityPath = characterPath(firstRole) + '/identities/' + sharedIdentity.id
+  await models.remove(shared.id, 2)
+  modelProfileIds.delete(shared.id)
+  const renamed = await request('PUT', identityPath, {
+    ifMatch: '"1"', data: { roleProfile: { displayName: 'Renamed', draftModelProfile: shared.id } },
+  })
+  assert.equal(renamed.status, 200)
+  const denied = await request('PUT', identityPath, {
+    actor: 'admin-b', ifMatch: '"2"', data: { roleProfile: { draftModelProfile: shared.id } },
+  })
+  assert.equal(denied.status, 404)
+  assert.equal((await loader.read(shared.id)).id, 'simulated')
+  assert.equal((await loader.read(separate.id)).implementation.hostedModel, separate.model)
 })
 
 test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { timeout: 35_000 }, async () => {

@@ -48,6 +48,9 @@ async function fixture(t: TestContext, managePlugins = false) {
   const put = (body: unknown, version: number, user = 'creator', requestOrigin = origin) => change(path, body, version, user, requestOrigin)
   const pluginChange = (body: unknown, version: number, user = 'creator') => change('/deployment-plugins', body, version, user)
   const activate = (id: string | null, version: number, user = 'creator') => change(path + '/active', { id }, version, user)
+  const remove = (id: string, version: number, user = 'creator') => app.request(path + '/' + id, {
+    method: 'DELETE', headers: { 'If-Match': '"' + version + '"', 'X-Test-User': user, Origin: origin },
+  })
   const check = (id: string, version: number, user = 'creator') => app.request(path + '/check', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Test-User': user, Origin: origin },
     body: JSON.stringify({ id, version }),
@@ -55,7 +58,7 @@ async function fixture(t: TestContext, managePlugins = false) {
   const health = () => app.request('/characters/10000000-0000-4000-8000-000000000001/plugins', {
     headers: { 'X-Test-User': 'role-admin' },
   })
-  return { directory, get, put, pluginChange, plugins, store, activate, check, health }
+  return { directory, get, put, pluginChange, plugins, store, activate, remove, check, health }
 }
 
 test('only the deployment operator can manage model profiles and responses omit all keys', async (t) => {
@@ -198,4 +201,26 @@ test('the single saved model survives conversion to named profiles without expos
   assert.equal((await put({ name: 'New', provider: 'gemini', model: 'fixture-gemini', apiKey: 'gemini-key' }, 4)).status, 200)
   assert.equal((await store.read()).configuration.apiKey, secret)
   assert.equal((await store.status()).profiles.length, 2)
+})
+
+test('only the operator can remove a current profile and only that profile falls back to local drafting', async (t) => {
+  const { put, activate, remove, store, health } = await fixture(t)
+  const { profiles: [first] } = await (await put(openai, 0)).json()
+  const { profiles: [, second] } = await (await put({ ...openai, name: 'Other', apiKey: 'other-key' }, 1)).json()
+  assert.equal((await activate(first.id, 2)).status, 200)
+  assert.equal((await remove(first.id, 3, 'role-admin')).status, 403)
+  assert.equal((await remove(first.id, 2)).status, 412)
+  assert.equal((await store.read(first.id)).configuration.apiKey, secret)
+
+  const removed = await remove(first.id, 3)
+  assert.equal(removed.status, 200)
+  const { version, defaultProfileId, profiles } = await removed.json()
+  assert.equal(version, 4)
+  assert.equal(defaultProfileId, null)
+  assert.deepEqual(profiles, [second])
+  assert.equal((await store.read()).configuration.provider, 'simulated')
+  assert.equal((await store.read(first.id)).configuration.provider, 'simulated')
+  assert.equal((await store.read(second.id)).configuration.apiKey, 'other-key')
+  assert.equal(Object.hasOwn((await store.readSettings()).profiles, first.id), false)
+  assert.deepEqual((await (await health()).json()).modelProfiles.map(({ id }: { id: string }) => id), [second.id])
 })

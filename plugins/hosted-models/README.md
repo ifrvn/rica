@@ -16,6 +16,7 @@
 | `GET /v1/model-settings` | 本地部署管理员 | 无 | 200，模型设置视图。 |
 | `PUT /v1/model-settings` | 本地部署管理员 | 版本。传入下表字段，省略 `id` 时添加新配置。 | 200，模型设置视图。 |
 | `PUT /v1/model-settings/active` | 本地部署管理员 | 版本。传入 `{ id }`，用保存后的配置 ID 设置部署默认，传 `null` 则默认使用本地模型。 | 200，模型设置视图。 |
+| `DELETE /v1/model-settings/{id}` | 本地部署管理员 | 版本。移除指定配置及密钥，如果它是部署默认则切回本地模型。 | 200，模型设置视图。 |
 | `POST /v1/model-settings/check` | 本地部署管理员 | `{ id, version }`，测试指定配置。 | 200，测试结果。 |
 
 | 模型设置字段 | 要求 |
@@ -29,7 +30,7 @@
 
 设置视图包含 `version`、`defaultProfileId` 和 `profiles`。每条配置返回 `id`、`name`、`provider`、`model`、`baseUrl` 和 `hasKey`。测试结果包含 `id`、`provider`、`checkedAt`、`status` 和 `reply`。时间采用 ISO 格式，回复为最多 500 字符或 `null`。`status` 为 `OK`、`AUTH_FAILED`、`RATE_LIMITED`、`MODEL_UNAVAILABLE`、`CONNECTION_FAILED`、`INVALID_OUTPUT` 或 `PROVIDER_ERROR`。HTTP 200 表示测试已完成，需读取结果状态。
 
-在身份的「公开草稿模型」字段选择已保存的配置。API 字段 `roleProfile.draftModelProfile` 接受配置 ID 或 `simulated`，省略时使用部署默认。多个身份可以选择同一份配置，修改该配置会影响所有引用它的身份。需要独立修改时，在插件卡片内新建一份配置。私密模拟草稿始终使用本地模型。
+在身份的「公开草稿模型」字段选择已保存的配置。API 字段 `roleProfile.draftModelProfile` 接受配置 ID 或 `simulated`，省略时使用部署默认。多个身份可以选择同一份配置，修改该配置会影响所有引用它的身份。需要独立修改时，在插件卡片内新建一份配置。移除配置后，仍引用它的身份后续使用本地模型，直到重新指定配置。私密模拟草稿始终使用本地模型。
 
 ## 配置与测试
 

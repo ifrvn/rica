@@ -1,5 +1,5 @@
-import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
-import { versionHeader } from '@rica/contracts/management'
+import { createRoute, z, type OpenAPIHono } from '@hono/zod-openapi'
+import { resourceId, versionHeader } from '@rica/contracts/management'
 import type { ModelCheckStatus, ModelSettingsView } from './contracts.js'
 import { checkModel } from './check.js'
 import { ModelSettingsError, type createModelSettingsStore } from './settings.js'
@@ -76,6 +76,22 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
     })
 
     app.openapi(createRoute({
+      method: 'delete', path: '/model-settings/{id}', security,
+      request: { params: z.object({ id: resourceId }), headers: versionHeader },
+      responses: { ...errors, 200: success(modelSettingsView) },
+    }), async (c) => {
+      const actor = c.get('actor')
+      authorize(actor)
+      const { id } = c.req.valid('param')
+      const expected = version(c.req.valid('header'))
+      const saved = await update(() => modelSettings.remove(id, expected))
+      modelChecks.delete(id)
+      console.info(JSON.stringify({ service: 'api', event: 'model_profile_removed', actorId: actor.id,
+        requestId: c.get('requestId'), version: saved.version, profileId: id }))
+      return c.json(saved, 200)
+    })
+
+    app.openapi(createRoute({
       method: 'post', path: '/model-settings/check', security,
       request: { body: body(modelCheckInput) },
       responses: { ...errors, 200: success(modelCheckResult) },
@@ -94,7 +110,9 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
         if (!saved) throw new ManagementError(409, 'MODEL_NOT_CONFIGURED', 'Save the provider settings first')
         const result = await checkModel(saved.configuration, startModelPlugin)
         const { reply: _reply, ...status } = result
-        modelChecks.set(id, { version: saved.version, result: { ...status, id } })
+        if ((await modelSettings.readSettings()).profiles[id]?.version === saved.version) {
+          modelChecks.set(id, { version: saved.version, result: { ...status, id } })
+        }
         return c.json({ ...result, id }, 200)
       } finally {
         checkingModel = false

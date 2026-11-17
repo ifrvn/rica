@@ -49,8 +49,8 @@ function runVersion(header: string) {
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
   activeModel = async () => 'simulated', modelProfileExists = async () => false, deploymentPlugins, plugins = [] }: Options) {
-  async function validateDraftModel(profile?: string) {
-    if (profile && profile !== 'simulated' && !await modelProfileExists(profile)) {
+  async function validateDraftModel(profile?: string, retained?: () => Promise<boolean>) {
+    if (profile && profile !== 'simulated' && !await modelProfileExists(profile) && !await retained?.()) {
       throw new management.ManagementError(422, 'MODEL_NOT_CONFIGURED', 'Draft model profile is unavailable')
     }
   }
@@ -59,7 +59,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     defaultHook: (result, c) => {
       if (!result.success) {
         const requestId = c.get('requestId')
-        if (result.target === 'header' && (c.req.method === 'PUT' || /\/(decisions|reconciliation)$/.test(c.req.path))
+        if (result.target === 'header' && (c.req.method === 'PUT' || c.req.method === 'DELETE' || /\/(decisions|reconciliation)$/.test(c.req.path))
           && c.req.header('If-Match') === undefined) {
           return c.json(error(requestId, 'VERSION_REQUIRED', 'If-Match is required'), 428)
         }
@@ -235,7 +235,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'identity.update', targetScope: characterId + '/' + identityId, input: { input, expected }, requestId,
     }, async (tx) => {
-      await validateDraftModel(input.roleProfile.draftModelProfile)
+      await validateDraftModel(input.roleProfile.draftModelProfile, async () => {
+        const previous = await tx.identityVersion.findUnique({
+          where: { characterId_identityId_version: { characterId, identityId, version: expected } },
+          select: { roleProfile: true },
+        })
+        return schema.identityProfile.safeParse(previous?.roleProfile).data?.draftModelProfile === input.roleProfile.draftModelProfile
+      })
       return management.updateIdentity(tx, scope, identityId, expected, input)
     })
     return c.json({ ...result, requestId }, 200)
