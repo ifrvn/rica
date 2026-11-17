@@ -22,7 +22,7 @@
 | --- | --- |
 | `id` | 编辑已有配置时必填。 |
 | `name` | 配置名称，去首尾空白后 1–80 字符。 |
-| `provider` | 必填。取 `openai`、`anthropic`、`gemini` 或 `openai-compatible`。已有配置的接入类型固定。 |
+| `provider` | 必填。取 `openai`、`anthropic`、`gemini`、`deepseek` 或 `openai-compatible`。已有配置的接入类型固定。 |
 | `model` | 必填。去首尾空白后 1–160 字符，只允许字母、数字、下划线、点、斜线、冒号和连字符。 |
 | `apiKey` | 编辑同一份配置且地址未改变时可复用这份配置的密钥。新配置提供 1–4096 个可见 ASCII 字符。 |
 | `baseUrl` | 仅 `openai-compatible` 必填。HTTPS 地址，最长 2048 字符，无用户信息、查询参数或片段。可包含 API 版本路径。 |
@@ -32,6 +32,8 @@
 在身份的「公开草稿模型」字段选择已保存的配置。API 字段 `roleProfile.draftModelProfile` 接受配置 ID 或 `simulated`，省略时使用部署默认。多个身份可以选择同一份配置，修改该配置会影响所有引用它的身份。需要独立修改时，在插件卡片内新建一份配置。私密模拟草稿始终使用本地模型。
 
 ## 配置与测试
+
+选择 DeepSeek 时使用官方 Chat Completions 地址，填入模型 ID（例如 `deepseek-flash`）和 API 密钥即可。草稿和连接测试使用非思考模式，给回复正文保留输出预算。[DeepSeek API 文档](https://api-docs.deepseek.com/api/create-chat-completion/)
 
 先对 `id = 'hosted-models'` 执行[安装和启用步骤](../../docs/plugin-development/03-management.md#部署与插件状态)。所有提供方共用该插件的部署状态。在授权的测试环境中使用所选提供方允许的模型 ID 和密钥，核验会调用供应商 API。
 

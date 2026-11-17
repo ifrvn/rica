@@ -54,6 +54,7 @@ function request(id: HostedModel['id'], { url, model, key }: HostedModelConfig, 
     body: {
       model,
       ...(id === 'openai' ? { max_completion_tokens: maxTokens, store: false } : { max_tokens: maxTokens }),
+      ...(id === 'deepseek' ? { thinking: { type: 'disabled' } } : {}),
       messages: [{ role: id === 'openai' ? 'developer' : 'system', content: system }, message],
     },
   }

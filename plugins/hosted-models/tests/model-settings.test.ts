@@ -149,11 +149,11 @@ test('hosted providers share one operator-controlled lifecycle and disabling it 
 test('tests run against the selected saved profile and publish only redacted results', async (t) => {
   const { check, health, put } = await fixture(t)
   const { profiles: [first] } = await (await put(openai, 0)).json()
-  const secondInput = { ...openai, name: 'Second', model: 'second-model', apiKey: 'second-profile-key' }
+  const secondInput = { name: 'DeepSeek work', provider: 'deepseek', model: 'deepseek-flash', apiKey: 'second-profile-key' }
   const { profiles: [, second] } = await (await put(secondInput, 1)).json()
   let status = 200
   const upstream = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
-    assert.equal(url, 'https://api.openai.com/v1/chat/completions')
+    assert.equal(url, 'https://api.deepseek.com/chat/completions')
     assert.equal(new Headers(options.headers).get('Authorization'), 'Bearer ' + secondInput.apiKey)
     const { model, messages } = JSON.parse(String(options.body))
     assert.equal(model, secondInput.model)
@@ -172,7 +172,7 @@ test('tests run against the selected saved profile and publish only redacted res
   assert.equal(result.status, 'OK')
   assert.equal(result.reply, '模型已响应 [已隐藏]')
   assert.deepEqual((await (await health()).json()).modelChecks, [{
-    id: second.id, provider: 'openai', status: 'OK', checkedAt: result.checkedAt,
+    id: second.id, provider: 'deepseek', status: 'OK', checkedAt: result.checkedAt,
   }])
 
   status = 401

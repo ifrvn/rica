@@ -25,6 +25,7 @@ test('hosted models send only writing input and parse each provider response', a
     ['gemini', 'x-goog-api-key', 'fixture-key',
       'https://generativelanguage.googleapis.com/v1beta/models/fixture-model:generateContent',
       { candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'internal' }, { text: '下午三点。' }] } }] }],
+    ['deepseek', 'authorization', 'Bearer fixture-key', 'https://api.deepseek.com/chat/completions', chatReply],
     ['openai-compatible', 'authorization', 'Bearer fixture-key',
       'https://models.example/v1/chat/completions', chatReply],
   ] as const
@@ -45,6 +46,10 @@ test('hosted models send only writing input and parse each provider response', a
         : id === 'anthropic' ? body.system : body.messages[0].content
       assert.ok(instructions.includes(input.identityPrompt))
       if (id === 'openai') assert.equal(body.store, false)
+      if (id === 'deepseek') {
+        assert.deepEqual(body.thinking, { type: 'disabled' })
+        assert.equal(body.messages[0].role, 'system')
+      }
       return Response.json(responseBody)
     })
     const plugins = await startCognitionPlugins({}, undefined, {

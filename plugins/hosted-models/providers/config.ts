@@ -5,6 +5,7 @@ const providers = {
   openai: 'https://api.openai.com/v1/chat/completions',
   anthropic: 'https://api.anthropic.com/v1/messages',
   gemini: 'https://generativelanguage.googleapis.com/v1beta/models/',
+  deepseek: 'https://api.deepseek.com/chat/completions',
   'openai-compatible': undefined,
 } as const
 
