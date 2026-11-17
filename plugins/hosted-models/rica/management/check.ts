@@ -14,7 +14,7 @@ function failureStatus(cause: unknown): ModelCheckResult['status'] {
 
 export async function checkModel(configuration: ModelSettingsInput,
   startModelPlugin: (configuration: ModelSettingsInput) => Promise<{ model: Plugin<ModelProvider>; stop: () => Promise<void> }>,
-): Promise<ModelCheckResult> {
+): Promise<Omit<ModelCheckResult, 'id'>> {
   const { provider, apiKey } = configuration
   let reply: string | null = null
   let status: ModelCheckResult['status'] = 'OK'

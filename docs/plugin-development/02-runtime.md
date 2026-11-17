@@ -165,7 +165,7 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 
 1. 在 `hosted-models` 的[提供方目录](../../plugins/hosted-models/providers/catalog.ts)登记 `id`、`name` 和 `requiresBaseUrl`，并在插件内实现请求构造和响应解析。现有表单支持模型 ID、API 密钥和由 `requiresBaseUrl` 控制的 HTTPS 基础地址。
 2. [模型装配入口](../../apps/runtime-plugins.ts)注册一个 `hosted-models` 定义。`prepare` 接收保存后的 `{ provider, model, apiKey, baseUrl? }`，按提供方解析配置并返回工厂。
-3. 在插件中心安装并启用「外部模型」，选择提供方，保存配置并运行连接检查。[模型设置测试](../../plugins/hosted-models/tests/model-settings.test.ts)使用模拟响应验证插件生命周期及配置切换。
+3. 在插件中心安装并启用「外部模型」，添加命名配置并运行连接检查。在身份设置里选择公开草稿模型。多个身份可以引用同一配置，也可以使用同一提供方的不同配置。[模型设置测试](../../plugins/hosted-models/tests/model-settings.test.ts)使用模拟响应验证配置隔离及插件生命周期。
 
 供应商请求使用本次写作所需的消息、写作指令和获准公开引用的摘录。外部回复应通过响应结构校验，错误用 [ModelProviderError](../../packages/contracts/model-provider.ts) 的脱敏错误码表示。连接测试使用固定输入，与角色运行、记忆检索和真实发言分开。
 

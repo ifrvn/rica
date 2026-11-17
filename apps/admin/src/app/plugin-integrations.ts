@@ -16,11 +16,11 @@ export {
 } from '@rica/plugin-newbi/console'
 
 type PluginCard = {
-  description: string; editor: Component; inlineEditor?: boolean; upgradeStep?: string; invalidSettings?: string
+  description: string; editor: Component; upgradeStep?: string; invalidSettings?: string
   components(status?: ConnectorCardStatus): { id: string; label: string; detail: string; version?: string }[]
   summary(deployment: DeploymentPluginsView): string
   configureLabel(deployment: DeploymentPluginsView): string
-  editorProps(deployment: DeploymentPluginsView): object
+  editorProps(deployment: DeploymentPluginsView, canStartSimulation: boolean): object
   accountLink?(status?: ConnectorCardStatus): boolean
   settingsChange?(value: string): unknown
   upgradeQueue?(status?: ConnectorCardStatus): { label: string; status: string; count: number }[] | undefined

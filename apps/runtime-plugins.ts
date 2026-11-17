@@ -61,8 +61,8 @@ export async function startConfiguredModel(
   let provider = initial.configuration.provider
   return {
     get metadata() { return selected.metadata },
-    async read() {
-      const record = await settings.read()
+    async read(profile?: string) {
+      const record = await settings.read(profile)
       if (record.version !== version || record.configuration.provider !== provider) {
         const next = await start(record.configuration, service)
         await selected.stop()

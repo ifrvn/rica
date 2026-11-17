@@ -39,13 +39,14 @@ const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsContracts)
-const activeModel = async () => (await modelSettings.status()).provider
+const activeModel = async () => (await modelSettings.read()).configuration.provider
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
   pluginStatus: () => readPluginStatus(redis),
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   activeModel,
+  modelProfileExists: async (id) => Object.hasOwn((await modelSettings.readSettings()).profiles, id),
   deploymentPlugins,
   plugins: [
     createNewbiManagement(managementDb, newbi, {

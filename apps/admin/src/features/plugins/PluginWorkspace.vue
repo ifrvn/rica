@@ -40,7 +40,6 @@ const serviceNames: Record<string, string> = { api: '管理 API', worker: '认�
 
 function reportedVersion(id: DeploymentPluginId, entry: { service: string; current: PluginMetadata; target: PluginMetadata | null }) {
   if (deployment.value?.plugins[id] !== 'ENABLED') return '插件未启用'
-  if (entry.current.kind === 'model' && !deployment.value.configuredModel) return '尚未配置模型提供方'
   const report = status.value?.services.find(({ service }) => service === entry.service)?.report
   if (!report) return '暂无近期运行报告'
   if (report.status === 'FAILED') return '最近运行报告失败'
@@ -86,7 +85,7 @@ function update(id: DeploymentPluginId, data: unknown) {
     status.value = { ...status.value, deployment: updated,
       ...registrationAvailable(updated) }
     emit('deploymentChanged', updated)
-    if ((cards[id].inlineEditor || parsed.data.action === 'DISABLE') && editing.value === id) {
+    if (editing.value === id) {
       editing.value = undefined
       void nextTick(() => document.getElementById('plugin-heading-' + id)?.focus())
     }
@@ -141,7 +140,8 @@ function changeStage(id: DeploymentPluginId) {
           <span>{{ cards[id].summary(deployment) }}</span>
           <div class="console-actions">
             <UiButton v-if="canConfigureModel" :id="'configure-plugin-' + id" size="small" variant="soft"
-              :aria-expanded="editing === id" :disabled="busy || loading" @click="toggleEditor(id)">
+              :aria-expanded="editing === id" :aria-controls="editing === id ? 'plugin-config-' + id : undefined"
+              :disabled="busy || loading" @click="toggleEditor(id)">
               {{ cards[id].configureLabel(deployment) }}
             </UiButton>
             <UiButton v-if="cards[id].accountLink?.(status)" size="small" variant="soft" @click="emit('accounts')">前往平台账号池</UiButton>
@@ -217,14 +217,12 @@ function changeStage(id: DeploymentPluginId) {
         </section>
 
         <UiAlert v-if="error && changedPlugin === id" tone="error" role="alert">{{ error }}</UiAlert>
-        <component v-if="editing === id && deployment.plugins[id] === 'ENABLED' && cards[id].inlineEditor"
-          :is="cards[id].editor" class="plugin-config" v-bind="cards[id].editorProps(deployment)"
-          :busy="busy" @close="toggleEditor(id)" @save="saveSettings(id, $event)" />
+        <component v-if="canConfigureModel && editing === id && deployment.plugins[id] === 'ENABLED'"
+          :is="cards[id].editor" :id="'plugin-config-' + id" class="plugin-config"
+          v-bind="cards[id].editorProps(deployment, canStartSimulation)" :busy="busy"
+          @expired="expired" @close="toggleEditor(id)" @save="saveSettings(id, $event)"
+          @saved="refresh" @simulate="emit('simulate')" />
       </article>
-      <component v-if="editing && deployment.plugins[editing] === 'ENABLED' && !cards[editing].inlineEditor"
-        :is="cards[editing].editor" :key="editing" class="console-record-workspace" v-bind="cards[editing].editorProps(deployment)"
-        :can-start-simulation="canStartSimulation" @expired="expired" @close="editing && toggleEditor(editing)"
-        @saved="refresh" @simulate="emit('simulate')" />
     </template>
   </div>
 </template>

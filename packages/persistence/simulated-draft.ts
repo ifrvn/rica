@@ -165,8 +165,11 @@ export async function generateSimulatedDraft(
   return candidate.draft
 }
 
+export type ResolveDraftModel = (profile?: string) => Plugin<ModelProvider> | Promise<Plugin<ModelProvider>>
+
 export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter, configuredModel: Plugin<ModelProvider>, attempt?: OutboxAttempt,
+  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter,
+  configuredModel: Plugin<ModelProvider> | ResolveDraftModel, attempt?: OutboxAttempt,
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
@@ -200,8 +203,18 @@ export async function processSimulatedDraft(
       : null
 
   // Private simulation stays local. Hosted plugins receive only the public writing input.
-  const model = request?.purpose === 'PRIVATE_REPLY' && configuredModel.implementation.hostedModel
-    ? simulatedModelPlugin : configuredModel
+  let selected = simulatedModelPlugin
+  if (typeof configuredModel === 'function') {
+    if (request?.purpose === 'PRIVATE_REPLY') {
+      selected = await configuredModel('simulated')
+    } else if (request?.purpose === 'PUBLIC_REFERENCE') {
+      const [profile] = await db.$queryRaw<{ model_profile: string | null }[]>`
+        SELECT model_profile FROM public.rica_simulated_writing_profile(${run.id}::uuid)
+      `
+      if (profile) selected = await configuredModel(profile.model_profile ?? undefined)
+    }
+  } else selected = configuredModel
+  const model = request?.purpose === 'PRIVATE_REPLY' && selected.implementation.hostedModel ? simulatedModelPlugin : selected
   const modelId = model.implementation.hostedProvider ?? model.id
   const modelVersion = model.implementation.hostedModel ?? model.version
   // Stay within the 30-second outbox lease. Model calls run outside the write transaction.

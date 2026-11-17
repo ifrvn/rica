@@ -6,7 +6,9 @@ import { newbiConnectionsView, newbiPendingDeliveries } from '@rica/plugin-newbi
 
 export const consolePluginStatusView = pluginStatusView.extend({
   deployment: deploymentPluginsView.optional(),
-  modelCheck: modelSettingsContracts.modelCheckStatus.optional(),
+  modelProfiles: modelSettingsContracts.modelProfileChoice.array().optional(),
+  modelChecks: modelSettingsContracts.modelCheckStatus.array().optional(),
+  defaultModelProfileId: modelSettingsContracts.modelActivationInput.shape.id.optional(),
   newbiRegistrationAvailable: z.boolean(),
   newbiConnections: newbiConnectionsView.optional(),
   newbiPendingDeliveries: newbiPendingDeliveries.optional(),

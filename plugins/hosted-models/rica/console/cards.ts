@@ -15,8 +15,8 @@ export const hostedModelsCard = {
   },
   summary({ configuredModel }: Deployment) {
     const provider = hostedModelCatalog.find(({ id }) => id === configuredModel)
-    return provider ? '当前提供方 · ' + provider.name : '待配置模型提供方'
+    return provider ? '默认草稿模型 · ' + provider.name : '未设默认草稿模型'
   },
-  configureLabel: ({ configuredModel }: Deployment) => configuredModel ? '查看 AI API 设置' : '配置 AI API',
-  editorProps: () => ({}),
+  configureLabel: () => '配置模型',
+  editorProps: (_deployment: Deployment, canStartSimulation: boolean) => ({ canStartSimulation }),
 }

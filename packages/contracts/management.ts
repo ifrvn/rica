@@ -52,6 +52,7 @@ export const identityProfile = z.strictObject({
     budget: z.number().int().min(1).max(100),
   }).optional(),
   writingStyle: z.enum(['neutral', 'formal', 'casual', 'concise']).optional(),
+  draftModelProfile: z.union([resourceId, z.literal('simulated')]).optional(),
   writingPrompt: z.string().trim().min(1).max(maxIdentityWritingPromptLength)
     .refine((value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)).optional(),
 })

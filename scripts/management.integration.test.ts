@@ -1,10 +1,15 @@
-import { startCognitionPlugins, startSimulationPlatforms } from '../apps/runtime-plugins.js'
+import { startCognitionPlugins, startConfiguredModel, startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { simulatedModelPlugin } from '@rica/plugin-simulated-model'
+import { createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { dailyScheduleSlot, dispatchSimulationSchedule, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
 import { after, before, test } from 'node:test'
@@ -33,9 +38,11 @@ const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'nonmember'])
+const modelProfileIds = new Set<string>()
 const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
+    modelProfileExists: async (id) => modelProfileIds.has(id),
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
       return subject && subjects.has(subject) ? {
@@ -2378,6 +2385,79 @@ async function topicProposal(runtime: ReturnType<typeof createDatabase>, target:
   await processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, model)
   return owner.actionProposal.findUniqueOrThrow({ where: { runId } })
 }
+
+test('identity draft bindings reuse profiles across roles and keep separate profiles isolated', { timeout: 30_000 }, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-identity-models-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const models = createModelSettingsStore(directory, modelSettingsContracts)
+  const configurations = [
+    { name: 'Shared', model: 'shared-model', baseUrl: 'https://shared.example/v1', apiKey: 'shared-fixture-key' },
+    { name: 'Separate', model: 'separate-model', baseUrl: 'https://separate.example/v1', apiKey: 'separate-fixture-key' },
+  ]
+  const profiles: { id: string; model: string }[] = []
+  for (const [index, configuration] of configurations.entries()) {
+    const { profiles: saved } = await models.save({ ...configuration, provider: 'openai-compatible' }, index)
+    const profile = saved[index]
+    assert.ok(profile)
+    profiles.push(profile)
+    modelProfileIds.add(profile.id)
+  }
+  t.after(() => profiles.forEach(({ id }) => modelProfileIds.delete(id)))
+  const loader = await startConfiguredModel(models)
+  t.after(loader.stop)
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  t.after(() => runtime.$disconnect())
+  const upstream = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    const configuration = configurations.find(({ baseUrl }) => url === baseUrl + '/chat/completions')
+    assert.ok(configuration)
+    assert.equal(new Headers(options.headers).get('Authorization'), 'Bearer ' + configuration.apiKey)
+    assert.equal(JSON.parse(String(options.body)).model, configuration.model)
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '这是用于验证模型绑定的回复。' } }] })
+  })
+  const characters = []
+  for (const [actor, suffix] of [['admin-a', '-model-role-a'], ['admin-b', '-model-role-b']]) {
+    const created = await request('POST', '/characters', { actor, key: randomUUID(), data: characterData(suffix) })
+    assert.equal(created.status, 201)
+    const id: string = created.body.id
+    characterIds.push(id)
+    characters.push(id)
+    await owner.character.update({ where: { id }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  }
+  const [firstRole, otherRole] = characters
+  const [shared, separate] = profiles
+  assert.ok(firstRole && otherRole && shared && separate)
+  const unavailable = await request('POST', characterPath(firstRole) + '/identities', {
+    key: randomUUID(), data: { slug: 'unavailable', roleProfile: { draftModelProfile: randomUUID() } },
+  })
+  assert.equal(unavailable.status, 422)
+
+  for (const [index, { profile, characterId, actor }] of [
+    { profile: shared, characterId: firstRole, actor: 'admin-a' },
+    { profile: separate, characterId: firstRole, actor: 'admin-a' },
+    { profile: shared, characterId: otherRole, actor: 'admin-b' },
+  ].entries()) {
+    const path = characterPath(characterId) + '/identities'
+    const identity = await request('POST', path, {
+      actor, key: randomUUID(), data: { slug: 'model-persona-' + index, roleProfile: { draftModelProfile: profile.id } },
+    })
+    assert.equal(identity.status, 201, JSON.stringify(identity.body))
+    if (index === 0) {
+      const denied = await request('PUT', path + '/' + identity.body.id, {
+        actor: 'admin-b', ifMatch: '"1"', data: { roleProfile: { draftModelProfile: separate.id } },
+      })
+      assert.equal(denied.status, 404)
+    }
+    await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
+    const target = await topicAccount(identity.body.id, 'mock-a', false, characterId)
+    const { runId, eventId } = await prepareTopic(runtime, target, 'Public draft model fixture ' + index)
+    await processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, loader.read)
+    const draft = await owner.simulatedDraft.findFirstOrThrow({ where: { runId } })
+    assert.equal(draft.modelVersion, profile.model)
+  }
+  assert.deepEqual(upstream.mock.calls.map(({ arguments: [url] }) => url), [
+    'https://shared.example/v1/chat/completions', 'https://separate.example/v1/chat/completions', 'https://shared.example/v1/chat/completions',
+  ])
+})
 
 test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { timeout: 35_000 }, async () => {
   const identityId = await reflectionIdentity()

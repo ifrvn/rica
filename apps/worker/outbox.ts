@@ -5,12 +5,11 @@ import { Redis } from 'ioredis'
 import { scanIdentityReflections } from '../../packages/persistence/identity-reflection.js'
 import { createDatabase } from '../../packages/persistence/client.js'
 import { draftQueuedEvent, outboxAttemptFence, prepareSimulatedRun, runQueuedEvent } from '../../packages/persistence/run-context.js'
-import { processSimulatedDraft } from '../../packages/persistence/simulated-draft.js'
+import { processSimulatedDraft, type ResolveDraftModel } from '../../packages/persistence/simulated-draft.js'
 import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
-import { ModelProviderError, type ModelProvider } from '@rica/contracts/model-provider'
+import { ModelProviderError } from '@rica/contracts/model-provider'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
-import type { Plugin } from '@rica/plugin-host'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 export const outboxQueueName = 'character-bootstrap'
@@ -24,7 +23,7 @@ export class WorkerDependencyUnavailable extends Error {
 }
 
 export async function startOutboxWorker(
-  databaseUrl: string, redisUrl: string, getModel: () => Plugin<ModelProvider> | Promise<Plugin<ModelProvider>>,
+  databaseUrl: string, redisUrl: string, getModel: ResolveDraftModel,
   resolveAdapter: ResolveSimulationAdapter,
   sweepRetention: (db: ReturnType<typeof createDatabase>) => Promise<number> = sweepSimulationRetention,
 ) {
@@ -64,9 +63,11 @@ export async function startOutboxWorker(
       if (name === runQueuedEvent) {
         await prepareSimulatedRun(db, eventId, attempt)
       } else if (name === draftQueuedEvent) {
-        const model = await getModel()
-        modelId = model.id
-        await processSimulatedDraft(db, eventId, resolveAdapter, model, attempt)
+        await processSimulatedDraft(db, eventId, resolveAdapter, async (profile) => {
+          const model = await getModel(profile)
+          modelId = model.id
+          return model
+        }, attempt)
       } else {
         await db.$executeRaw`
           UPDATE public.outbox SET processed_at = clock_timestamp()

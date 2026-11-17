@@ -30,6 +30,7 @@ type Options = {
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
   pluginRelease?: (services: Awaited<ReturnType<typeof readPluginStatus>>['services']) => Promise<PluginReleaseView>
   activeModel?: () => Promise<string>
+  modelProfileExists?: (id: string) => Promise<boolean>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   plugins?: readonly ManagementPlugin[]
 }
@@ -47,7 +48,13 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  activeModel = async () => 'simulated', deploymentPlugins, plugins = [] }: Options) {
+  activeModel = async () => 'simulated', modelProfileExists = async () => false, deploymentPlugins, plugins = [] }: Options) {
+  async function validateDraftModel(profile?: string) {
+    if (profile && profile !== 'simulated' && !await modelProfileExists(profile)) {
+      throw new management.ManagementError(422, 'MODEL_NOT_CONFIGURED', 'Draft model profile is unavailable')
+    }
+  }
+
   const app = new OpenAPIHono<ManagementEnvironment>({
     defaultHook: (result, c) => {
       if (!result.success) {
@@ -208,7 +215,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'identity.create', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, (tx) => management.createIdentity(tx, scope, input))
+    }, async (tx) => {
+      await validateDraftModel(input.roleProfile.draftModelProfile)
+      return management.createIdentity(tx, scope, input)
+    })
     return c.json({ ...result, requestId }, 201)
   })
 
@@ -224,7 +234,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const requestId = c.get('requestId')
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'identity.update', targetScope: characterId + '/' + identityId, input: { input, expected }, requestId,
-    }, (tx) => management.updateIdentity(tx, scope, identityId, expected, input))
+    }, async (tx) => {
+      await validateDraftModel(input.roleProfile.draftModelProfile)
+      return management.updateIdentity(tx, scope, identityId, expected, input)
+    })
     return c.json({ ...result, requestId }, 200)
   })
 

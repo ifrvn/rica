@@ -8,6 +8,7 @@ import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import { isSimulationPlatform, platformAccounts, type ConnectorAccount, type ConnectorRegistration, type ConsoleWorkspace } from '../../app/plugin-integrations.js'
 import { request, RequestError } from '@rica/console-shared/request'
+import { hostedModelCatalog } from '@rica/plugin-hosted-models/shared'
 
 type Workspace = ConsoleWorkspace
 type Character = z.infer<typeof characterView>
@@ -27,6 +28,7 @@ const emit = defineEmits<{
   account: [id?: string]; proposals: [platform: string, accountId: string, proposalId?: string]; selectCharacter: [id: string]; loadCharacters: [];
 }>()
 const workspace = ref<Workspace>()
+const draftModelStatus = ref<PluginStatus>()
 const identities = ref<Identity[]>([])
 const accounts = ref<Account[]>([])
 const accountPool = ref<Registration[]>([])
@@ -50,7 +52,8 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
-  registrationId: null as string | null, platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '' })
+  registrationId: null as string | null, platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '',
+  draftModelProfile: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => !!workspace.value)
 const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && connectorFor(platform)))
@@ -60,6 +63,10 @@ const canProposeConnectorReply = computed(() => !!admin.value && !!connector.val
   && connectorDetails.value?.state.canPropose(connector.value, connectorIdentity.value?.status, workspace.value?.status))
 const isCharacter = computed(() => editor.value === 'character' || editor.value === 'core')
 const isIdentity = computed(() => editor.value === 'identity' || editor.value === 'identity-edit')
+const draftModels = computed(() => (draftModelStatus.value?.modelProfiles ?? []).map(({ id, name, provider, model }) => ({
+  id, label: [name, hostedModelCatalog.find((option) => option.id === provider)?.name ?? provider, model].join(' · '),
+})))
+const defaultDraftModel = computed(() => draftModels.value.find(({ id }) => id === draftModelStatus.value?.defaultModelProfileId))
 const title = computed(() => ({
   character: '新建角色', core: '角色设置', identity: '添加身份', 'identity-edit': '编辑身份',
   account: '添加账号', associate: '关联平台账号',
@@ -110,7 +117,8 @@ const parsed = computed(() => {
   const reason = form.reason.trim() || undefined
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
-    timezone: form.timezone || undefined, writingStyle: form.style, writingPrompt: form.writingPrompt.trim() || undefined }
+    timezone: form.timezone || undefined, writingStyle: form.style, writingPrompt: form.writingPrompt.trim() || undefined,
+    draftModelProfile: form.draftModelProfile || undefined }
   switch (editor.value) {
     case 'character': return characterInput.safeParse({ slug: form.slug.trim(), timezone: form.timezone, coreProfile })
     case 'core': return coreInput.safeParse({ coreProfile, reason })
@@ -221,18 +229,17 @@ async function load() {
   const [nextIdentities, nextAccounts, pool, pluginStatus] = await Promise.all([
     all<Identity>(base.value + '/identities'), all<Account>(base.value + '/accounts'),
     all<Registration>(base.value + '/account-pool'),
-    props.accountsOnly
-      ? request<PluginStatus>(base.value + '/plugins').catch((cause) => {
-        if (cause instanceof RequestError && cause.status === 401) throw cause
-        return undefined
-      })
-      : undefined,
+    request<PluginStatus>(base.value + '/plugins').catch((cause) => {
+      if (cause instanceof RequestError && cause.status === 401) throw cause
+      return undefined
+    }),
   ])
   if (!active) return
   workspace.value = current
   identities.value = nextIdentities
   accounts.value = nextAccounts
   accountPool.value = pool
+  draftModelStatus.value = pluginStatus
   connectors.forEach(({ state }) => state.sync(pluginStatus))
   emit('updated', current)
 }
@@ -294,6 +301,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     timezone: kind === 'character' ? Intl.DateTimeFormat().resolvedOptions().timeZone : identity?.profile?.timezone ?? '',
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
+    draftModelProfile: identity?.profile?.draftModelProfile ?? '',
     registrationId: null, platform: '',
     instance: 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
@@ -452,6 +460,15 @@ onMounted(() => { if (props.characterId) void run(load) })
           <template v-if="fieldError('style')" #feedback>
             <span id="workspace-style-error">{{ fieldError('style') }}</span>
           </template>
+        </UiField>
+        <UiField v-if="isIdentity" label="公开草稿模型" for="workspace-draft-model">
+          <select id="workspace-draft-model" class="ui-control" v-model="form.draftModelProfile" :disabled="busy">
+            <option value="">使用部署默认{{ defaultDraftModel ? ' · ' + defaultDraftModel.label : '' }}</option>
+            <option value="simulated">使用本地模型</option>
+            <option v-if="form.draftModelProfile && form.draftModelProfile !== 'simulated'
+              && !draftModels.some(({ id }) => id === form.draftModelProfile)" :value="form.draftModelProfile">当前配置不可用</option>
+            <option v-for="model in draftModels" :key="model.id" :value="model.id">{{ model.label }}</option>
+          </select>
         </UiField>
         <UiField v-if="isIdentity" label="身份提示词（可选）" for="workspace-writingPrompt"
           :invalid="!!fieldError('writingPrompt')">

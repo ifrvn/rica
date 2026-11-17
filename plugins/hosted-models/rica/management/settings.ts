@@ -1,47 +1,66 @@
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import type { ModelSettingsContracts, ModelSettingsInput, ModelSettingsView } from './contracts.js'
+import type { ModelProfileInput, ModelSettingsContracts, ModelSettingsInput, ModelSettingsView } from './contracts.js'
 import { writeSettings } from '../../../../packages/runtime/write-settings.js'
 
-type Record = { version: number; configuration: ModelSettingsInput }
+type ActiveSettings = { version: number; configuration: ModelSettingsInput }
+const simulated = { provider: 'simulated' } as const
 
 export class ModelSettingsError extends Error {
-  constructor(readonly code: 'VERSION_CONFLICT' | 'KEY_REQUIRED') { super(code) }
-}
-
-function view({ version, configuration }: Record): ModelSettingsView {
-  const { provider, model, baseUrl, apiKey } = configuration
-  return { version, provider, model: model ?? null, baseUrl: baseUrl ?? null, hasKey: !!apiKey }
+  constructor(readonly code: 'VERSION_CONFLICT' | 'KEY_REQUIRED' | 'MODEL_NOT_CONFIGURED' | 'PROVIDER_CHANGED') { super(code) }
 }
 
 // The deployment runs one settings writer. Workers read complete records using atomic replacement.
 export function createModelSettingsStore(directory: string, contracts: ModelSettingsContracts) {
-  const recordSchema = z.strictObject({
-    version: z.number().int().positive(),
-    configuration: contracts.modelSettingsInput.refine((value) => value.provider === 'simulated' || !!value.apiKey),
+  const version = z.number().int().nonnegative()
+  const configuration = contracts.modelSettingsInput.safeExtend({
+    model: contracts.modelSettingsInput.shape.model.unwrap(),
+    apiKey: contracts.modelSettingsInput.shape.apiKey.unwrap(),
   })
+  const profile = z.strictObject({ version: version.positive(), name: contracts.modelProfileInput.shape.name, configuration })
+  const recordSchema = z.strictObject({
+    version,
+    defaultProfileId: z.uuid().nullable(),
+    profiles: z.record(z.uuid(), profile),
+  }).refine((record) => (record.defaultProfileId === null || !!record.profiles[record.defaultProfileId])
+    && Object.values(record.profiles).every((saved) => saved.version <= record.version))
+  const legacyProfileId = '00000000-0000-4000-8000-000000000001'
+  const legacySchema = z.strictObject({ version: version.positive(), configuration: z.union([
+    configuration, z.strictObject({ provider: z.literal('simulated') }),
+  ]) }).transform(({ version, configuration: saved }) => ({
+    version,
+    defaultProfileId: 'apiKey' in saved ? legacyProfileId : null,
+    profiles: 'apiKey' in saved ? { [legacyProfileId]: { version, name: saved.model.slice(0, 80), configuration: saved } } : {},
+  }))
+  const readableSchema = recordSchema.or(legacySchema.pipe(recordSchema))
+  type Record = z.infer<typeof recordSchema>
   const path = join(directory, 'settings.json')
   let writes: Promise<unknown> = Promise.resolve()
 
-  async function read(): Promise<Record> {
+  async function readSettings(): Promise<Record> {
     try {
-      return recordSchema.parse(JSON.parse(await readFile(path, 'utf8')))
+      return readableSchema.parse(JSON.parse(await readFile(path, 'utf8')))
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 0, configuration: { provider: 'simulated' } }
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 0, defaultProfileId: null, profiles: {} }
       throw new Error('Model settings are unreadable')
     }
   }
 
-  function save(input: ModelSettingsInput, version: number) {
+  function view({ version, defaultProfileId, profiles }: Record): ModelSettingsView {
+    return { version, defaultProfileId, profiles: Object.entries(profiles).map(([id, { name, configuration }]) => ({
+      id, name, provider: configuration.provider, model: configuration.model, baseUrl: configuration.baseUrl ?? null, hasKey: true,
+    })) }
+  }
+
+  function update(expected: number, change: (current: Record) => void) {
     const write = writes.then(async () => {
-      const current = await read()
-      if (current.version !== version) throw new ModelSettingsError('VERSION_CONFLICT')
-      const previous = current.configuration
-      const sameEndpoint = previous.provider === input.provider && previous.baseUrl === input.baseUrl
-      const apiKey = input.apiKey ?? (sameEndpoint ? previous.apiKey : undefined)
-      if (input.provider !== 'simulated' && !apiKey) throw new ModelSettingsError('KEY_REQUIRED')
-      const record = recordSchema.parse({ version: version + 1, configuration: { ...input, apiKey } })
+      const current = await readSettings()
+      if (current.version !== expected) throw new ModelSettingsError('VERSION_CONFLICT')
+      current.version += 1
+      change(current)
+      const record = recordSchema.parse(current)
       await writeSettings(directory, path, record)
       return view(record)
     })
@@ -49,13 +68,39 @@ export function createModelSettingsStore(directory: string, contracts: ModelSett
     return write
   }
 
-  return { contracts, read, async status() { return view(await read()) }, save }
+  function save({ id, name, ...input }: ModelProfileInput, expected: number) {
+    return update(expected, (current) => {
+      const previous = id ? current.profiles[id]?.configuration : undefined
+      if (id && !previous) throw new ModelSettingsError('MODEL_NOT_CONFIGURED')
+      if (previous && previous.provider !== input.provider) throw new ModelSettingsError('PROVIDER_CHANGED')
+      const apiKey = input.apiKey ?? (previous?.baseUrl === input.baseUrl ? previous?.apiKey : undefined)
+      if (!apiKey) throw new ModelSettingsError('KEY_REQUIRED')
+      current.profiles[id ?? randomUUID()] = {
+        version: current.version, name, configuration: configuration.parse({ ...input, apiKey }),
+      }
+    })
+  }
+
+  function activate(id: string | null, expected: number) {
+    return update(expected, (current) => {
+      if (id !== null && !current.profiles[id]) throw new ModelSettingsError('MODEL_NOT_CONFIGURED')
+      current.defaultProfileId = id
+    })
+  }
+
+  async function read(selection?: string): Promise<ActiveSettings> {
+    const { defaultProfileId, profiles } = await readSettings()
+    const id = selection ?? defaultProfileId
+    return id && Object.hasOwn(profiles, id) ? profiles[id]! : { version: 0, configuration: simulated }
+  }
+
+  return { contracts, read, readSettings, async status() { return view(await readSettings()) }, save, activate }
 }
 
 export function enabledModelSettings(store: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>,
   isEnabled: () => Promise<boolean>) {
-  return { async read(): Promise<Record> {
-    const current = await store.read()
+  return { async read(selection?: string): Promise<ActiveSettings> {
+    const current = await store.read(selection)
     const { provider } = current.configuration
     return provider === 'simulated' || await isEnabled() ? current
       : { ...current, configuration: { provider: 'simulated' } }

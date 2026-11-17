@@ -25,10 +25,10 @@ async function main() {
   })
   let observation: ReturnType<typeof startPluginHeartbeat> | undefined
   let settingsFailed = false
-  async function getModel() {
+  async function getModel(profile?: string) {
     const previous = selected.metadata
     try {
-      const model = await selected.read()
+      const model = await selected.read(profile)
       if (settingsFailed || previous !== selected.metadata) observation?.ready([...platforms.plugins, selected.metadata])
       settingsFailed = false
       return model

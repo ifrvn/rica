@@ -16,7 +16,7 @@ export const registrationAvailable = (deployment: NewbiDeploymentView) => ({
 
 export const newbiCard = {
   description: newbiConsole.description, upgradeStep: newbiConsole.upgradeStep,
-  inlineEditor: true, editor: NewbiSettings, invalidSettings: '请核对本机 API 地址。',
+  editor: NewbiSettings, invalidSettings: '请核对本机 API 地址。',
   components: (status?: ConnectorCardStatus) => status?.services.flatMap(({ service, catalog }) =>
     catalog.filter((component) => newbiDeployment.ownsComponent(service, component)).map(({ kind, id, version }) => ({
       id, detail: id, version, label: kind === 'platform-reader'

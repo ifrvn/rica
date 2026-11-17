@@ -1,159 +1,216 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { UiAlert, UiButton, UiField, UiSpinner } from '@rica/console-shared/ui'
-import { modelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../management/contracts.js'
-import { hostedModelCatalog } from '../../providers/catalog.js'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { UiAlert, UiBadge, UiButton, UiEmpty, UiField, UiSpinner } from '@rica/console-shared/ui'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
+import { hostedModelCatalog } from '../../providers/catalog.js'
+import { modelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../management/contracts.js'
 import { modelCheckLabels } from './labels.js'
 
-defineProps<{ canStartSimulation: boolean }>()
+const props = defineProps<{ busy: boolean; canStartSimulation: boolean }>()
 const emit = defineEmits<{ close: []; expired: []; saved: []; simulate: [] }>()
+type Profile = ModelSettingsView['profiles'][number]
+
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
 const path = '/v1/model-settings'
 const current = ref<ModelSettingsView>()
+const editing = ref<string | null>(null)
 const checkResult = ref<ModelCheckResult>()
-const checking = ref(false)
-const form = reactive({ provider: '', model: '', baseUrl: '', apiKey: '' })
-const { modelSettingsInput } = modelSettingsContracts
+const pending = ref<'save' | 'check' | 'default'>()
+const form = reactive({ name: '', provider: '', model: '', baseUrl: '', apiKey: '' })
+const heading = ref<HTMLElement>()
+const formHeading = ref<HTMLElement>()
+const addButton = ref<InstanceType<typeof UiButton>>()
+const blocked = computed(() => props.busy || busy.value)
+const saved = computed(() => current.value?.profiles.find(({ id }) => id === editing.value))
 const option = computed(() => hostedModelCatalog.find(({ id }) => id === form.provider))
-const reuseKey = computed(() => current.value?.hasKey && current.value.provider === form.provider
-  && (!option.value?.requiresBaseUrl || current.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
-const canCheck = computed(() => reuseKey.value && !form.apiKey && current.value?.model === form.model.trim())
-
-function selectProvider(provider: string) {
-  const saved = current.value?.provider === provider ? current.value : undefined
-  checkResult.value = undefined
-  notice.value = ''
-  error.value = ''
-  Object.assign(form, { provider, model: saved?.model ?? '', baseUrl: saved?.baseUrl ?? '', apiKey: '' })
-}
-
-function setCurrent(value: ModelSettingsView) {
-  current.value = value
-  selectProvider(value.provider === 'simulated' ? '' : value.provider)
-}
+const providerName = (id: string) => hostedModelCatalog.find((p) => p.id === id)?.name ?? id
+const reuseKey = computed(() => saved.value?.hasKey && saved.value.provider === form.provider
+  && (!option.value?.requiresBaseUrl || saved.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
+const canCheck = computed(() => reuseKey.value && !form.apiKey && saved.value?.model === form.model.trim()
+  && saved.value?.name === form.name.trim())
 
 function load() {
   void run(async () => {
     const value = await request<ModelSettingsView>(path)
-    if (active()) setCurrent(value)
+    if (active()) current.value = value
   })
 }
 
-function save() {
-  if (!current.value || !option.value || busy.value) return
-  const input = modelSettingsInput.safeParse({
-    provider: option.value.id, model: form.model, apiKey: form.apiKey || undefined,
-    baseUrl: option.value.requiresBaseUrl ? form.baseUrl.trim() : undefined,
-  })
+function edit(profile?: Profile) {
+  editing.value = profile?.id ?? ''
+  Object.assign(form, { name: profile?.name ?? '', provider: profile?.provider ?? '',
+    model: profile?.model ?? '', baseUrl: profile?.baseUrl ?? '', apiKey: '' })
+  checkResult.value = undefined
+  error.value = ''
   notice.value = ''
-  if (!input.success || (!input.data.apiKey && !reuseKey.value)) {
-    error.value = '请核对模型 ID、API 密钥及兼容服务的 HTTPS API 地址。'
-    return
-  }
-  const version = current.value.version
+  void nextTick(() => formHeading.value?.focus())
+}
+
+function closeForm() {
+  const id = editing.value
+  editing.value = null
+  form.apiKey = ''
+  checkResult.value = undefined
+  error.value = ''
+  notice.value = ''
+  void nextTick(() => {
+    const target = id ? document.getElementById('edit-model-profile-' + id) : addButton.value?.$el
+    target?.focus()
+  })
+}
+
+function changeProvider() {
+  Object.assign(form, { model: '', baseUrl: '', apiKey: '' })
+  error.value = ''
+}
+
+function update(kind: 'save' | 'default', endpoint: string, payload: object, version: number, apply: (value: ModelSettingsView) => void) {
+  pending.value = kind
   void run(async () => {
-    const value = await request<ModelSettingsView>(path, {
+    const value = await request<ModelSettingsView>(endpoint, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'If-Match': '"' + version + '"' },
-      body: JSON.stringify(input.data),
+      body: JSON.stringify(payload),
     })
     if (!active()) return
-    setCurrent(value)
-    notice.value = '已保存。下一次生成公开模拟草稿时使用此配置。'
+    current.value = value
+    apply(value)
     emit('saved')
+  }).finally(() => { pending.value = undefined })
+}
+
+function save() {
+  if (!current.value || !option.value || editing.value === null || blocked.value) return
+  const parsed = modelSettingsContracts.modelProfileInput.safeParse({
+    id: saved.value?.id, name: form.name, provider: option.value.id, model: form.model, apiKey: form.apiKey || undefined,
+    baseUrl: option.value.requiresBaseUrl ? form.baseUrl.trim() : undefined,
+  })
+  if (!parsed.success || (!parsed.data.apiKey && !reuseKey.value)) {
+    error.value = '请核对配置名称、模型 ID、API 密钥和 HTTPS API 地址。'
+    return
+  }
+  const knownIds = new Set(current.value.profiles.map(({ id }) => id))
+  update('save', path, parsed.data, current.value.version, (value) => {
+    const profile = value.profiles.find(({ id }) => id === parsed.data.id || !knownIds.has(id))
+    if (profile) edit(profile)
+    notice.value = '已保存模型配置。'
+  })
+}
+
+function setDefault(id: string | null) {
+  if (!current.value || blocked.value) return
+  update('default', path + '/active', { id }, current.value.version, () => {
+    notice.value = id ? '已设为默认草稿模型。' : '默认草稿已切回本地模型。'
   })
 }
 
 function testModel() {
-  if (!current.value || !canCheck.value || busy.value) return
-  const version = current.value.version
+  if (!current.value || !saved.value || !canCheck.value || blocked.value) return
+  const payload = { id: saved.value.id, version: current.value.version }
+  pending.value = 'check'
   checkResult.value = undefined
-  checking.value = true
   void run(async () => {
     const result = await request<ModelCheckResult>(path + '/check', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     })
     if (active()) {
       checkResult.value = result
       emit('saved')
     }
-  }).finally(() => { checking.value = false })
+  }).finally(() => { pending.value = undefined })
 }
 
-const heading = ref<HTMLElement>()
-onMounted(() => { heading.value?.focus(); void load() })
+onMounted(() => { heading.value?.focus(); load() })
 </script>
 
 <template>
-  <section class="model-settings" aria-labelledby="model-settings-heading">
+  <section class="console-stack model-settings" aria-labelledby="model-settings-heading">
     <div class="console-section-heading">
-      <h3 id="model-settings-heading" ref="heading" tabindex="-1">AI API 设置</h3>
-      <UiButton size="small" variant="quiet" :disabled="busy" @click="emit('close')">收起设置</UiButton>
+      <h3 id="model-settings-heading" ref="heading" tabindex="-1">模型配置</h3>
+      <UiButton size="small" variant="quiet" :disabled="blocked" @click="emit('close')">收起设置</UiButton>
     </div>
-    <UiSpinner v-if="busy && !current" aria-label="正在读取模型设置" />
-    <form v-if="current" @submit.prevent="save">
-      <p class="model-settings-scope">应用于此部署所有角色的公开模拟草稿。启用外部模型后，模拟消息、身份写作指令及允许公开引用的资料会发送给所选服务。</p>
-      <div class="model-settings-fields">
-        <UiField label="模型提供方" for="model-settings-provider">
-          <select id="model-settings-provider" class="ui-control" :value="form.provider" :disabled="busy" required
-            @change="selectProvider(($event.target as HTMLSelectElement).value)">
-            <option value="" disabled>选择模型提供方</option>
-            <option v-for="provider in hostedModelCatalog" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
-          </select>
-        </UiField>
-        <template v-if="option">
-          <UiField label="模型 ID" for="model-settings-name">
-            <input class="ui-control" v-model="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
-              v-bind="{ id: 'model-settings-name', required: true }" />
-          </UiField>
-          <UiField v-if="option.requiresBaseUrl" label="API 基础地址" for="model-settings-url">
-            <input class="ui-control" v-model="form.baseUrl" :disabled="busy" placeholder="https://provider.example/v1"
-              v-bind="{ id: 'model-settings-url', required: true }" />
-          </UiField>
-          <UiField label="API 密钥" for="model-settings-key">
-            <input class="ui-control" v-model="form.apiKey" type="password" :disabled="busy"
-              :placeholder="reuseKey ? '已保存密钥，留空继续使用' : '输入供应商 API 密钥'"
-              v-bind="{ id: 'model-settings-key', autocomplete: 'new-password', required: !reuseKey }" />
-          </UiField>
-        </template>
+    <UiSpinner v-if="busy && !current" aria-label="正在读取模型配置" />
+    <template v-if="current">
+      <div class="console-actions">
+        <UiButton ref="addButton" size="small" :tone="current.profiles.length ? 'default' : 'primary'"
+          :disabled="blocked || editing === ''" @click="edit()">添加模型配置</UiButton>
+        <UiButton v-if="current.defaultProfileId" size="small" variant="quiet" :disabled="blocked"
+          :loading="pending === 'default'" @click="setDefault(null)">默认使用本地模型</UiButton>
       </div>
-      <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
-      <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
-      <div v-if="option" class="model-settings-actions">
-        <UiButton tone="primary" type="submit" :disabled="busy" :loading="busy && !checking">保存模型设置</UiButton>
-        <UiButton type="button" :disabled="busy || !canCheck" :loading="checking" @click="testModel">测试模型</UiButton>
-        <UiButton v-if="error" :disabled="busy" variant="quiet" @click="load">重新读取设置</UiButton>
-      </div>
-      <p v-if="option" class="model-settings-scope model-settings-test-hint">
-        {{ canCheck ? '测试会向服务商发送一条固定消息，并可能消耗模型额度。' : '保存当前设置后可测试模型。' }}
-      </p>
-      <UiAlert v-if="checkResult && canCheck" :tone="checkResult.status === 'OK' ? 'success' : 'error'" role="status">
-        {{ modelCheckLabels[checkResult.status] }}
-        <p v-if="checkResult.reply" class="console-payload model-settings-reply">{{ checkResult.reply }}</p>
-        <p v-if="checkResult.status === 'OK'" class="model-settings-reply">
-          {{ canStartSimulation
-            ? '用当前角色和模拟账号发起一次模拟，就能在提案中查看认知 Worker 生成的草稿。'
-            : '请让当前角色的管理员发起模拟，在提案中核对认知 Worker 生成的草稿。' }}
-        </p>
-        <UiButton v-if="checkResult.status === 'OK' && canStartSimulation" class="model-settings-simulate"
-          size="small" variant="soft" @click="emit('simulate')">发起模拟验证</UiButton>
-      </UiAlert>
-    </form>
-    <template v-else-if="error">
-      <UiAlert tone="error" role="alert">{{ error }}</UiAlert>
-      <UiButton class="model-settings-actions" :disabled="busy" @click="load">重新读取设置</UiButton>
+      <ul v-if="current.profiles.length" class="console-record-list">
+        <li v-for="profile in current.profiles" :key="profile.id" class="model-profile-row">
+          <div class="model-profile-label">
+            <strong>{{ profile.name }}</strong>
+            <span class="model-settings-detail">{{ providerName(profile.provider) }} · {{ profile.model }}</span>
+          </div>
+          <div class="console-actions">
+            <UiBadge v-if="profile.id === current.defaultProfileId" tone="success">部署默认</UiBadge>
+            <UiButton :id="'edit-model-profile-' + profile.id" size="small" variant="soft"
+              :disabled="blocked" :aria-expanded="editing === profile.id"
+              :aria-label="'编辑模型配置 ' + profile.name" @click="editing === profile.id ? closeForm() : edit(profile)">编辑</UiButton>
+          </div>
+        </li>
+      </ul>
+      <UiEmpty v-else-if="editing === null" description="暂无外部模型配置。" />
     </template>
+
+    <form v-if="current && editing !== null" class="model-settings-form console-stack" @submit.prevent="save">
+      <div class="console-section-heading">
+        <h4 ref="formHeading" tabindex="-1">{{ saved ? '编辑模型配置' : '添加模型配置' }}</h4>
+        <UiButton type="button" size="small" variant="quiet" :disabled="blocked" @click="closeForm">收起表单</UiButton>
+      </div>
+      <p v-if="saved" class="model-settings-detail">保存修改会影响使用这份配置的身份。</p>
+      <UiField label="配置名称" for="model-config-name">
+        <input id="model-config-name" class="ui-control" v-model="form.name" :disabled="blocked" required maxlength="80" />
+      </UiField>
+      <UiField label="模型提供方" for="model-config-provider">
+        <select id="model-config-provider" class="ui-control" v-model="form.provider" :disabled="blocked || !!saved" required
+          @change="changeProvider">
+          <option value="" disabled>选择模型提供方</option>
+          <option v-for="item in hostedModelCatalog" :key="item.id" :value="item.id">{{ item.name }}</option>
+        </select>
+      </UiField>
+      <UiField label="模型 ID" for="model-config-model">
+        <input id="model-config-model" class="ui-control" v-model="form.model" :disabled="blocked" required maxlength="160" />
+      </UiField>
+      <UiField v-if="option?.requiresBaseUrl" label="API 基础地址" for="model-config-url">
+        <input id="model-config-url" class="ui-control" v-model="form.baseUrl" :disabled="blocked"
+          placeholder="https://provider.example/v1" required />
+      </UiField>
+      <UiField label="API 密钥" for="model-config-key">
+        <input id="model-config-key" class="ui-control" v-model="form.apiKey" type="password" :disabled="blocked"
+          :placeholder="reuseKey ? '已保存密钥，留空继续使用' : undefined" autocomplete="new-password" :required="!reuseKey" />
+      </UiField>
+      <div class="console-actions">
+        <UiButton tone="primary" type="submit" :disabled="blocked" :loading="pending === 'save'">保存模型配置</UiButton>
+        <UiButton v-if="saved" type="button" :disabled="blocked || !canCheck"
+          :loading="pending === 'check'" @click="testModel">测试连接</UiButton>
+        <UiButton v-if="saved && saved.id !== current.defaultProfileId" type="button" variant="quiet"
+          :disabled="blocked || !canCheck" :loading="pending === 'default'" @click="setDefault(saved.id)">设为部署默认</UiButton>
+      </div>
+      <p v-if="canCheck" class="model-settings-detail">连接测试会向提供方发送固定消息，可能消耗模型额度。</p>
+    </form>
+
+    <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
+    <UiAlert v-if="error" tone="error" role="alert">
+      {{ error }}
+      <UiButton size="small" variant="quiet" :disabled="blocked" @click="load">重新读取配置</UiButton>
+    </UiAlert>
+    <UiAlert v-if="checkResult && canCheck" :tone="checkResult.status === 'OK' ? 'success' : 'error'" role="status">
+      {{ modelCheckLabels[checkResult.status] }}
+      <p v-if="checkResult.reply" class="console-payload">{{ checkResult.reply }}</p>
+      <UiButton v-if="checkResult.status === 'OK' && canStartSimulation && saved?.id === current?.defaultProfileId"
+        size="small" variant="soft" @click="emit('simulate')">发起模拟验证</UiButton>
+    </UiAlert>
   </section>
 </template>
 
 <style scoped>
-.model-settings-scope { margin: 0 0 1rem; color: var(--console-muted); }
-.model-settings { border-top: 1px solid var(--console-line); padding-block-start: 1rem; }
-.model-settings-fields { display: grid; gap: 1rem; max-width: 35rem; }
-.model-settings-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
-.model-settings-test-hint { margin-block: .5rem; }
-.model-settings-reply { margin-block: .5rem 0; }
-.model-settings-simulate { margin-block-start: .75rem; }
+.model-settings { gap: .75rem; min-inline-size: 0; }
+.model-settings-detail, .model-profile-label { overflow-wrap: anywhere; }
+.model-settings-detail { margin: 0; color: var(--console-muted); }
+.model-profile-label { display: grid; gap: .25rem; }
+.model-profile-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+.model-settings-form { max-width: 35rem; gap: .75rem; }
 </style>
