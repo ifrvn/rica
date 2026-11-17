@@ -163,9 +163,9 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 
 外部模型可以在本地判断是否回复，由供应商生成公开模拟的正文。`hostedModel` 标记使用外部写作的实现，供宿主选择私密场景的本地模型和记录版本。
 
-1. 插件导出浏览器可用的 `ModelPluginOption`，包含 `id`、`name` 和 `requiresBaseUrl`。在[模型目录](../../apps/model-plugin-catalog.ts)登记这份声明，部署选项、设置校验、控制台卡片和健康节点据此生成。现有表单支持模型 ID、API 密钥和由 `requiresBaseUrl` 控制的 HTTPS 基础地址。
-2. 插件导出同一 ID 的 `PluginDefinition<ModelProvider>`，在[模型装配入口](../../apps/runtime-plugins.ts)登记。`prepare` 接收保存后的 `{ model, apiKey, baseUrl? }`，解析为实现所需的配置并返回工厂。提供方的请求构造与响应解析留在插件包中。
-3. 在插件中心安装并启用后，保存配置并运行连接检查。[模型设置测试](../../plugins/hosted-models/tests/model-settings.test.ts)包含无需外部请求的独立插件示例。
+1. 在 `hosted-models` 的[提供方目录](../../plugins/hosted-models/providers/catalog.ts)登记 `id`、`name` 和 `requiresBaseUrl`，并在插件内实现请求构造和响应解析。现有表单支持模型 ID、API 密钥和由 `requiresBaseUrl` 控制的 HTTPS 基础地址。
+2. [模型装配入口](../../apps/runtime-plugins.ts)注册一个 `hosted-models` 定义。`prepare` 接收保存后的 `{ provider, model, apiKey, baseUrl? }`，按提供方解析配置并返回工厂。
+3. 在插件中心安装并启用「外部模型」，选择提供方，保存配置并运行连接检查。[模型设置测试](../../plugins/hosted-models/tests/model-settings.test.ts)使用模拟响应验证插件生命周期及配置切换。
 
 供应商请求使用本次写作所需的消息、写作指令和获准公开引用的摘录。外部回复应通过响应结构校验，错误用 [ModelProviderError](../../packages/contracts/model-provider.ts) 的脱敏错误码表示。连接测试使用固定输入，与角色运行、记忆检索和真实发言分开。
 
@@ -180,6 +180,7 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 - `ModelEvidence` 为 `{ id: string, revision: number, content: string }`。决策证据与写作证据按目的独立授权。
 - `WritingStyle` 为 `neutral | formal | casual | concise`。
 - 可选属性 `hostedModel: string` 表示外部写作模型名。宿主据此选择私密场景的本地模型，并记录外部模型标识。
+- 可选属性 `hostedProvider: string` 记录草稿实际使用的外部提供方。
 - `new ModelProviderError(code, status?)` 用于模型请求失败。代码为 `HTTP_ERROR | REQUEST_FAILED | INVALID_OUTPUT`，`status` 为可选 HTTP 状态码。
 
 `RunTime` 有 `occurredAt`、`now` 两个 ISO 时间字符串，`timezone` 时区、`localDate` 和 `eventLocalDate` 当地日期字符串，以及 `localHour: number`。决策独有的 `RunContinuity` 字段如下。

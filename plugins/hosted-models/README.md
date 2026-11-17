@@ -28,7 +28,9 @@
 
 ## 配置与测试
 
-外部模型示例。先对 `id = 'openai'` 执行[安装和启用步骤](../../docs/plugin-development/03-management.md#部署与插件状态)。在授权的测试环境中使用提供方允许的模型 ID 和密钥，核验会调用供应商 API。
+先对 `id = 'hosted-models'` 执行[安装和启用步骤](../../docs/plugin-development/03-management.md#部署与插件状态)。所有提供方共用该插件的部署状态。在授权的测试环境中使用所选提供方允许的模型 ID 和密钥，核验会调用供应商 API。
+
+部署记录的 `plugins` 只接受 `hosted-models` 这一外部模型插件 ID。旧开发环境升级时，将原先按提供方记录的安装状态收归这个 ID，并保留其他插件条目。发布清单也使用单一的 `model/hosted-models` 组件。
 
 ```powershell
 $ricaSettings = Invoke-Rica Get '/v1/model-settings'

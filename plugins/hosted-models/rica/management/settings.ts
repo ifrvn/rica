@@ -53,11 +53,11 @@ export function createModelSettingsStore(directory: string, contracts: ModelSett
 }
 
 export function enabledModelSettings(store: Pick<ReturnType<typeof createModelSettingsStore>, 'read'>,
-  isEnabled: (provider: string) => Promise<boolean>) {
+  isEnabled: () => Promise<boolean>) {
   return { async read(): Promise<Record> {
     const current = await store.read()
     const { provider } = current.configuration
-    return provider === 'simulated' || await isEnabled(provider) ? current
+    return provider === 'simulated' || await isEnabled() ? current
       : { ...current, configuration: { provider: 'simulated' } }
   } }
 }

@@ -17,9 +17,8 @@ type ModelInput = Readonly<{
 
 export type WritingStyle = 'neutral' | 'formal' | 'casual' | 'concise'
 
-export type ModelPluginOption = Readonly<{ id: string; name: string; requiresBaseUrl: boolean }>
-
 export type ModelProvider = Readonly<{
+  hostedProvider?: string
   hostedModel?: string
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; identityPrompt?: string; suggestFollowUp?: boolean }>, signal: AbortSignal): Promise<unknown>

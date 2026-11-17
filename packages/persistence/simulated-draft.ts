@@ -202,6 +202,7 @@ export async function processSimulatedDraft(
   // Private simulation stays local. Hosted plugins receive only the public writing input.
   const model = request?.purpose === 'PRIVATE_REPLY' && configuredModel.implementation.hostedModel
     ? simulatedModelPlugin : configuredModel
+  const modelId = model.implementation.hostedProvider ?? model.id
   const modelVersion = model.implementation.hostedModel ?? model.version
   // Stay within the 30-second outbox lease. Model calls run outside the write transaction.
   const signal = AbortSignal.timeout(model.implementation.hostedModel ? 20_000 : 5_000)
@@ -246,7 +247,7 @@ export async function processSimulatedDraft(
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
           selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
-          citationIds: candidate.draft.evidenceIds, modelId: model.id, modelVersion, followUp,
+          citationIds: candidate.draft.evidenceIds, modelId, modelVersion, followUp,
         })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({
@@ -258,7 +259,7 @@ export async function processSimulatedDraft(
             writingEvidenceIds: [...candidate.writingRevisions.keys()],
             citationIds: candidate.draft.evidenceIds,
             beliefRefs: candidate.beliefVersions,
-            modelId: model.id,
+            modelId,
             modelVersion,
           },
         })

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
   deploymentConfigurations, deploymentPluginChange, deploymentPluginId, deploymentPluginIds,
-  deploymentPluginsView, type DeploymentPluginsView,
+  deploymentPluginsView, type DeploymentPluginId, type DeploymentPluginsView,
 } from './deployment-plugin-contracts.js'
 import { pluginStage } from '../packages/contracts/deployment-plugins.js'
 import { writeSettings } from '../packages/runtime/write-settings.js'
@@ -36,8 +36,7 @@ export function createDeploymentPluginStore(directory: string) {
   function view(record: StoredDeployment, provider: string): DeploymentPluginsView {
     const plugins = {} as DeploymentPluginsView['plugins']
     for (const id of deploymentPluginIds) {
-      const previouslyEnabled = id === provider
-      plugins[id] = record.plugins[id] ?? (previouslyEnabled ? 'ENABLED' : 'NOT_INSTALLED')
+      plugins[id] = record.plugins[id] ?? 'NOT_INSTALLED'
     }
     const configuration = Object.fromEntries(deploymentConfigurations.map(({ id, stored, view }) =>
       [id, view(stored.optional().parse(record[id]))]))
@@ -79,10 +78,9 @@ export function createDeploymentPluginStore(directory: string) {
       const plugin = deploymentPluginId.parse(id)
       return { stage: record.plugins[plugin], config: record[plugin] }
     },
-    async isEnabled(id: string, getProvider: () => Promise<string>) {
+    async isEnabled(id: DeploymentPluginId) {
       const record = await read()
-      const stage = deploymentPluginId.safeParse(id)
-      return stage.success && view(record, await getProvider()).plugins[stage.data] === 'ENABLED'
+      return record.plugins[id] === 'ENABLED'
     },
   }
 }

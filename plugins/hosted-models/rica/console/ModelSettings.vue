@@ -1,30 +1,37 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { UiAlert, UiButton, UiField, UiSpinner } from '@rica/console-shared/ui'
-import type { ModelPluginOption } from '@rica/contracts/model-provider'
-import { createModelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../management/contracts.js'
+import { modelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../management/contracts.js'
+import { hostedModelCatalog } from '../../providers/catalog.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
 import { modelCheckLabels } from './labels.js'
 
-const props = defineProps<{ option: ModelPluginOption; canStartSimulation: boolean }>()
+defineProps<{ canStartSimulation: boolean }>()
 const emit = defineEmits<{ close: []; expired: []; saved: []; simulate: [] }>()
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
 const path = '/v1/model-settings'
 const current = ref<ModelSettingsView>()
 const checkResult = ref<ModelCheckResult>()
 const checking = ref(false)
-const form = reactive({ model: '', baseUrl: '', apiKey: '' })
-const modelSettingsInput = computed(() => createModelSettingsContracts([props.option]).modelSettingsInput)
-const reuseKey = computed(() => current.value?.hasKey && current.value.provider === props.option.id
-  && (!props.option.requiresBaseUrl || current.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
+const form = reactive({ provider: '', model: '', baseUrl: '', apiKey: '' })
+const { modelSettingsInput } = modelSettingsContracts
+const option = computed(() => hostedModelCatalog.find(({ id }) => id === form.provider))
+const reuseKey = computed(() => current.value?.hasKey && current.value.provider === form.provider
+  && (!option.value?.requiresBaseUrl || current.value.baseUrl === form.baseUrl.trim().replace(/\/+$/, '')))
 const canCheck = computed(() => reuseKey.value && !form.apiKey && current.value?.model === form.model.trim())
+
+function selectProvider(provider: string) {
+  const saved = current.value?.provider === provider ? current.value : undefined
+  checkResult.value = undefined
+  notice.value = ''
+  error.value = ''
+  Object.assign(form, { provider, model: saved?.model ?? '', baseUrl: saved?.baseUrl ?? '', apiKey: '' })
+}
 
 function setCurrent(value: ModelSettingsView) {
   current.value = value
-  checkResult.value = undefined
-  const same = value.provider === props.option.id
-  Object.assign(form, { model: same ? value.model ?? '' : '', baseUrl: same ? value.baseUrl ?? '' : '', apiKey: '' })
+  selectProvider(value.provider === 'simulated' ? '' : value.provider)
 }
 
 function load() {
@@ -35,10 +42,10 @@ function load() {
 }
 
 function save() {
-  if (!current.value || busy.value) return
-  const input = modelSettingsInput.value.safeParse({
-    provider: props.option.id, model: form.model, apiKey: form.apiKey || undefined,
-    baseUrl: props.option.requiresBaseUrl ? form.baseUrl.trim() : undefined,
+  if (!current.value || !option.value || busy.value) return
+  const input = modelSettingsInput.safeParse({
+    provider: option.value.id, model: form.model, apiKey: form.apiKey || undefined,
+    baseUrl: option.value.requiresBaseUrl ? form.baseUrl.trim() : undefined,
   })
   notice.value = ''
   if (!input.success || (!input.data.apiKey && !reuseKey.value)) {
@@ -82,13 +89,21 @@ onMounted(() => { heading.value?.focus(); void load() })
 <template>
   <section class="model-settings" aria-labelledby="model-settings-heading">
     <div class="console-section-heading">
-      <h3 id="model-settings-heading" ref="heading" tabindex="-1">{{ option.name }} · AI API 设置</h3>
+      <h3 id="model-settings-heading" ref="heading" tabindex="-1">AI API 设置</h3>
       <UiButton size="small" variant="quiet" :disabled="busy" @click="emit('close')">收起设置</UiButton>
     </div>
     <UiSpinner v-if="busy && !current" aria-label="正在读取模型设置" />
     <form v-if="current" @submit.prevent="save">
       <p class="model-settings-scope">应用于此部署所有角色的公开模拟草稿。启用外部模型后，模拟消息、身份写作指令及允许公开引用的资料会发送给所选服务。</p>
       <div class="model-settings-fields">
+        <UiField label="模型提供方" for="model-settings-provider">
+          <select id="model-settings-provider" class="ui-control" :value="form.provider" :disabled="busy" required
+            @change="selectProvider(($event.target as HTMLSelectElement).value)">
+            <option value="" disabled>选择模型提供方</option>
+            <option v-for="provider in hostedModelCatalog" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
+          </select>
+        </UiField>
+        <template v-if="option">
           <UiField label="模型 ID" for="model-settings-name">
             <input class="ui-control" v-model="form.model" :disabled="busy" placeholder="供应商提供的文本模型 ID"
               v-bind="{ id: 'model-settings-name', required: true }" />
@@ -102,15 +117,16 @@ onMounted(() => { heading.value?.focus(); void load() })
               :placeholder="reuseKey ? '已保存密钥，留空继续使用' : '输入供应商 API 密钥'"
               v-bind="{ id: 'model-settings-key', autocomplete: 'new-password', required: !reuseKey }" />
           </UiField>
+        </template>
       </div>
       <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
       <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
-      <div class="model-settings-actions">
+      <div v-if="option" class="model-settings-actions">
         <UiButton tone="primary" type="submit" :disabled="busy" :loading="busy && !checking">保存模型设置</UiButton>
         <UiButton type="button" :disabled="busy || !canCheck" :loading="checking" @click="testModel">测试模型</UiButton>
         <UiButton v-if="error" :disabled="busy" variant="quiet" @click="load">重新读取设置</UiButton>
       </div>
-      <p class="model-settings-scope model-settings-test-hint">
+      <p v-if="option" class="model-settings-scope model-settings-test-hint">
         {{ canCheck ? '测试会向服务商发送一条固定消息，并可能消耗模型额度。' : '保存当前设置后可测试模型。' }}
       </p>
       <UiAlert v-if="checkResult && canCheck" :tone="checkResult.status === 'OK' ? 'success' : 'error'" role="status">

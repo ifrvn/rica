@@ -149,7 +149,7 @@ Invoke-Rica Post "$ricaCharacter/demo-echo/preview" -Body @{ text = '  测试预
 | `status(provider)` | `Promise<DeploymentPluginsView>`，返回版本、各部署项状态、公开配置和当前已配置模型。`provider` 为模型提供方 ID。 |
 | `save(change, expected, getProvider)` | 检查版本和状态，应用部署或配置变更，原子写入并返回最新公开视图。 `expected: number`，`getProvider: () => Promise<string>`。 |
 | `readConfiguration(id)` | `Promise<{ stage?: PluginStage; config: unknown }>`。用于服务端，插件负责解析自己的存储值。 |
-| `isEnabled(id, getProvider)` | `Promise<boolean>`。按部署记录及当前模型配置判断启用状态。 |
+| `isEnabled(id)` | `Promise<boolean>`。按部署记录判断指定插件是否已启用。 |
 
 配置贡献示例。此处的 `acme` 与其 ID、公开 schema 需登记到部署目录。
 

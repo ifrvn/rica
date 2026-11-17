@@ -3,13 +3,14 @@ import { versionHeader } from '@rica/contracts/management'
 import { modelCheckInput, type ModelCheckStatus } from './contracts.js'
 import { checkModel } from './check.js'
 import { ModelSettingsError, type createModelSettingsStore } from './settings.js'
+import { hostedModelsPluginId } from '../identity.js'
 import { ManagementError } from '../../../../packages/persistence/management.js'
 import { body, errors, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '../../../../packages/runtime/management-http.js'
 
 export function createHostedModelManagement({ modelSettings, authorize, isEnabled, startModelPlugin }: {
   modelSettings: ReturnType<typeof createModelSettingsStore>
   authorize(actor: ManagementPrincipal): void
-  isEnabled(provider: string): Promise<boolean>
+  isEnabled(): Promise<boolean>
   startModelPlugin: Parameters<typeof checkModel>[1]
 }): ManagementPlugin {
   const { modelCheckResult, modelCheckStatus, modelSettingsInput, modelSettingsView } = modelSettings.contracts
@@ -35,7 +36,7 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
       authorize(actor)
       const store = modelSettings
       const input = c.req.valid('json')
-      if (input.provider !== 'simulated' && !await isEnabled(input.provider)) {
+      if (input.provider !== 'simulated' && !await isEnabled()) {
         throw new ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable the model plugin first')
       }
       try {
@@ -67,8 +68,7 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
         if (saved.version !== expected) throw new ManagementError(412, 'VERSION_CONFLICT', 'Model settings have changed')
         const { configuration } = saved
         const { provider } = configuration
-        if (provider === 'simulated'
-          || !await isEnabled(provider)) {
+        if (provider === 'simulated' || !await isEnabled()) {
           throw new ManagementError(409, 'PLUGIN_STATE_CONFLICT', 'Enable and configure the model plugin first')
         }
         const result = await checkModel(configuration, startModelPlugin)
@@ -85,9 +85,9 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
     const current = await modelSettings.status()
     const recent = latestModelCheck
     const modelCheck = recent && recent.version === current.version && recent.result.provider === current.provider
-      && await isEnabled(current.provider) ? recent.result : undefined
+      && await isEnabled() ? recent.result : undefined
     return { modelCheck }
   }
 
-  return { id: 'hosted-models', registerRoutes, status: { fields: { modelCheck: modelCheckStatus.optional() }, read: readStatus } }
+  return { id: hostedModelsPluginId, registerRoutes, status: { fields: { modelCheck: modelCheckStatus.optional() }, read: readStatus } }
 }

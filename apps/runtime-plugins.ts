@@ -1,9 +1,9 @@
 import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
-import type { ModelSettingsInput } from '@rica/plugin-hosted-models/shared'
+import { hostedModelsPluginId, type ModelSettingsInput } from '@rica/plugin-hosted-models/shared'
 import type { ModelProvider } from '@rica/contracts/model-provider'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
-import { hostedModelDefinitions, type createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { hostedModelDefinition, type createModelSettingsStore } from '@rica/plugin-hosted-models'
 import { simulatedPlatformDefinitions } from '@rica/plugin-simulated-platforms'
 
 import type { PluginMetadata } from '../packages/contracts/plugin-status.js'
@@ -13,7 +13,7 @@ function metadata(kind: PluginMetadata['kind'], { id, version, contractVersion }
 }
 
 export const simulationPlatformCatalog = simulatedPlatformDefinitions.map((item) => metadata('platform', item))
-const modelDefinitions = [simulatedModelDefinition, ...hostedModelDefinitions]
+const modelDefinitions = [simulatedModelDefinition, hostedModelDefinition]
 export const cognitionCatalog = [...simulationPlatformCatalog, ...modelDefinitions.map((item) => metadata('model', item))]
 
 async function startHost<T>(kind: string, definitions: readonly PluginDefinition<T>[],
@@ -41,9 +41,10 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
   return { ...host, resolveAdapter, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
 }
 
-export async function startModelPlugin({ provider: id, ...configuration }: ModelSettingsInput, service?: string,
+export async function startModelPlugin(configuration: ModelSettingsInput, service?: string,
   definitions: readonly PluginDefinition<ModelProvider>[] = modelDefinitions,
 ) {
+  const id = configuration.provider === 'simulated' ? 'simulated' : hostedModelsPluginId
   const config = id === 'simulated' ? undefined : configuration
   const host = await startHost('model', definitions, [{ id, config }], service)
   const model = host.find(id)!
@@ -57,15 +58,17 @@ export async function startConfiguredModel(
   const initial = await settings.read()
   let selected = await start(initial.configuration, service)
   let version = initial.version
+  let provider = initial.configuration.provider
   return {
     get metadata() { return selected.metadata },
     async read() {
       const record = await settings.read()
-      if (record.version !== version || record.configuration.provider !== selected.metadata.id) {
+      if (record.version !== version || record.configuration.provider !== provider) {
         const next = await start(record.configuration, service)
         await selected.stop()
         selected = next
         version = record.version
+        provider = record.configuration.provider
       }
       return selected.model
     },

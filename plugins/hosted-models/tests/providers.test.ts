@@ -17,7 +17,7 @@ const input = {
 
 const chatReply = { choices: [{ finish_reason: 'stop', message: { content: '下午三点。' } }] }
 
-test('built-in model plugins send only writing input and parse their provider replies', async (t) => {
+test('hosted models send only writing input and parse each provider response', async (t) => {
   const fixtures = [
     ['openai', 'authorization', 'Bearer fixture-key', 'https://api.openai.com/v1/chat/completions', chatReply],
     ['anthropic', 'x-api-key', 'fixture-key', 'https://api.anthropic.com/v1/messages',
@@ -52,7 +52,9 @@ test('built-in model plugins send only writing input and parse their provider re
       ...(id === 'openai-compatible' ? { baseUrl: 'https://models.example/v1/' } : {}),
     })
     try {
+      assert.equal(plugins.model.id, 'hosted-models')
       const model = plugins.model.implementation
+      assert.equal(model.hostedProvider, id)
       assert.equal(model.hostedModel, 'fixture-model')
       assert.equal(await model.decide({ text: input.text } as Parameters<ModelProvider['decide']>[0], signal), 'REPLY')
       assert.equal(fetch.mock.callCount(), 0)
@@ -75,11 +77,11 @@ test('built-in model plugins send only writing input and parse their provider re
 
 test('hosted model refuses to start without its required key or with an insecure compatible endpoint', async () => {
   await assert.rejects(startCognitionPlugins({}, undefined, { provider: 'openai', model: 'fixture-model' }),
-    /INVALID_CONFIG: model\/openai/)
+    /INVALID_CONFIG: model\/hosted-models/)
   await assert.rejects(startCognitionPlugins({}, undefined, {
     provider: 'openai-compatible', model: 'fixture-model',
     baseUrl: 'http://models.example/v1', apiKey: 'fixture-key',
-  }), /INVALID_CONFIG: model\/openai-compatible/)
+  }), /INVALID_CONFIG: model\/hosted-models/)
 })
 
 test('failed and truncated upstream responses cannot produce a draft', async (t) => {

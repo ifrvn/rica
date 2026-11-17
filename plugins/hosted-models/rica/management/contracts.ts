@@ -1,8 +1,10 @@
 import { z } from 'zod'
-import type { ModelPluginOption } from '@rica/contracts/model-provider'
+import { hostedModelCatalog } from '../../providers/catalog.js'
 import { modelSettingsFields } from '../../providers/config.js'
 
-export function createModelSettingsContracts(catalog: readonly ModelPluginOption[]) {
+type ProviderOption = Readonly<{ id: string; requiresBaseUrl: boolean }>
+
+export function createModelSettingsContracts(catalog: readonly ProviderOption[]) {
   const options = new Map(catalog.map((option) => [option.id, option]))
   const provider = z.enum(['simulated', ...options.keys()])
   const modelSettingsInput = z.strictObject({ provider, ...modelSettingsFields }).refine((value) => {
@@ -26,6 +28,7 @@ export function createModelSettingsContracts(catalog: readonly ModelPluginOption
 }
 
 export const modelCheckInput = z.object({ version: z.number().int().positive() })
+export const modelSettingsContracts = createModelSettingsContracts(hostedModelCatalog)
 
 export type ModelSettingsContracts = ReturnType<typeof createModelSettingsContracts>
 export type ModelSettingsInput = z.infer<ModelSettingsContracts['modelSettingsInput']>

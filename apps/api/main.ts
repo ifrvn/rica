@@ -7,10 +7,10 @@ import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
 import { createHostedModelManagement, createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { denyPermission } from '../../packages/persistence/management.js'
 import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@rica/plugin-newbi'
 import { startModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
-import { modelSettingsContracts } from '../model-plugin-catalog.js'
 import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
@@ -55,7 +55,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
     }),
     createHostedModelManagement({ modelSettings, startModelPlugin,
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
-      isEnabled: (provider) => deploymentPlugins.isEnabled(provider, activeModel),
+      isEnabled: () => deploymentPlugins.isEnabled(hostedModelsPluginId),
     }),
   ],
 }) : undefined

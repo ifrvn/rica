@@ -1,4 +1,4 @@
-import { modelSettingsContracts } from './model-plugin-catalog.js'
+import { modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { z } from '@hono/zod-openapi'
 import { pluginStatusView } from '../packages/contracts/plugin-status.js'
 import { deploymentPluginsView } from './deployment-plugin-contracts.js'

@@ -5,6 +5,7 @@ import { simulatedModel } from '@rica/plugin-simulated-model'
 import { hostedModelCatalog, type HostedModel } from '../providers/catalog.js'
 import { parseHostedModelConfig, type HostedModelConfig } from '../providers/config.js'
 import { HostedApiError, requestHostedReply } from '../providers/client.js'
+import { hostedModelsPluginId } from './identity.js'
 
 export class HostedModelError extends ModelProviderError {}
 
@@ -12,6 +13,7 @@ const structuredReply = z.object({ text: z.string().trim().min(1), followUp: z.u
 
 function createHostedModel(id: HostedModel['id'], config: HostedModelConfig): ModelProvider {
   return {
+    hostedProvider: id,
     hostedModel: config.model,
     decide: simulatedModel.decide,
     async write({ text, evidence, style, time, identityPrompt, suggestFollowUp }, signal) {
@@ -55,11 +57,15 @@ function createHostedModel(id: HostedModel['id'], config: HostedModelConfig): Mo
   }
 }
 
-export const hostedModelDefinitions: readonly PluginDefinition<ModelProvider>[] =
-  hostedModelCatalog.map((provider) => ({
-    id: provider.id, version: '1.0.0', contractVersion: 1,
-    prepare(config) {
-      const parsed = parseHostedModelConfig(provider, config)
-      return () => ({ implementation: createHostedModel(provider.id, parsed) })
-    },
-  }))
+const providerConfig = z.object({ provider: z.string() }).passthrough()
+
+export const hostedModelDefinition: PluginDefinition<ModelProvider> = {
+  id: hostedModelsPluginId, version: '1.0.0', contractVersion: 1,
+  prepare(config) {
+    const { provider: id, ...settings } = providerConfig.parse(config)
+    const provider = hostedModelCatalog.find((option) => option.id === id)
+    if (!provider) throw new Error('Unknown hosted model provider')
+    const parsed = parseHostedModelConfig(provider, settings)
+    return () => ({ implementation: createHostedModel(provider.id, parsed) })
+  },
+}

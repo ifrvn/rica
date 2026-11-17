@@ -7,9 +7,9 @@ import type { PrismaClient } from '../../../packages/persistence/generated/clien
 import { createModelSettingsStore, enabledModelSettings } from '../rica/management/settings.js'
 import { createDeploymentPluginStore } from '../../../apps/deployment-plugins.js'
 import { startConfiguredModel, startModelPlugin } from '../../../apps/runtime-plugins.js'
-import { modelPluginCatalog, modelSettingsContracts } from '../../../apps/model-plugin-catalog.js'
+import { hostedModelCatalog, hostedModelsPluginId, modelSettingsContracts } from '../rica/shared.js'
 import { createModelSettingsContracts } from '../rica/management/contracts.js'
-import type { ModelPluginOption, ModelProvider } from '@rica/contracts/model-provider'
+import type { ModelProvider } from '@rica/contracts/model-provider'
 import type { PluginDefinition } from '@rica/plugin-host'
 import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
 import { localIssuer } from '../../../apps/api/admin-auth.js'
@@ -35,7 +35,7 @@ async function fixture(t: TestContext, managePlugins = false, contracts = modelS
     origin, cookie: 'rica_session', resolveAdapter: () => undefined, activeModel,
     plugins: [createHostedModelManagement({ modelSettings: store, startModelPlugin: start,
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
-      isEnabled: (id) => managePlugins ? plugins.isEnabled(id, activeModel) : Promise.resolve(true),
+      isEnabled: () => managePlugins ? plugins.isEnabled(hostedModelsPluginId) : Promise.resolve(true),
     })],
     deploymentPlugins: managePlugins ? plugins : undefined,
     authenticate: async (request) => {
@@ -96,39 +96,55 @@ test('a running Worker model loader uses saved settings on the next draft', asyn
   assert.equal((await configured.read()).id, 'simulated')
   assert.equal((await put(openai, 0)).status, 200)
   const next = await configured.read()
-  assert.equal(next.id, 'openai')
+  assert.equal(next.id, hostedModelsPluginId)
+  assert.equal(next.implementation.hostedProvider, 'openai')
   assert.equal(next.implementation.hostedModel, 'fixture-model')
   assert.equal(await configured.read(), next)
   assert.equal((await put({ provider: 'simulated' }, 1)).status, 200)
   assert.equal((await configured.read()).id, 'simulated')
 })
 
-test('only the deployment operator can install and enable models; stopping a model returns the worker to local drafting', async (t) => {
-  const { pluginChange, plugins, put, store } = await fixture(t, true)
-  const model = await startConfiguredModel(enabledModelSettings(store, (provider) => plugins.isEnabled(provider, async () => provider)))
+test('hosted providers share one operator-controlled lifecycle; disabling it returns the worker to local drafting', async (t) => {
+  const { check, health, pluginChange, plugins, put, store } = await fixture(t, true)
+  const model = await startConfiguredModel(enabledModelSettings(store, () => plugins.isEnabled(hostedModelsPluginId)))
   t.after(model.stop)
-  const change = (action: string, version: number) => pluginChange({ action, id: 'openai' }, version)
-  assert.equal((await pluginChange({ action: 'INSTALL', id: 'openai' }, 0, 'role-admin')).status, 403)
+  const change = (action: string, version: number) => pluginChange({ action, id: hostedModelsPluginId }, version)
+  assert.equal((await pluginChange({ action: 'INSTALL', id: hostedModelsPluginId }, 0, 'role-admin')).status, 403)
+  assert.equal((await pluginChange({ action: 'INSTALL', id: 'openai' }, 0)).status, 422)
   assert.equal((await change('ENABLE', 0)).status, 409)
   const installs = await Promise.all([change('INSTALL', 0), change('INSTALL', 0)])
   assert.deepEqual(installs.map(({ status }) => status).sort(), [200, 412])
   assert.equal((await put(openai, 0)).status, 409)
   assert.equal((await change('ENABLE', 1)).status, 200)
   assert.equal((await put(openai, 0)).status, 200)
-  assert.equal((await model.read()).id, 'openai')
+  assert.equal((await model.read()).id, hostedModelsPluginId)
+  const gemini = { provider: 'gemini', model: 'fixture-gemini' }
+  assert.equal((await put(gemini, 1)).status, 422)
+  assert.equal((await put({ ...gemini, apiKey: 'fixture-gemini-key' }, 1)).status, 200)
+  const switched = await model.read()
+  assert.equal(switched.id, hostedModelsPluginId)
+  assert.equal(switched.implementation.hostedProvider, 'gemini')
+  assert.equal(await model.read(), switched)
+  const { deployment, services } = await (await health()).json()
+  assert.deepEqual(Object.keys(deployment.plugins).sort(), [hostedModelsPluginId, 'newbi'])
+  assert.equal(deployment.configuredModel, 'gemini')
+  assert.deepEqual(services.find(({ service }: { service: string }) => service === 'worker').catalog
+    .filter(({ kind }: { kind: string }) => kind === 'model').map(({ id }: { id: string }) => id),
+    ['simulated', hostedModelsPluginId])
   assert.equal((await change('DISABLE', 2)).status, 200)
   assert.equal((await model.read()).id, 'simulated')
-  assert.equal((await put(openai, 1)).status, 409)
+  assert.equal((await put(openai, 2)).status, 409)
+  assert.equal((await check(2)).status, 409)
   assert.equal((await change('ENABLE', 3)).status, 200)
-  assert.equal((await model.read()).id, 'openai')
+  assert.equal((await model.read()).implementation.hostedProvider, 'gemini')
 })
 
-test('a separately registered model appears in settings and is loaded and checked through its own factory', async (t) => {
-  const option = { id: 'fixture-model-provider', name: 'Fixture model', requiresBaseUrl: true } satisfies ModelPluginOption
+test('a provider added to hosted model settings can be loaded and checked through the hosted plugin', async (t) => {
+  const option = { id: 'fixture-model-provider', requiresBaseUrl: true }
   const definition: PluginDefinition<ModelProvider> = {
-    id: option.id, version: '1.0.0', contractVersion: 1,
+    id: hostedModelsPluginId, version: '1.0.0', contractVersion: 1,
     prepare(config) {
-      assert.deepEqual(config, { model: 'fixture-model', apiKey: secret, baseUrl: 'https://fixture.example/v1' })
+      assert.deepEqual(config, { provider: option.id, model: 'fixture-model', apiKey: secret, baseUrl: 'https://fixture.example/v1' })
       return () => ({
         implementation: {
           async decide() { return 'REPLY' },
@@ -137,7 +153,7 @@ test('a separately registered model appears in settings and is loaded and checke
       })
     },
   }
-  const contracts = createModelSettingsContracts([...modelPluginCatalog, option])
+  const contracts = createModelSettingsContracts([...hostedModelCatalog, option])
   const start: typeof startModelPlugin = (configuration, service) =>
     startModelPlugin(configuration, service, [simulatedModelDefinition, definition])
   const { check, get, health, put, store } = await fixture(t, false, contracts, start)
@@ -152,7 +168,7 @@ test('a separately registered model appears in settings and is loaded and checke
   assert.deepEqual(await (await get()).json(), {
     version: 1, provider: option.id, model: input.model, baseUrl: 'https://fixture.example/v1', hasKey: true,
   })
-  assert.equal((await configured.read()).id, option.id)
+  assert.equal((await configured.read()).id, hostedModelsPluginId)
   const result = await (await check(1)).json()
   assert.equal(result.reply, 'Fixture reply')
   assert.deepEqual(await (await health()).json().then(({ modelCheck }) => modelCheck), {
@@ -175,8 +191,8 @@ test('model checks use the saved configuration and disclose only a redacted repl
       ? Response.json({ choices: [{ finish_reason: 'stop', message: { content: '模型已响应 ' + secret } }] })
       : new Response('sensitive provider body ' + secret, { status })
   })
-  assert.equal((await pluginChange({ action: 'INSTALL', id: 'openai' }, 0)).status, 200)
-  assert.equal((await pluginChange({ action: 'ENABLE', id: 'openai' }, 1)).status, 200)
+  assert.equal((await pluginChange({ action: 'INSTALL', id: hostedModelsPluginId }, 0)).status, 200)
+  assert.equal((await pluginChange({ action: 'ENABLE', id: hostedModelsPluginId }, 1)).status, 200)
   assert.equal((await put(openai, 0)).status, 200)
   assert.equal((await check(1, 'role-admin')).status, 403)
   assert.equal((await check(2)).status, 412)
@@ -198,7 +214,7 @@ test('model checks use the saved configuration and disclose only a redacted repl
   assert.equal(JSON.stringify(failure).includes(secret), false)
   assert.equal((await put({ provider: 'openai', model: 'other-model' }, 1)).status, 200)
   assert.equal((await (await health()).json()).modelCheck, undefined)
-  assert.equal((await pluginChange({ action: 'DISABLE', id: 'openai' }, 2)).status, 200)
+  assert.equal((await pluginChange({ action: 'DISABLE', id: hostedModelsPluginId }, 2)).status, 200)
   assert.equal((await check(2)).status, 409)
   assert.equal(upstream.mock.callCount(), 2)
 })

@@ -40,7 +40,7 @@ const serviceNames: Record<string, string> = { api: '管理 API', worker: '认�
 
 function reportedVersion(id: DeploymentPluginId, entry: { service: string; current: PluginMetadata; target: PluginMetadata | null }) {
   if (deployment.value?.plugins[id] !== 'ENABLED') return '插件未启用'
-  if (entry.current.kind === 'model' && deployment.value.configuredModel !== id) return '当前未选用此模型'
+  if (entry.current.kind === 'model' && !deployment.value.configuredModel) return '尚未配置模型提供方'
   const report = status.value?.services.find(({ service }) => service === entry.service)?.report
   if (!report) return '暂无近期运行报告'
   if (report.status === 'FAILED') return '最近运行报告失败'

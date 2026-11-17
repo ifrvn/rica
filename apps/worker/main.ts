@@ -3,7 +3,7 @@ import { sweepRuntimeRetention } from './runtime-retention.js'
 import { loadConfig } from '../../packages/runtime/config.js'
 import { startConfiguredModel, startSimulationPlatforms } from '../runtime-plugins.js'
 import { createModelSettingsStore, enabledModelSettings } from '@rica/plugin-hosted-models'
-import { modelSettingsContracts } from '../model-plugin-catalog.js'
+import { hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
@@ -13,7 +13,7 @@ async function main() {
   const directory = modelSettingsDirectory(config.databaseUrl)
   const settings = createModelSettingsStore(directory, modelSettingsContracts)
   const plugins = createDeploymentPluginStore(directory)
-  const activeSettings = enabledModelSettings(settings, (provider) => plugins.isEnabled(provider, async () => provider))
+  const activeSettings = enabledModelSettings(settings, () => plugins.isEnabled(hostedModelsPluginId))
   const selected = await startConfiguredModel(activeSettings, 'worker').catch(async (error: unknown) => {
     await reportPluginResult(config.redisUrl, 'worker', observationError(error, 'START_FAILED'))
     throw error

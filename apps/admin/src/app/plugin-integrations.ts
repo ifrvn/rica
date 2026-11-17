@@ -2,8 +2,8 @@ import type { z } from '@hono/zod-openapi'
 import type { Component } from 'vue'
 import type { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@rica/plugin-newbi/shared'
 import { newbiAccounts, newbiCard, newbiConsole, newbiReview, type ConnectorCardStatus } from '@rica/plugin-newbi/console'
-import { createModelCards, modelHealth } from '@rica/plugin-hosted-models/console'
-import { modelPluginCatalog } from '../../../model-plugin-catalog.js'
+import { hostedModelsCard, modelHealth } from '@rica/plugin-hosted-models/console'
+import { hostedModelsPluginId } from '@rica/plugin-hosted-models/shared'
 import type { DeploymentPluginId, DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 
 export type ConnectorAccount = z.infer<typeof newbiAccountView>
@@ -26,7 +26,7 @@ type PluginCard = {
   upgradeQueue?(status?: ConnectorCardStatus): { label: string; status: string; count: number }[] | undefined
 }
 
-export const pluginCards: Record<DeploymentPluginId, PluginCard> = { [newbiConsole.id]: newbiCard, ...createModelCards(modelPluginCatalog) }
+export const pluginCards: Record<DeploymentPluginId, PluginCard> = { [newbiConsole.id]: newbiCard, [hostedModelsPluginId]: hostedModelsCard }
 export const pluginServiceNames = newbiConsole.serviceNames
 
 type AccountBase = Pick<ConnectorAccount, 'id' | 'platform' | 'instanceKey'> & { version?: number; status?: string }
@@ -68,10 +68,6 @@ export const platformReviews: readonly {
   workbench?(characterId: string, canManage: boolean): Promise<ReviewQueue[]>
 }[] = [newbiReview]
 
-const modelNames = Object.fromEntries(modelPluginCatalog.map(({ id, name }) => [id, name])) as
-  Record<(typeof modelPluginCatalog)[number]['id'], string>
-export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, ...modelNames }
-export function hostedModelHealth(status: Parameters<typeof modelHealth>[1], external: Parameters<typeof modelHealth>[2]) {
-  return modelHealth(modelPluginCatalog, status, external)
-}
+export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, [hostedModelsPluginId]: '外部模型' }
+export { modelHealth as hostedModelHealth }
 export { isSimulationPlatform } from '@rica/contracts/simulation-platform'
