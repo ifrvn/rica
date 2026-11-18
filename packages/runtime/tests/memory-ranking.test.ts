@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { MemoryCandidate } from '@ricajs/contracts/memory'
-import { rankMemoryCandidates } from './memory-ranking.js'
+import { rankMemoryCandidates } from '@ricajs/runtime/memory-ranking'
 
 const now = new Date('2026-11-06T00:00:00Z')
 function candidate(id: string, content: string, overrides: Partial<MemoryCandidate> = {}): MemoryCandidate {

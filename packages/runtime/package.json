@@ -17,11 +17,11 @@
     "registry": "https://registry.npmjs.org/"
   },
   "exports": {
-    "./config": "./config.ts",
-    "./settings-directory": "./settings-directory.ts",
-    "./write-settings": "./write-settings.ts",
-    "./memory-ranking": "./memory-ranking.ts",
-    "./writing-prompts": "./writing-prompts.ts"
+    "./config": "./config/index.ts",
+    "./settings-directory": "./config/settings-directory.ts",
+    "./write-settings": "./config/write-settings.ts",
+    "./memory-ranking": "./cognition/memory-ranking.ts",
+    "./writing-prompts": "./cognition/writing-prompts.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.9",

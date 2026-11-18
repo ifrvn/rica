@@ -1,6 +1,6 @@
 import { defaultAutoReviewPrompt } from '@ricajs/contracts/auto-review'
 import type { AutoReviewSettings } from '@ricajs/contracts/auto-review'
-import type { Prisma } from './generated/client.js'
+import type { Prisma } from '../generated/client.js'
 
 export async function readAutoReviewSettings(db: Pick<Prisma.TransactionClient, 'character'>, characterId: string) {
   const row = await db.character.findUnique({ where: { id: characterId },

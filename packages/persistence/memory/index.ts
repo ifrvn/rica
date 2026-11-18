@@ -1,7 +1,7 @@
 import type { MemoryCandidate } from '@ricajs/contracts/memory'
 import { memoryPrefilterWords, rankMemoryCandidates } from '@ricajs/runtime/memory-ranking'
-import { Prisma, type PrismaClient } from './generated/client.js'
-import { bindingMatches, lockEventContext, lockSimulatedBinding } from './run-context.js'
+import { Prisma, type PrismaClient } from '../generated/client.js'
+import { bindingMatches, lockEventContext, lockSimulatedBinding } from '../runtime/run-context.js'
 
 export type MemoryRequest =
   | { purpose: 'INTERNAL_CONTEXT' | 'DECISION_SUPPORT' | 'PRIVATE_REPLY'; audience?: never }

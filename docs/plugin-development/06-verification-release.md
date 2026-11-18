@@ -21,7 +21,7 @@ pnpm run test:integration
 
 | 改动 | 验收重点 | 可复用的测试 |
 | --- | --- | --- |
-| 运行时注册与生命周期 | 重复 ID、未知选择、缺依赖、无效配置、部分启动失败与释放 | [注册表测试](../../packages/runtime/plugin-registry.test.ts) |
+| 运行时注册与生命周期 | 重复 ID、未知选择、缺依赖、无效配置、部分启动失败与释放 | [注册表测试](../../packages/runtime/tests/plugin-registry.test.ts) |
 | 管理和部署 | 会话与 Origin、角色权限、版本冲突、字段碰撞、启停后的行为 | [管理插件测试](../../apps/api/management-plugins.test.ts)、[模型设置测试](../../plugins/hosted-models/tests/model-settings.test.ts) |
 | 外部模型协议 | 发送字段最小化、超时、认证失败、无效响应以及公开和私密分流 | 用受控服务替身记录出站请求，配合[入站集成](../../scripts/inbound.integration.test.ts)验证授权 |
 | 外部读取与写入 | 账号隔离、绑定变更、读写权限、游标去重、批准后发送、丢响应恢复与结案 | 用平台协议夹具验证读写，配合[管理集成](../../scripts/management.integration.test.ts)验证角色边界 |

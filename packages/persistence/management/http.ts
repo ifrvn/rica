@@ -1,8 +1,8 @@
 import { z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
 import type { OpenAPIHono } from '@hono/zod-openapi'
-import { ManagementError, type PlatformAccountHooks, type Scope } from './management.js'
-import type { Prisma } from './generated/client.js'
+import { ManagementError, type PlatformAccountHooks, type Scope } from './index.js'
+import type { Prisma } from '../generated/client.js'
 
 export type ManagementPrincipal = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
 export type ManagementEnvironment = { Variables: { actor: ManagementPrincipal; requestId: string } }

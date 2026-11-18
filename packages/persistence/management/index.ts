@@ -5,8 +5,8 @@ import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, isS
 import { localIssuer } from '@ricajs/contracts/local-users'
 import type * as contracts from '@ricajs/contracts/management'
 import type { scheduleInput, scheduleUpdate } from '@ricajs/contracts/schedules'
-import { dailyScheduleSlot } from './run-context.js'
-import type { Prisma, PrismaClient } from './generated/client.js'
+import { dailyScheduleSlot } from '../runtime/run-context.js'
+import type { Prisma, PrismaClient } from '../generated/client.js'
 
 type Subject = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
 type Tx = Prisma.TransactionClient

@@ -2,8 +2,8 @@ import { isSimulationPlatform } from '@ricajs/contracts/management'
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import type { planInput, planView } from '@ricajs/contracts/plans'
-import { Prisma, type PrismaClient } from './generated/client.js'
-import { authorize, makePage, ManagementError, pageArgs, scheduleTiming, type Page, type Scope } from './management.js'
+import { Prisma, type PrismaClient } from '../generated/client.js'
+import { authorize, makePage, ManagementError, pageArgs, scheduleTiming, type Page, type Scope } from './index.js'
 
 type Plan = z.infer<typeof planInput>
 type Tx = Prisma.TransactionClient

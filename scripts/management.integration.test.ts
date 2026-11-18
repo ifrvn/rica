@@ -1150,7 +1150,7 @@ test('simulation rate limits the same contact across conversations for a rolling
 
 async function crashSimulationProcess(actionId: string, checkpoint: 'permit' | 'receipt') {
   const program = `
-    import { createDatabase } from './packages/persistence/client.ts'
+    import { createDatabase } from '@ricajs/persistence/client'
     import { reserveSimulation, recordSimulationReceipt } from '@ricajs/simulation/execution'
     import { startSimulationPlatforms } from './apps/runtime-plugins.ts'
     const simulationPlatforms = await startSimulationPlatforms({})

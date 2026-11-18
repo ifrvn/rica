@@ -1,5 +1,5 @@
 import type { Continuity, IdentityState, RunContinuity, RunTime, SubjectiveBelief } from '@ricajs/contracts/run-continuity'
-import type { Prisma } from './generated/client.js'
+import type { Prisma } from '../generated/client.js'
 
 export async function loadRunContinuity(tx: Prisma.TransactionClient, runId: string): Promise<RunContinuity | null> {
   const [row] = await tx.$queryRaw<{

@@ -1,4 +1,4 @@
-import { Prisma, type ConversationChannel, type PrismaClient, type RunStateReason } from './generated/client.js'
+import { Prisma, type ConversationChannel, type PrismaClient, type RunStateReason } from '../generated/client.js'
 
 export const runQueuedEvent = 'RunQueued.v1'
 export const draftQueuedEvent = 'SimulatedDraftQueued.v1'

@@ -14,7 +14,7 @@
 | 本机试点已有独立的只读事件接收、单次发送及结果恢复。 | 先把只读协议接入平台能力，随后单独装配写入与对账，保留已有账本和进程权限。 |
 | 已有授权候选排序和长期评测。 | 排序保留原算法，评测保留原输入和指标。出现第二种实现时，再抽取对应扩展点。 |
 
-当前代码入口见[注册表](../packages/plugin-host/plugin-registry.ts)、[模型契约](../packages/contracts/model-provider.ts)、[模拟适配器](../packages/simulation/adapters/platforms.ts)、[模拟审批](../packages/simulation/workflow/review.ts)和[模拟执行](../packages/simulation/workflow/execution.ts)。
+当前代码入口见[注册表](../packages/plugin-host/plugin-registry.ts)、[模型契约](../packages/contracts/runtime/model-provider.ts)、[模拟适配器](../packages/simulation/adapters/platforms.ts)、[模拟审批](../packages/simulation/workflow/review.ts)和[模拟执行](../packages/simulation/workflow/execution.ts)。
 
 ## 2. 目标架构
 
@@ -95,6 +95,6 @@ P0 至 P2 先交付可以独立验收的模拟主链。P3 是切换实际执行�
 | PL-04 执行切换 | 更换执行实现、版本或契约后，旧审批拿不到新许可。在途结果仍可对账，未知结果因切换产生的额外发送数为 0。 |
 | M1–M4 回归 | 保留多身份多平台流程、权限与审批、账本恢复、调度、反思及评测的既有验收。修改排序路径时单独复跑原规模基准，授权检索 P95 门槛为 300 ms。 |
 
-开发先跑[注册表测试](../packages/runtime/plugin-registry.test.ts)和受影响的集成用例。阶段交付前按改动范围运行 `pnpm run typecheck`、`pnpm test`、`pnpm run build` 及 `pnpm run test:integration`。数据阶段使用空库验证初始化迁移、Prisma 一致性与权限边界。真实写入相关用例统一使用隔离协议夹具。
+开发先跑[注册表测试](../packages/runtime/tests/plugin-registry.test.ts)和受影响的集成用例。阶段交付前按改动范围运行 `pnpm run typecheck`、`pnpm test`、`pnpm run build` 及 `pnpm run test:integration`。数据阶段使用空库验证初始化迁移、Prisma 一致性与权限边界。真实写入相关用例统一使用隔离协议夹具。
 
 实施时按 P0–P5 分组提交。每阶段通过后更新[路线图](roadmap.md)，记录默认配置、通过的验收、剩余限制和部署条件。

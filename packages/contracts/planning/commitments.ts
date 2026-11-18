@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import { listQuery, reasonInput, resourceId } from './management.js'
+import { listQuery, reasonInput, resourceId } from '../management/index.js'
 import { planningTask } from './plans.js'
 
 const collaborator = z.strictObject({ identityId: resourceId, accountId: resourceId })

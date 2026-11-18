@@ -4,11 +4,11 @@
 
 ## 挂载管理 API
 
-在插件包导出返回 [`ManagementPlugin`](../../packages/persistence/management-http.ts) 的工厂，由 [API 启动入口](../../apps/api/main.ts)传入已装配的数据库、连接配置和授权函数。工厂返回稳定的 `id` 与 `registerRoutes(app)`。插件使用 `app.openapi` 声明输入、响应和错误，路由路径以管理应用为根。宿主统一挂载在 `/v1` 下，运行时的接口描述见登录后的 `GET /v1/openapi.json`。新路径使用插件名作为命名空间，并确认方法与路径组合属于该插件。
+在插件包导出返回 [`ManagementPlugin`](../../packages/persistence/management/http.ts) 的工厂，由 [API 启动入口](../../apps/api/main.ts)传入已装配的数据库、连接配置和授权函数。工厂返回稳定的 `id` 与 `registerRoutes(app)`。插件使用 `app.openapi` 声明输入、响应和错误，路由路径以管理应用为根。宿主统一挂载在 `/v1` 下，运行时的接口描述见登录后的 `GET /v1/openapi.json`。新路径使用插件名作为命名空间，并确认方法与路径组合属于该插件。
 
 宿主提供会话、写请求 Origin 检查、请求大小限制和错误包络。路由继续验证该操作的权限及资源归属。角色作用域的管理接口先根据已认证的 `actor`、`characterId` 调用持久化层的 `authorize`，并在查询中绑定目标角色。角色管理员可审批及查看审计记录。部署级操作使用本地部署管理员权限，参考 [API 启动入口](../../apps/api/main.ts)对 `localIssuer` 和 `canCreate` 的检查。
 
-对于角色内的变更，优先通过 [`executeManagementCommand`](../../packages/persistence/management.ts)执行，传入操作名、角色和目标范围、输入、请求 ID 及适用的幂等键。它在事务内复核授权并写审计，使用相同键和输入重试时复用已提交的结果。带版本的更新使用现有 `versionHeader` 和 `version()` 解析 `If-Match`。权限规则见[管理 API](../management-api.md)。
+对于角色内的变更，优先通过 [`executeManagementCommand`](../../packages/persistence/management/index.ts)执行，传入操作名、角色和目标范围、输入、请求 ID 及适用的幂等键。它在事务内复核授权并写审计，使用相同键和输入重试时复用已提交的结果。带版本的更新使用现有 `versionHeader` 和 `version()` 解析 `If-Match`。权限规则见[管理 API](../management-api.md)。
 
 ## ManagementPlugin
 

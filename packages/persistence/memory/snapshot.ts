@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { memoryRankingVersion, rankMemoryCandidates } from '@ricajs/runtime/memory-ranking'
-import type { Prisma, PrismaClient } from './generated/client.js'
-import { loadMemoryReadScope, readMemoryCandidates, type MemoryRequest } from './memory.js'
+import type { Prisma, PrismaClient } from '../generated/client.js'
+import { loadMemoryReadScope, readMemoryCandidates, type MemoryRequest } from './index.js'
 
 async function bindSnapshotRun(tx: Prisma.TransactionClient, runId: string) {
   await tx.$queryRaw`SELECT set_config('rica.snapshot_run', ${runId}, true)`

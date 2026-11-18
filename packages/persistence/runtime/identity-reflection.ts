@@ -1,4 +1,4 @@
-import type { PrismaClient } from './generated/client.js'
+import type { PrismaClient } from '../generated/client.js'
 
 type IdentityScope = { id: string; characterId: string }
 

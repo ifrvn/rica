@@ -18,17 +18,17 @@
   },
   "exports": {
     "./prisma": "./generated/client.ts",
-    "./management-http": "./management-http.ts",
-    "./client": "./client.ts",
-    "./management": "./management.ts",
-    "./plans": "./plans.ts",
-    "./console-knowledge": "./console-knowledge.ts",
-    "./auto-review": "./auto-review.ts",
-    "./identity-reflection": "./identity-reflection.ts",
-    "./run-context": "./run-context.ts",
-    "./memory": "./memory.ts",
-    "./memory-snapshot": "./memory-snapshot.ts",
-    "./run-continuity": "./run-continuity.ts"
+    "./management-http": "./management/http.ts",
+    "./client": "./db/client.ts",
+    "./management": "./management/index.ts",
+    "./plans": "./management/plans.ts",
+    "./console-knowledge": "./management/console-knowledge.ts",
+    "./auto-review": "./runtime/auto-review.ts",
+    "./identity-reflection": "./runtime/identity-reflection.ts",
+    "./run-context": "./runtime/run-context.ts",
+    "./memory": "./memory/index.ts",
+    "./memory-snapshot": "./memory/snapshot.ts",
+    "./run-continuity": "./runtime/run-continuity.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",

@@ -1,7 +1,7 @@
 import type { z } from '@hono/zod-openapi'
 import type { conversationListQuery, memberListQuery } from '@ricajs/contracts/management'
-import type { Prisma, PrismaClient } from './generated/client.js'
-import { authorize, makePage, ManagementError, pageArgs, parsePage, type Page, type Scope } from './management.js'
+import type { Prisma, PrismaClient } from '../generated/client.js'
+import { authorize, makePage, ManagementError, pageArgs, parsePage, type Page, type Scope } from './index.js'
 
 function missing(): never { throw new ManagementError(404, 'NOT_FOUND', 'Resource not found') }
 

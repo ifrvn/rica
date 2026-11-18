@@ -1,5 +1,5 @@
 import { PrismaPg } from '@prisma/adapter-pg'
-import { PrismaClient, type Prisma } from './generated/client.js'
+import { PrismaClient, type Prisma } from '../generated/client.js'
 
 export type RawQueryClient = {
   $queryRaw<T>(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<T>

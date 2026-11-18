@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import { resourceId } from './management.js'
+import { resourceId } from '../management/index.js'
 import { scheduleUpdate } from './schedules.js'
 
 export const planningTask = z.string().trim().min(1).max(300).refine((value) => !value.includes('\0'))

@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import { characterInput, resourceId } from './management.js'
+import { characterInput, resourceId } from '../management/index.js'
 
 const scheduleRule = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('DAILY'), localTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/) }),

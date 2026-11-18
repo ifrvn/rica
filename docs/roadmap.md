@@ -156,7 +156,7 @@ Remove-Item Env:RICA_RECALL_BENCHMARK
 
 ### M1 退出证据
 
-自动化证据见[入站与授权集成测试](../scripts/inbound.integration.test.ts)、[管理与执行集成测试](../scripts/management.integration.test.ts)、[出箱冒烟测试](../scripts/outbox-smoke.ts)和[插件注册测试](../packages/runtime/plugin-registry.test.ts)。
+自动化证据见[入站与授权集成测试](../scripts/inbound.integration.test.ts)、[管理与执行集成测试](../scripts/management.integration.test.ts)、[出箱冒烟测试](../scripts/outbox-smoke.ts)和[插件注册测试](../packages/runtime/tests/plugin-registry.test.ts)。
 
 | 用例 | 结论 | 证据与适用范围 |
 | --- | --- | --- |

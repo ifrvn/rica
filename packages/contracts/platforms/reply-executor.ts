@@ -1,4 +1,4 @@
-import { PlatformReadError, type PlatformReadFailure } from './platform-reader.js'
+import { PlatformReadError, type PlatformReadFailure } from './reader.js'
 
 export type PlatformReplyExecutor = Readonly<{
   endpoint: string
