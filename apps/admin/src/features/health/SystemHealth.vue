@@ -125,7 +125,7 @@ const detail = computed(() => {
         @click="emit('accounts')">查看平台账号池</UiButton>
       <UiButton v-if="detail.id.startsWith('model-api-')" size="small" variant="soft"
         @click="detail.state === '待配置' ? emit('plugins') : emit('runs')">
-        {{ detail.state === '待配置' ? '前往插件中心' : '查看运行记录' }}
+        {{ detail.state === '待配置' ? '前往插件中心' : '查看模拟运行' }}
       </UiButton>
       <UiButton v-if="detail.id === 'postgres' || detail.id === 'redis'" size="small" variant="soft"
         :disabled="checking" @click="emit('check')">重试探测</UiButton>

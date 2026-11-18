@@ -156,7 +156,7 @@ onMounted(() => {
       <div class="console-section-heading">
         <h3 id="home-recent">最近动态</h3>
         <UiButton v-if="error" size="small" :loading="busy" @click="refresh">重新加载</UiButton>
-        <UiButton v-else-if="recent.length" size="small" variant="quiet" @click="emit('navigate', 'runs')">查看运行记录</UiButton>
+        <UiButton v-else-if="recent.length" size="small" variant="quiet" @click="emit('navigate', 'runs')">查看模拟运行</UiButton>
       </div>
       <UiSpinner v-if="busy && !backlog" aria-label="正在加载工作台" />
       <ol v-else-if="recent.length" class="home-timeline">
@@ -171,7 +171,7 @@ onMounted(() => {
           </button>
         </li>
       </ol>
-      <p v-else-if="!error" class="home-empty">当前角色暂无运行记录。</p>
+      <p v-else-if="!error" class="home-empty">当前角色暂无模拟运行。</p>
     </section>
     <section v-if="canReadRuns" class="home-card" aria-labelledby="home-tools">
       <div class="console-section-heading"><h3 id="home-tools">常用工具</h3></div>

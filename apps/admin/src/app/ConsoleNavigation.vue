@@ -12,7 +12,7 @@ const emit = defineEmits<{ select: [page: ConsolePage] }>()
     <button v-if="hasCharacter" type="button" :aria-current="mainPage === 'review' ? 'page' : undefined" :disabled="disabled"
       @click="emit('select', 'review')"><span class="i-lucide-clipboard-check" aria-hidden="true" />审批</button>
     <button v-if="hasCharacter" type="button" :aria-current="mainPage === 'runs' ? 'page' : undefined" :disabled="disabled"
-      @click="emit('select', 'runs')"><span class="i-lucide-activity" aria-hidden="true" />运行记录</button>
+      @click="emit('select', 'runs')"><span class="i-lucide-activity" aria-hidden="true" />模拟运行</button>
     <span class="console-nav-label">角色管理</span>
     <button type="button" :aria-current="mainPage === 'character' ? 'page' : undefined" :disabled="disabled"
       @click="emit('select', 'character')"><span class="i-lucide-users" aria-hidden="true" />角色与身份</button>

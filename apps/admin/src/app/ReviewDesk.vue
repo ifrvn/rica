@@ -70,7 +70,7 @@ const mainPage = computed(() => inRuns.value ? 'runs'
 watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
   home: '工作台', members: '成员与审计', knowledge: '记忆与身份成长', growth: '记忆与身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
-  character: '角色与身份', review: '审批', runs: '运行记录', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
+  character: '角色与身份', review: '审批', runs: '模拟运行', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
   health: '系统运行状况', accounts: '平台账号池', connector: '审批',
 }
 const detailId = ref<string>()
@@ -570,7 +570,7 @@ async function decide(decision: Decision) {
         <UiButton v-for="page in runPages" :key="page"
           variant="text" :tone="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
           :disabled="busy || routing" @click="changeTab(page)">
-          {{ page === 'runs' ? '运行记录' : page === 'metrics' ? '模拟指标' : '失败任务' }}
+          {{ page === 'runs' ? '模拟运行' : page === 'metrics' ? '模拟指标' : '失败任务' }}
         </UiButton>
       </nav>
       <nav v-if="inKnowledge && characterId" class="run-navigation access-navigation" aria-label="记忆与身份成长分区">
@@ -699,7 +699,7 @@ async function decide(decision: Decision) {
             <UiBadge :tone="statusTone(selected.state)">{{ statusText[selected.state] }}</UiBadge>
             <UiBadge v-if="selected.autoApproved" tone="success">AI 自动批准</UiBadge>
             <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction(selected.id)">重新核对</UiButton>
-            <UiButton size="small" variant="quiet" :disabled="busy" @click="openRun(selected.runId)">查看运行记录</UiButton>
+            <UiButton size="small" variant="quiet" :disabled="busy" @click="openRun(selected.runId)">查看模拟运行</UiButton>
           </div>
           <UiButton v-else-if="error" size="small" :disabled="busy" @click="openAction(detailId)">重新加载提案</UiButton>
           <template v-if="selected">
