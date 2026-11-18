@@ -10,7 +10,8 @@ import { createHostedModelManagement, createModelSettingsStore, enabledModelSett
 import { hostedModelCatalog, hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { denyPermission } from '../../packages/persistence/management.js'
 import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@rica/plugin-newbi'
-import { startModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
+import { startObservedModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
+import { hostedUsageRecorder, readHostedUsage } from '../../plugins/hosted-models/rica/persistence/usage.js'
 import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
@@ -40,12 +41,13 @@ const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsContracts)
+const recordUsage = hostedUsageRecorder(db)
 const activeModel = async () => (await modelSettings.read()).configuration.provider
 const reviewSettings = enabledModelSettings(modelSettings, () => deploymentPlugins.isEnabled(hostedModelsPluginId))
 const reviewReply = createAutoReviewer(async (check) => {
   const { configuration } = await reviewSettings.read()
   if (configuration.provider === 'simulated') return null
-  const selected = await startModelPlugin(configuration)
+  const selected = await startObservedModelPlugin(configuration, recordUsage)
   try { return await check(selected.model.implementation) }
   finally { await selected.stop() }
 })
@@ -70,7 +72,9 @@ const management = managementConfig && managementDb && auth && platforms ? creat
       reportConnectorOperation: (service, succeeded) =>
         reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
     }),
-    createHostedModelManagement({ modelSettings, startModelPlugin,
+    createHostedModelManagement({ modelSettings,
+      startModelPlugin: (configuration) => startObservedModelPlugin(configuration, recordUsage, undefined, 'CHECK'),
+      readUsage: (query) => readHostedUsage(managementDb, query),
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
       isEnabled: () => deploymentPlugins.isEnabled(hostedModelsPluginId),
     }),

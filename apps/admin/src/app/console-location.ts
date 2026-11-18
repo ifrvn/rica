@@ -1,4 +1,4 @@
-export type ConsolePage = 'home' | 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'health' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics'
+export type ConsolePage = 'home' | 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'health' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics' | 'model-usage'
 export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string; reviewPlugin?: string; reviewStatus?: string; auditTarget?: string; healthNode?: 'simulation-executor' }
 
 export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'through'] as const
@@ -6,12 +6,13 @@ export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'throu
 const id = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu
 
 export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
+  if (hash === '#/model-usage') return { characterId: '', page: 'model-usage' }
   const separator = hash.indexOf('?')
   const path = separator < 0 ? hash : hash.slice(0, separator)
-  const match = /^#\/characters\/([^/]+)\/(home|character|review|runs|outbox|audit|plugins|health|connector|accounts|members|knowledge|growth|planning|metrics)(?:\/([^/]+))?$/u.exec(path)
+  const match = /^#\/characters\/([^/]+)\/(home|character|review|runs|outbox|audit|plugins|health|connector|accounts|members|knowledge|growth|planning|metrics|model-usage)(?:\/([^/]+))?$/u.exec(path)
   if (!match) return
   const [, characterId, page, detail] = match
-  if (!id.test(characterId) || (detail && (!id.test(detail) || (['home', 'character', 'outbox', 'plugins', 'health', 'members', 'metrics'].includes(page))))) return
+  if (!id.test(characterId) || (detail && (!id.test(detail) || (['home', 'character', 'outbox', 'plugins', 'health', 'members', 'metrics', 'model-usage'].includes(page))))) return
   const query = new URLSearchParams(separator < 0 ? '' : hash.slice(separator + 1))
   const filters = new URLSearchParams()
   if (page === 'runs') {
@@ -36,6 +37,7 @@ export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
 }
 
 export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId, reviewPlugin, reviewStatus, auditTarget, healthNode }: ConsoleLocation) {
+  if (page === 'model-usage' && !characterId) return '#/model-usage'
   const filters = new URLSearchParams(runQuery)
   if (page === 'runs' && !detail && startSimulation) filters.set('start', '1')
   if (page === 'connector' && connectorAccountId) filters.set('accountId', connectorAccountId)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ConsolePage } from './console-location.js'
 
-defineProps<{ hasCharacter: boolean; mainPage: ConsolePage; disabled: boolean }>()
+defineProps<{ hasCharacter: boolean; canConfigureModel: boolean; mainPage: ConsolePage; disabled: boolean }>()
 const emit = defineEmits<{ select: [page: ConsolePage] }>()
 </script>
 
@@ -25,12 +25,16 @@ const emit = defineEmits<{ select: [page: ConsolePage] }>()
         @click="emit('select', 'planning')"><span class="i-lucide-calendar-days" aria-hidden="true" />计划与承诺</button>
       <button type="button" :aria-current="mainPage === 'audit' ? 'page' : undefined" :disabled="disabled"
         @click="emit('select', 'members')"><span class="i-lucide-history" aria-hidden="true" />成员与审计</button>
-      <span class="console-nav-label">部署管理</span>
+    </template>
+    <span v-if="hasCharacter || canConfigureModel" class="console-nav-label">部署管理</span>
+    <template v-if="hasCharacter">
       <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="disabled"
         @click="emit('select', 'plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件中心</button>
       <button type="button" :aria-current="mainPage === 'health' ? 'page' : undefined" :disabled="disabled"
         @click="emit('select', 'health')"><span class="i-lucide-server" aria-hidden="true" />系统运行状况</button>
     </template>
+    <button v-if="canConfigureModel" type="button" :aria-current="mainPage === 'model-usage' ? 'page' : undefined" :disabled="disabled"
+      @click="emit('select', 'model-usage')"><span class="i-lucide-chart-no-axes-column" aria-hidden="true" />外部模型统计</button>
   </nav>
 </template>
 

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { HostedModel } from './catalog.js'
 import type { HostedModelConfig } from './config.js'
+import { readTokenUsage, type HostedUsageRecord, type RecordHostedUsage } from './usage.js'
 
 export class HostedApiError extends Error {
   constructor(readonly code: 'REQUEST_FAILED' | 'HTTP_ERROR' | 'INVALID_OUTPUT', readonly status?: number) {
@@ -73,23 +74,69 @@ function replyText(id: HostedModel['id'], result: unknown) {
   return parsed.success ? parsed.data.choices[0].message.content : undefined
 }
 
-export async function requestHostedReply(id: HostedModel['id'], config: HostedModelConfig, system: string, input: string, signal: AbortSignal) {
+export async function requestHostedReply(id: HostedModel['id'], config: HostedModelConfig, system: string, input: string, signal: AbortSignal,
+  usage?: Pick<HostedUsageRecord, 'attribution' | 'purpose'> & { record: RecordHostedUsage },
+) {
   const { url, headers, body } = request(id, config, system, input)
-  let response: Response
+  const payload = JSON.stringify(body)
+  const day = new Date().toISOString().slice(0, 10)
+  const started = performance.now()
+  const metric: HostedUsageRecord = {
+    day, provider: id, model: config.model, purpose: usage?.purpose ?? 'DRAFT', attribution: usage?.attribution,
+    sentBytes: 0, receivedBytes: 0, outcome: 'CONNECTION_FAILED', elapsedMs: 0,
+  }
+  async function readBody(response: Response) {
+    const reader = response.body?.getReader()
+    if (!reader) return
+    const chunks: Uint8Array[] = []
+    try {
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        metric.receivedBytes += chunk.value.byteLength
+        if (metric.receivedBytes > 4 * 1024 * 1024) {
+          await reader.cancel()
+          return
+        }
+        chunks.push(chunk.value)
+      }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+    } catch {
+      return
+    } finally {
+      reader.releaseLock()
+    }
+  }
   try {
-    response = await fetch(url, {
-      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal, redirect: 'error',
+    let response: Response
+    try {
+      signal.throwIfAborted()
+      metric.sentBytes = Buffer.byteLength(payload)
+      response = await fetch(url, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: payload, signal, redirect: 'error',
+      })
+    } catch {
+      if (signal.aborted) metric.outcome = 'TIMED_OUT'
+      throw new HostedApiError('REQUEST_FAILED')
+    }
+    const result = await readBody(response)
+    metric.tokens = readTokenUsage(id, result)
+    if (!response.ok) {
+      metric.outcome = response.status === 429 ? 'RATE_LIMITED' : 'HTTP_ERROR'
+      throw new HostedApiError('HTTP_ERROR', response.status)
+    }
+    const reply = replyText(id, result)?.trim()
+    if (!reply) {
+      metric.outcome = signal.aborted ? 'TIMED_OUT' : 'INVALID_OUTPUT'
+      throw new HostedApiError('INVALID_OUTPUT')
+    }
+    metric.outcome = 'OK'
+    return reply
+  } finally {
+    metric.elapsedMs = Math.round(performance.now() - started)
+    if (usage) await usage.record(metric).catch(() => {
+      console.warn(JSON.stringify({ service: 'hosted-models', event: 'usage_record_failed' }))
     })
-  } catch {
-    throw new HostedApiError('REQUEST_FAILED')
   }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {})
-    throw new HostedApiError('HTTP_ERROR', response.status)
-  }
-  const result: unknown = await response.json().catch(() => undefined)
-  const reply = replyText(id, result)?.trim()
-  if (!reply) throw new HostedApiError('INVALID_OUTPUT')
-  return reply
 }

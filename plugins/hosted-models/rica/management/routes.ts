@@ -5,13 +5,15 @@ import { checkModel } from './check.js'
 import { ModelSettingsError, type createModelSettingsStore } from './settings.js'
 import { hostedModelsPluginId } from '../identity.js'
 import { ManagementError } from '../../../../packages/persistence/management.js'
-import { body, errors, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '../../../../packages/runtime/management-http.js'
+import { usageQuery, usageView, type UsageQuery } from './usage-contracts.js'
+import { body, error, errors, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '../../../../packages/runtime/management-http.js'
 
-export function createHostedModelManagement({ modelSettings, authorize, isEnabled, startModelPlugin }: {
+export function createHostedModelManagement({ modelSettings, authorize, isEnabled, startModelPlugin, readUsage }: {
   modelSettings: ReturnType<typeof createModelSettingsStore>
   authorize(actor: ManagementPrincipal): void
   isEnabled(): Promise<boolean>
   startModelPlugin: Parameters<typeof checkModel>[1]
+  readUsage?: (query: UsageQuery) => Promise<z.infer<typeof usageView>>
 }): ManagementPlugin {
   const { modelActivationInput, modelCheckInput, modelCheckResult, modelCheckStatus, modelProfileChoice, modelProfileInput, modelSettingsView } =
     modelSettings.contracts
@@ -31,6 +33,15 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
   }
 
   function registerRoutes(app: OpenAPIHono<ManagementEnvironment>) {
+    app.openapi(createRoute({
+      method: 'get', path: '/model-usage', security,
+      request: { query: usageQuery }, responses: { ...errors, 200: success(usageView), 503: failure },
+    }), async (c) => {
+      authorize(c.get('actor'))
+      if (!readUsage) return c.json(error(c.get('requestId'), 'MODEL_USAGE_UNAVAILABLE', 'Usage statistics are unavailable'), 503)
+      return c.json(await readUsage(c.req.valid('query')), 200)
+    })
+
     app.openapi(createRoute({
       method: 'get', path: '/model-settings', security,
       responses: { ...errors, 200: success(modelSettingsView) },

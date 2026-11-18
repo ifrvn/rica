@@ -107,7 +107,9 @@ async function buildSimulatedDraft(
       corePrompt: profile.corePrompt ?? undefined,
       ...(suggestFollowUp ? { suggestFollowUp } : {}) }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
-    return await reserveModelBudget(tx, runId, input, outputUnits) ? input : null
+    if (!await reserveModelBudget(tx, runId, input, outputUnits)) return null
+    const { characterId, identityId, platform } = context
+    return { ...input, attribution: { characterId, identityId, platform } }
   })
   if (!writing) return null
 

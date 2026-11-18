@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi'
+import type { ModelAttribution } from './model-provider.js'
 
 export const defaultAutoReviewPrompt = [
   '只批准符合当前讨论、措辞友善、风险低的日常回复，例如感谢、简单澄清或中性的交流。',
@@ -18,4 +19,4 @@ export const autoReviewerId = 'system:auto-review'
 export type AutoReviewSettings = z.infer<typeof autoReviewSettings>
 export type AutoReviewView = z.infer<typeof autoReviewView>
 export type PublicReplyReview = Readonly<{ platform: string; draft: string; discussion: string }>
-export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview) => Promise<string | null>
+export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview, attribution: ModelAttribution) => Promise<string | null>

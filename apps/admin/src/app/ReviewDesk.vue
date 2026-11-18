@@ -34,6 +34,7 @@ const SecuritySettings = defineAsyncComponent(() => import('../features/access/S
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
+const ModelUsage = defineAsyncComponent(() => import('@rica/plugin-hosted-models/console').then(({ ModelUsage }) => ModelUsage))
 const SystemHealth = defineAsyncComponent(() => import('../features/health/SystemHealth.vue'))
 
 type Character = z.infer<typeof characterView>
@@ -72,6 +73,7 @@ const pageTitle: Record<ConsolePage, string> = {
   home: '工作台', members: '成员与审计', knowledge: '记忆与身份成长', growth: '记忆与身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
   character: '角色与身份', review: '审批', runs: '模拟运行', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
   health: '系统运行状况', accounts: '平台账号池', connector: '审批',
+  'model-usage': '外部模型统计',
 }
 const detailId = ref<string>()
 const reviewListHeading = ref<HTMLElement>()
@@ -226,7 +228,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
       if (window.location.hash) window.history.replaceState(null, '', window.location.pathname + window.location.search)
       return
     }
-    if (changedCharacter) {
+    if (changedCharacter && target) {
       const workspace = await request<ConsoleWorkspace>('/v1/characters/' + target)
       if (current !== revision) return
       installedReviews.value = platformReviews.filter((review) => review.installed(workspace)).map(({ id }) => id)
@@ -274,11 +276,12 @@ function closePlanning(feedback?: string) {
 }
 
 function changeTab(page: ConsolePage) {
-  if (characterId.value) navigate({ characterId: characterId.value, page })
+  if (characterId.value || page === 'model-usage') navigate({ characterId: characterId.value, page })
+  else if (page === 'character') void applyLocation(undefined)
 }
 
 function selectDrawerPage(page: ConsolePage) {
-  focusPageAfterNavigation = page !== tab.value && !!characterId.value
+  focusPageAfterNavigation = page !== tab.value
   navigationOpen.value = false
   changeTab(page)
 }
@@ -490,7 +493,7 @@ async function decide(decision: Decision) {
     </div>
 
     <template v-else>
-      <DialogRoot v-if="characters.length && narrowNavigation" v-model:open="navigationOpen">
+      <DialogRoot v-if="(characters.length || canCreate) && narrowNavigation" v-model:open="navigationOpen">
         <Teleport to="#masthead-navigation">
           <DialogTrigger type="button" class="navigation-icon" aria-label="打开导航">
             <span class="i-lucide-menu" aria-hidden="true" />
@@ -505,7 +508,7 @@ async function decide(decision: Decision) {
                 <span class="i-lucide-x" aria-hidden="true" />
               </DialogClose>
             </div>
-            <ConsoleNavigation :has-character="!!characterId" :main-page="mainPage" :disabled="busy || routing"
+            <ConsoleNavigation :has-character="!!characterId" :can-configure-model="canCreate" :main-page="mainPage" :disabled="busy || routing"
               @select="selectDrawerPage" />
           </DialogContent>
         </DialogPortal>
@@ -551,8 +554,8 @@ async function decide(decision: Decision) {
       <SecuritySettings v-if="securitySettingsOpen" :passkeys-available="passkeysAvailable"
         @close="closeSecuritySettings" @expired="resetSession" @password-changed="passwordChanged" />
 
-      <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length }">
-      <ConsoleNavigation v-if="characters.length && !narrowNavigation" :has-character="!!characterId" :main-page="mainPage"
+      <div class="workspace-shell" :class="{ 'workspace-shell--with-nav': characters.length || canCreate }">
+      <ConsoleNavigation v-if="(characters.length || canCreate) && !narrowNavigation" :has-character="!!characterId" :can-configure-model="canCreate" :main-page="mainPage"
         :disabled="busy || routing" @select="changeTab" />
       <div class="workspace-content">
       <div class="workspace-header">
@@ -629,6 +632,10 @@ async function decide(decision: Decision) {
         :character-id="characterId" :run-id="detailId" :target-id="auditTarget" can-review
         @expired="resetSession" @all="changeTab('audit')" @open-run="openRun"
         @proposal="(plugin, proposalId) => navigate({ characterId, page: 'connector', reviewPlugin: plugin, detail: proposalId })" />
+      <template v-else-if="tab === 'model-usage'">
+        <ModelUsage v-if="canCreate" @expired="resetSession" />
+        <UiAlert v-else tone="error">只有部署管理员可以查看外部模型统计。</UiAlert>
+      </template>
       <PluginWorkspace v-else-if="tab === 'plugins' && characterId" :key="characterId"
         :character-id="characterId" :can-configure-model="canCreate" can-start-simulation can-review @expired="resetSession"
         @deployment-changed="refreshReviewTabs"

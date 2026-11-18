@@ -3,7 +3,8 @@ import { hostedModelsPluginId, type ModelSettingsInput } from '@rica/plugin-host
 import type { ModelProvider } from '@rica/contracts/model-provider'
 import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
 import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
-import { hostedModelDefinition, type createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { hostedModelDefinition, observedHostedModelDefinition, type createModelSettingsStore } from '@rica/plugin-hosted-models'
+import type { RecordHostedUsage, UsagePurpose } from '../plugins/hosted-models/providers/usage.js'
 import { simulatedPlatformDefinitions } from '@rica/plugin-simulated-platforms'
 
 import type { PluginMetadata } from '../packages/contracts/plugin-status.js'
@@ -49,6 +50,12 @@ export async function startModelPlugin(configuration: ModelSettingsInput, servic
   const host = await startHost('model', definitions, [{ id, config }], service)
   const model = host.find(id)!
   return { model, metadata: metadata('model', model), stop: host.stop }
+}
+
+export function startObservedModelPlugin(configuration: ModelSettingsInput, record: RecordHostedUsage, service?: string,
+  purpose?: UsagePurpose,
+) {
+  return startModelPlugin(configuration, service, [simulatedModelDefinition, observedHostedModelDefinition(record, purpose)])
 }
 
 export async function startConfiguredModel(

@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { simulatedModelPlugin } from '@rica/plugin-simulated-model'
-import { createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { createHostedModelManagement, createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { hostedUsageRecorder, readHostedUsage } from '../plugins/hosted-models/rica/persistence/usage.js'
+import { denyPermission } from '../packages/persistence/management.js'
 import { modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
 import { dailyScheduleSlot, dispatchSimulationSchedule, scanSimulationSchedules } from '../packages/persistence/simulation-schedules.js'
@@ -617,6 +619,62 @@ async function proposeReview(accountId = accountA, contactId?: string, model = s
 }
 
 function actionPath(id: string) { return characterPath(a) + '/actions/' + id }
+
+test('deployment usage aggregates concurrent writes by role, identity, platform and model with missing-token counts', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-model-usage-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const url = new URL(config.databaseUrl)
+  url.searchParams.set('options', '-c role=rica_runtime')
+  const runtime = createDatabase(url.href)
+  const record = hostedUsageRecorder(runtime)
+  const day = '2026-01-02'
+  const model = 'usage-fixture-' + randomUUID()
+  t.after(async () => {
+    await owner.hostedModelUsageDaily.deleteMany({ where: { model: { startsWith: model } } })
+    await runtime.$disconnect()
+  })
+  const event = { day, provider: 'openai', model, purpose: 'DRAFT', outcome: 'OK',
+    sentBytes: 120, receivedBytes: 75, elapsedMs: 40, tokens: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+    attribution: { characterId: a, identityId: identityA, platform: 'mock-a' },
+  } as const
+  await Promise.all([
+    ...Array.from({ length: 6 }, () => record(event)),
+    record({ ...event, model: model + '-second', purpose: 'REVIEW', outcome: 'RATE_LIMITED', tokens: undefined,
+      attribution: { characterId: b, identityId: identityB, platform: 'newbi' } }),
+    record({ ...event, purpose: 'CHECK', attribution: undefined }),
+  ])
+  await assert.rejects(runtime.hostedModelUsageDaily.count(), /permission denied/i)
+
+  const modelSettings = createModelSettingsStore(directory, modelSettingsContracts)
+  const target = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
+    db: management, origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
+    authenticate: async (request) => request.headers.has('Cookie') ? {
+      id: 'usage-fixture', subject: 'fixture', issuer: localIssuer,
+      canCreate: request.headers.get('Cookie') === 'fixture-session=admin-a',
+    } : null,
+    plugins: [createHostedModelManagement({ modelSettings, isEnabled: async () => false,
+      startModelPlugin: async () => assert.fail('Reading usage must not call a model'),
+      authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
+      readUsage: (query) => readHostedUsage(management, query),
+    })],
+  }))
+  const path = '/model-usage?from=' + day + '&through=' + day
+  assert.equal((await request('GET', path, { target, actor: null })).status, 401)
+  assert.equal((await request('GET', path, { target, actor: 'reviewer' })).status, 403)
+  assert.equal((await request('GET', '/model-usage?from=2026-01-01&through=2026-05-01', { target })).status, 422)
+  const response = await request('GET', path, { target })
+  assert.equal(response.status, 200, JSON.stringify(response.body))
+  const rows = response.body.rows.filter((row: { model: string }) => row.model.startsWith(model))
+  assert.equal(rows.length, 3)
+  const draft = rows.find((row: { purpose: string }) => row.purpose === 'DRAFT')
+  assert.deepEqual(draft, { day, provider: 'openai', model, characterId: a, character: prefix + '-a', identityId: identityA,
+    identity: 'one', platform: 'mock-a', purpose: 'DRAFT', outcome: 'OK', requests: 6, tokenReports: 6,
+    sentBytes: 720, receivedBytes: 450, elapsedMs: 240, inputTokens: 72, outputTokens: 48, totalTokens: 120 })
+  const review = rows.find((row: { purpose: string }) => row.purpose === 'REVIEW')
+  assert.deepEqual([review.characterId, review.identityId, review.platform, review.model, review.tokenReports],
+    [b, identityB, 'newbi', model + '-second', 0])
+  assert.equal(rows.find((row: { purpose: string }) => row.purpose === 'CHECK').characterId, '')
+})
 
 test('role administrators can see the draft and concurrent approval has one effect', async () => {
   await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })

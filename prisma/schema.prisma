@@ -98,6 +98,28 @@ model Character {
   @@map("characters")
 }
 
+model HostedModelUsageDaily {
+  day           DateTime @db.Date
+  provider      String
+  model         String
+  characterId   String   @map("character_id")
+  identityId    String   @map("identity_id")
+  platform      String
+  purpose       String
+  outcome       String
+  requests      BigInt   @default(0)
+  tokenReports  BigInt   @default(0) @map("token_reports")
+  sentBytes     BigInt   @default(0) @map("sent_bytes")
+  receivedBytes BigInt   @default(0) @map("received_bytes")
+  elapsedMs     BigInt   @default(0) @map("elapsed_ms")
+  inputTokens   BigInt   @default(0) @map("input_tokens")
+  outputTokens  BigInt   @default(0) @map("output_tokens")
+  totalTokens   BigInt   @default(0) @map("total_tokens")
+
+  @@id([day, provider, model, characterId, identityId, platform, purpose, outcome])
+  @@map("hosted_model_usage_daily")
+}
+
 model CoreVersion {
   characterId String      @map("character_id") @db.Uuid
   version     Int

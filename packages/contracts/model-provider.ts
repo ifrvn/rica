@@ -17,11 +17,13 @@ type ModelInput = Readonly<{
 }>
 
 export type WritingStyle = 'neutral' | 'formal' | 'casual' | 'concise'
+export type ModelAttribution = Readonly<{ characterId: string; identityId: string; platform: string }>
 
 export type ModelProvider = Readonly<{
   hostedProvider?: string
   hostedModel?: string
-  review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal): Promise<unknown>
+  review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
-  write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string; suggestFollowUp?: boolean }>, signal: AbortSignal): Promise<unknown>
+  write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
+    suggestFollowUp?: boolean; attribution?: ModelAttribution }>, signal: AbortSignal): Promise<unknown>
 }>

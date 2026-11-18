@@ -128,7 +128,8 @@ export async function autoReviewNewbiReply(
     || thread.comments.some(({ content }) => content.trim() === reply.content.trim())) return
   const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
     comments: thread.comments.map(({ content }) => content) })
-  const model = await review(settings, { platform: 'newbi', draft: reply.content, discussion })
+  const model = await review(settings, { platform: 'newbi', draft: reply.content, discussion },
+    { characterId, identityId: reply.identityId, platform: 'newbi' })
   if (!model) return
 
   await db.$transaction(async (tx) => {

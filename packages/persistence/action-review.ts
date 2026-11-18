@@ -128,7 +128,8 @@ export async function autoReviewSimulation(
   }, { isolationLevel: 'RepeatableRead' })
   if (!input) return
   const { settings, proposal, target, content } = input
-  const model = await review(settings, { platform: target.platform, draft: content, discussion })
+  const model = await review(settings, { platform: target.platform, draft: content, discussion },
+    { characterId, identityId: target.identityId, platform: target.platform })
   if (!model) return
 
   await db.$transaction(async (tx) => {
