@@ -7,7 +7,7 @@ import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
 import { createHostedModelManagement, createModelSettingsStore, enabledModelSettings } from '@rica/plugin-hosted-models'
-import { hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
+import { hostedModelCatalog, hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { denyPermission } from '../../packages/persistence/management.js'
 import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@rica/plugin-newbi'
 import { startModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
@@ -55,6 +55,12 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   pluginStatus: () => readPluginStatus(redis),
   pluginRelease: (services) => readPluginRelease(process.env.RICA_PLUGIN_RELEASE_MANIFEST, services),
   activeModel,
+  async reviewModel() {
+    const { name, configuration } = await reviewSettings.read()
+    if (configuration.provider === 'simulated' || !configuration.model) return null
+    const provider = hostedModelCatalog.find(({ id }) => id === configuration.provider)?.name ?? configuration.provider
+    return { name, provider, model: configuration.model }
+  },
   modelProfileExists: async (id) => Object.hasOwn((await modelSettings.readSettings()).profiles, id),
   deploymentPlugins,
   plugins: [

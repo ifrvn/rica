@@ -10,9 +10,12 @@ export const autoReviewInput = z.strictObject({
   enabled: z.boolean(),
   prompt: z.string().trim().min(1).max(4_000).refine((value) => !value.includes('\0')),
 })
-export const autoReviewView = autoReviewInput.extend({ version: z.number().int().nonnegative() })
+const autoReviewSettings = autoReviewInput.extend({ version: z.number().int().nonnegative() })
+const autoReviewModel = z.object({ name: z.string().optional(), provider: z.string(), model: z.string() })
+export const autoReviewView = autoReviewSettings.extend({ model: autoReviewModel.nullable() })
 export const autoReviewerId = 'system:auto-review'
 
-export type AutoReviewSettings = z.infer<typeof autoReviewView>
+export type AutoReviewSettings = z.infer<typeof autoReviewSettings>
+export type AutoReviewView = z.infer<typeof autoReviewView>
 export type PublicReplyReview = Readonly<{ platform: string; draft: string; discussion: string }>
 export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview) => Promise<string | null>

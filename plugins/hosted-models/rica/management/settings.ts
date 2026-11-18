@@ -5,7 +5,7 @@ import { z } from 'zod'
 import type { ModelProfileInput, ModelSettingsContracts, ModelSettingsInput, ModelSettingsView } from './contracts.js'
 import { writeSettings } from '../../../../packages/runtime/write-settings.js'
 
-type ActiveSettings = { version: number; configuration: ModelSettingsInput }
+type ActiveSettings = { version: number; name?: string; configuration: ModelSettingsInput }
 const simulated = { provider: 'simulated' } as const
 
 export class ModelSettingsError extends Error {

@@ -13,7 +13,7 @@ import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
-import { autoReviewInput, autoReviewView } from '../../packages/contracts/auto-review.js'
+import { autoReviewInput, autoReviewView, type AutoReviewView } from '../../packages/contracts/auto-review.js'
 import { readAutoReviewSettings } from '../../packages/persistence/auto-review.js'
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
@@ -32,6 +32,7 @@ type Options = {
   pluginStatus?: () => ReturnType<typeof readPluginStatus>
   pluginRelease?: (services: Awaited<ReturnType<typeof readPluginStatus>>['services']) => Promise<PluginReleaseView>
   activeModel?: () => Promise<string>
+  reviewModel?: () => Promise<AutoReviewView['model']>
   modelProfileExists?: (id: string) => Promise<boolean>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   plugins?: readonly ManagementPlugin[]
@@ -50,7 +51,8 @@ function runVersion(header: string) {
 }
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
-  activeModel = async () => 'simulated', modelProfileExists = async () => false, deploymentPlugins, plugins = [] }: Options) {
+  activeModel = async () => 'simulated', reviewModel = async () => null,
+  modelProfileExists = async () => false, deploymentPlugins, plugins = [] }: Options) {
   async function validateDraftModel(profile?: string, retained?: () => Promise<boolean>) {
     if (profile && profile !== 'simulated' && !await modelProfileExists(profile) && !await retained?.()) {
       throw new management.ManagementError(422, 'MODEL_NOT_CONFIGURED', 'Draft model profile is unavailable')
@@ -116,7 +118,8 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       await management.authorize(tx, scope)
       return readAutoReviewSettings(tx, scope.characterId)
     }, { isolationLevel: 'RepeatableRead' })
-    return c.json(autoReviewView.parse(settings), 200)
+    const model = await reviewModel().catch(() => null)
+    return c.json(autoReviewView.parse({ ...settings, model }), 200)
   })
   app.openapi(createRoute({
     method: 'put', path: autoReviewPath, security,

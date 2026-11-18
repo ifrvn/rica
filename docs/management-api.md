@@ -92,7 +92,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
 | `GET /c/audit` | ADMIN 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | ADMIN 读取模拟待办和经复核的提案预览。列表不含正文。 |
-| `GET /c/auto-review`、`PUT /c/auto-review` | ADMIN 读取和修改当前角色的自动审批开关和提示词。保存时在 If-Match 带上当前版本。 |
+| `GET /c/auto-review`、`PUT /c/auto-review` | ADMIN 读取和修改当前角色的自动审批开关和提示词。读取时返回只读的默认外部模型信息，配置不可用时 `model` 为 `null`。保存时在 If-Match 带上当前版本。 |
 | `POST /c/actions/{actionId}/decisions` | ADMIN 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
 

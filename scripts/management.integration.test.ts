@@ -670,7 +670,7 @@ test('role administrators can see the draft and concurrent approval has one effe
 test('role auto-review settings are private, versioned, and fence in-flight approval when disabled', async () => {
   const path = characterPath(a) + '/auto-review'
   const initial = await request('GET', path)
-  assert.deepEqual(initial.body, { enabled: false, prompt: defaultAutoReviewPrompt, version: 0 })
+  assert.deepEqual(initial.body, { enabled: false, prompt: defaultAutoReviewPrompt, version: 0, model: null })
   const first = await proposeReview()
   const input = { enabled: true, prompt: '只批准常规回复。' }
   const save = (version: number, enabled: boolean, actor = 'admin-a') =>
@@ -678,7 +678,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
   assert.equal((await save(0, true, 'admin-b')).status, 404)
   assert.equal((await save(0, true)).status, 200)
   assert.equal((await save(0, false)).status, 412)
-  assert.deepEqual((await request('GET', path)).body, { ...input, version: 1 })
+  assert.deepEqual((await request('GET', path)).body, { ...input, version: 1, model: null })
 
   const url = new URL(config.databaseUrl)
   url.searchParams.set('options', '-c role=rica_runtime')
