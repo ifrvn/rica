@@ -7,7 +7,7 @@ import { body, character, characterParams, error, errors, security, success, fai
 import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
 import { autoReviewNewbiReply, bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections, readPendingDeliveries } from '../persistence/management.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
-import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from './contracts.js'
+import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadQuery, newbiThreadView } from './contracts.js'
 import type { newbiCatalog } from '../deployment/catalog.js'
 
 export type NewbiManagementOptions = {
@@ -16,7 +16,8 @@ export type NewbiManagementOptions = {
   pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
   sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
   reportConnectorOperation?: (service: keyof typeof newbiCatalog, succeeded: boolean) => void | Promise<void>
-  readConnectorThread?: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>) =>
+  readConnectorThread?: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>,
+    preview?: z.infer<typeof newbiThreadQuery>) =>
     Promise<z.infer<typeof newbiThreadView> | undefined>
 }
 
@@ -158,13 +159,13 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
 
     app.openapi(createRoute({
       method: 'get', path: `${newbi}/replies/{replyId}/thread`, security,
-      request: { params: newbiReplyParams },
+      request: { params: newbiReplyParams, query: newbiThreadQuery },
       responses: { ...errors, 200: success(newbiThreadView), 503: failure },
     }), async (c) => {
       const { characterId, replyId } = c.req.valid('param')
       const { accountId, agentId, endpoint, postId } = await getNewbiReply(db, { characterId, actor: c.get('actor') }, replyId)
       await requireNewbi(endpoint)
-      const thread = await readConnectorThread?.({ accountId, agentId, endpoint, postId }).catch(() => undefined)
+      const thread = await readConnectorThread?.({ accountId, agentId, endpoint, postId }, c.req.valid('query')).catch(() => undefined)
       if (!thread) return c.json(error(c.get('requestId'), 'CONNECTOR_THREAD_UNAVAILABLE', 'Newbi discussion is unavailable'), 503)
       return c.json(newbiThreadView.parse(thread), 200)
     })

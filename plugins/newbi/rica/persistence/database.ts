@@ -29,13 +29,13 @@ export async function openSavedNewbiReader(db: RawQueryClient, store: NewbiConne
 }
 
 export async function readSavedNewbiThread(db: RawQueryClient, store: NewbiConnectionStore,
-  target: { accountId: string; agentId: string; endpoint: string; postId: string }) {
+  target: { accountId: string; agentId: string; endpoint: string; postId: string }, preview?: { cursor?: string }) {
   const host = await openSavedNewbiReader(db, store, target.accountId, AbortSignal.timeout(7000))
   if (!host) return
   try {
     const reader = host.plugin.implementation
     if (reader.endpoint !== target.endpoint || (await reader.verify()).id !== target.agentId) return
-    return await reader.readThread(target.postId)
+    return await reader.readThread(target.postId, preview)
   } finally {
     await host.stop()
   }

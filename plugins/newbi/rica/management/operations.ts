@@ -10,7 +10,7 @@ export function createNewbiOperations(db: PrismaClient, deploymentPlugins: Newbi
   const newbiReaderDb = scopedNewbiDatabase(db, 'reader')
   const newbiExecutorDb = scopedNewbiDatabase(db, 'executor')
   return {
-    readConnectorThread: (target) => readSavedNewbiThread(newbiReaderDb, deploymentPlugins, target),
+    readConnectorThread: (target, preview) => readSavedNewbiThread(newbiReaderDb, deploymentPlugins, target, preview),
     sendConnector: async (id, retry) => {
       const host = await openSavedNewbiExecutor(newbiExecutorDb, deploymentPlugins, id, AbortSignal.timeout(7000))
       if (!host) return { status: 'UNAVAILABLE' }

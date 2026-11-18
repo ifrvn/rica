@@ -16,7 +16,7 @@ const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string(
 const thread = z.object({ id: uuid, title: z.string(), content: z.string(), isHidden: z.boolean(), isLocked: z.boolean() })
 const comment = z.object({ id: uuid, author: z.object({ id: z.union([z.string(), z.number()]), username: z.string() }),
   content: z.string(), isHidden: z.boolean(), replyToCommentId: uuid.nullable() })
-const commentPage = z.object({ items: z.array(comment), nextCursor: z.string().nullable(), hasMore: z.boolean() })
+const commentPage = z.object({ items: z.array(comment), nextCursor: z.string().min(1).max(2048).nullable(), hasMore: z.boolean() })
 
 const eventCursor = z.string().min(1).max(2048)
 const eventPage = z.object({
@@ -145,18 +145,19 @@ function createReads(get: (path: string) => Promise<unknown>) {
         return { items: [], nextCursor: error.resetCursor, hasMore: false, historyLost: true }
       }
     },
-    async readThread(postId: string) {
+    async readThread(postId: string, preview?: { cursor?: string }) {
       const id = uuid.parse(postId)
       const post = thread.parse(await get('/posts/' + id))
       if (post.id !== id || post.isHidden) throw new Error('Newbi post is unavailable')
       const comments: z.infer<typeof comment>[] = []
-      let cursor: string | null = null
+      let cursor: string | null = preview?.cursor ?? null
       for (let page = 0; page < 4; page++) {
         const next = commentPage.parse(await get('/posts/' + id + '/comments?limit=50'
           + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')))
         comments.push(...next.items.filter(({ isHidden }) => !isHidden))
-        if (!next.hasMore) return { post, comments }
+        if (!next.hasMore) return { post, comments, nextCursor: null }
         if (!next.nextCursor || next.nextCursor === cursor) break
+        if (preview) return { post, comments, nextCursor: next.nextCursor }
         cursor = next.nextCursor
       }
       throw new Error('Newbi discussion exceeds the pilot context limit')

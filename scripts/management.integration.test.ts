@@ -699,16 +699,37 @@ test('role administrators can see the draft and concurrent approval has one effe
     } },
   }), { code: 'P2025' })
   const path = actionPath(action.id)
+  const { inboundEvent: trigger } = await owner.agentRun.findUniqueOrThrow({
+    where: { id: action.runId }, include: { inboundEvent: true },
+  })
+  const binding = { characterId: trigger.characterId, identityId: trigger.identityId, accountId: trigger.accountId }
+  const sender = await owner.contact.create({ data: { ...binding, remoteKey: randomUUID(), displayLabel: 'Earlier participant' } })
+  const unrelated = await owner.conversation.create({ data: { ...binding, remoteKey: randomUUID(), channel: 'PUBLIC' } })
+  const earlier = new Date(trigger.occurredAt.getTime() - 60_000)
+  await owner.inboundEvent.createMany({ data: [
+    { ...binding, conversationId: trigger.conversationId, contactId: sender.id, sourceKey: randomUUID(),
+      kind: 'POST', occurredAt: earlier, receivedAt: earlier, messageText: 'Earlier conversation context' },
+    { ...binding, conversationId: unrelated.id, sourceKey: randomUUID(),
+      kind: 'POST', occurredAt: earlier, receivedAt: earlier, messageText: 'Unrelated conversation' },
+    { ...binding, conversationId: trigger.conversationId, sourceKey: randomUUID(),
+      kind: 'POST', occurredAt: earlier, receivedAt: new Date(Date.now() + 60_000), messageText: 'Received after the run' },
+    { ...binding, conversationId: trigger.conversationId, sourceKey: randomUUID(),
+      kind: 'POST', occurredAt: new Date(0), receivedAt: new Date(0), messageText: 'Expired history' },
+  ] })
   const adminQueue = await request('GET', characterPath(a) + '/actions')
   assert.equal(adminQueue.status, 200, JSON.stringify(adminQueue.body))
   assert.ok(adminQueue.body.items.some((item: { id: string }) => item.id === action.id))
   assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
   const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
   assert.equal(queue.body.items[0].content, null)
+  assert.equal(queue.body.items[0].messageContext, null)
   const preview = await request('GET', path, { actor: 'reviewer' })
   assert.equal(preview.status, 200, JSON.stringify(preview.body))
   assert.equal(preview.body.target.accountId, accountA)
   assert.equal(preview.body.content, '供您参考：' + proposalText)
+  assert.equal(preview.body.messageContext.trigger.content, proposalText)
+  assert.deepEqual(preview.body.messageContext.previous.map(({ sender, content }: { sender: string; content: string }) =>
+    [sender, content]), [['Earlier participant', 'Earlier conversation context']])
   const adminPreview = await request('GET', path)
   assert.equal(adminPreview.status, 200, JSON.stringify(adminPreview.body))
   assert.equal(adminPreview.body.content, preview.body.content)
@@ -721,6 +742,7 @@ test('role administrators can see the draft and concurrent approval has one effe
   assert.equal((await submit('invalid-digest', { ...data, reviewDigest: '0'.repeat(64) })).status, 409)
   const proposerId = createHash('sha256').update(JSON.stringify([issuer, 'reviewer'])).digest('hex')
   await owner.actionProposal.update({ where: { id: action.id }, data: { proposerId } })
+  assert.equal((await request('GET', path, { actor: 'reviewer' })).body.messageContext, null)
   assert.equal((await submit('own-action')).status, 403)
   await owner.actionProposal.update({ where: { id: action.id }, data: { proposerId: null } })
 
@@ -736,6 +758,7 @@ test('role administrators can see the draft and concurrent approval has one effe
   const invalidated = await request('GET', path, { actor: 'reviewer' })
   assert.equal(invalidated.body.state, 'CANCELED')
   assert.equal(invalidated.body.content, null)
+  assert.equal(invalidated.body.messageContext, null)
   assert.equal(await owner.managementAudit.count({ where: { targetId: action.id, operation: 'action.invalidate' } }), 1)
 })
 

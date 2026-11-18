@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
-import { reviewTarget, type ActionView, type actionDecision } from '@ricajs/contracts/action-review'
+import { reviewTarget, simulationReviewContext, type ActionView, type actionDecision } from '@ricajs/contracts/action-review'
 import { simulationFollowUp } from '@ricajs/contracts/simulation-follow-up'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import type { Prisma, PrismaClient } from './generated/client.js'
@@ -104,6 +104,9 @@ export async function listReviewActions(
     for (const row of rows.slice(0, limit)) {
       const { target, state, content } = await inspect(tx, scope.characterId, row, resolveAdapter, Boolean(actionId))
       const canSeeDraft = Boolean(actionId && content && row.proposerId !== scope.actor.id)
+      const [context] = canSeeDraft ? await tx.$queryRaw<{ context: unknown }[]>`
+        SELECT public.rica_simulation_review_context(${scope.characterId}::uuid, ${row.id}::uuid) AS context
+      ` : []
       actions.push({
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
@@ -116,9 +119,9 @@ export async function listReviewActions(
           ...(row.reviewerId === autoReviewerId ? [] : ['HUMAN_REVIEW_REQUIRED']),
           ...(row.crossPlatformDuplicate ? ['CROSS_PLATFORM_NEAR_DUPLICATE'] : []),
         ],
-        content: actionId && row.proposerId !== scope.actor.id ? content : null,
-        followUp: actionId && content && row.proposerId !== scope.actor.id
-          ? simulationFollowUp.safeParse(row.followUp).data ?? null : null,
+        content: canSeeDraft ? content : null,
+        messageContext: context?.context == null ? null : simulationReviewContext.parse(context.context),
+        followUp: canSeeDraft ? simulationFollowUp.safeParse(row.followUp).data ?? null : null,
       })
     }
     return { items: actions, nextCursor: rows.length > limit ? actions.at(-1)?.id ?? null : null }

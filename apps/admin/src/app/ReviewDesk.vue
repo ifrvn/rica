@@ -13,7 +13,7 @@ import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
 import AutoReviewSettings from '../features/review/AutoReviewSettings.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
-import { focusRecord } from '@ricajs/console-shared/console-data'
+import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView } from '@ricajs/contracts/management'
@@ -721,6 +721,27 @@ async function decide(decision: Decision) {
               此回复与其他平台的内容相似，请核对后再审批。
             </UiAlert>
             <template v-if="selected.content">
+              <section aria-labelledby="simulation-context-heading">
+                <h4 id="simulation-context-heading">原消息</h4>
+                <template v-if="selected.messageContext">
+                  <p class="console-record-meta">
+                    {{ selected.messageContext.trigger.sender ? selected.messageContext.trigger.sender + ' · ' : '' }}
+                    {{ formatTime(selected.messageContext.trigger.occurredAt) }}
+                  </p>
+                  <p v-if="selected.messageContext.trigger.content" class="console-payload">{{ selected.messageContext.trigger.content }}</p>
+                  <p v-else class="console-record-meta">原消息正文已过保留期或不可用。</p>
+                  <details v-if="selected.messageContext.previous.length">
+                    <summary>查看同一会话此前的 {{ selected.messageContext.previous.length }} 条消息</summary>
+                    <ol class="review-context-list">
+                      <li v-for="message in selected.messageContext.previous" :key="message.id">
+                        <div class="console-record-meta">{{ message.sender ? message.sender + ' · ' : '' }}{{ formatTime(message.occurredAt) }}</div>
+                        <p class="console-payload">{{ message.content }}</p>
+                      </li>
+                    </ol>
+                  </details>
+                </template>
+                <p v-else class="console-record-meta">当前无法读取原消息。</p>
+              </section>
               <h4>拟回复内容</h4>
               <p class="console-payload">{{ selected.content }}</p>
               <UiAlert v-if="selected.followUp" tone="info">
@@ -813,6 +834,8 @@ async function decide(decision: Decision) {
 .role-picker > label { flex: none; color: var(--console-muted); }
 .role-picker :deep(.ui-combobox) { width: clamp(7rem, 15vw, 13rem); }
 .proposal-actions { margin-bottom: .75rem; }
+.review-context-list { display: grid; gap: .75rem; margin-block: .75rem; padding-inline-start: 1.5rem; }
+.review-context-list .console-payload { margin-block: .25rem 0; }
 .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
 .metadata dt { color: var(--console-muted); font-size: .8125rem; }
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }

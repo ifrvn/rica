@@ -24,6 +24,7 @@ const rows = ref<Summary[]>([])
 const cursor = ref<string | null>(null)
 const reply = ref<Reply>()
 const thread = ref<z.infer<typeof newbiThreadView>>()
+const commentPositions = computed(() => new Map(thread.value?.comments.map(({ id }, index) => [id, index + 1])))
 const loadingThread = ref(false)
 const threadError = ref('')
 const reason = ref('')
@@ -106,26 +107,35 @@ async function detail(id?: string) {
     checkedAt.value = Date.now()
     if (props.accountId && props.accountId !== view.accountId) {
       detailError.value = '找不到当前账号的提案。'
-    } else reply.value = view
+    } else {
+      reply.value = view
+      if (view.status === 'WAITING' && view.connectorAvailable) void loadThread()
+    }
   } catch (cause) {
     if (active && current === selection) detailError.value = message(cause)
   } finally { if (current === selection) loadingDetail.value = false }
 }
 
-async function loadThread() {
+async function loadThread(append = false) {
   const item = reply.value
-  if (!item?.connectorAvailable || loadingThread.value) return
+  const cursor = append ? thread.value?.nextCursor : undefined
+  if (!item?.connectorAvailable || loadingThread.value || (append && !cursor)) return
   const current = selection
   loadingThread.value = true
   threadError.value = ''
   try {
-    const result = await request<z.infer<typeof newbiThreadView>>(base + '/' + encodeURIComponent(item.id) + '/thread')
-    if (active && current === selection) thread.value = result
+    const path = base + '/' + encodeURIComponent(item.id) + '/thread'
+    const result = await request<z.infer<typeof newbiThreadView>>(path + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''))
+    if (active && current === selection) {
+      thread.value = append ? { ...result, comments: [
+        ...(thread.value?.comments ?? []), ...result.comments.filter(({ id }) => !commentPositions.value.has(id)),
+      ] } : result
+    }
   } catch (cause) {
     if (!active || current !== selection) return
     if (cause instanceof RequestError && cause.status === 401) emit('expired')
     else {
-      thread.value = undefined
+      if (!append || (cause instanceof RequestError && [403, 404, 409].includes(cause.status))) thread.value = undefined
       threadError.value = cause instanceof RequestError && cause.status === 409
         ? 'Newbi 配置已变更，请刷新提案详情后重试。'
         : '无法读取帖子上下文。请重试，或到 Newbi 核对目标帖子。'
@@ -294,11 +304,11 @@ onMounted(() => { void list() })
           <div class="console-section-heading">
             <h4 id="newbi-thread-heading">帖子上下文</h4>
             <UiButton v-if="reply.connectorAvailable" size="small" variant="soft" :loading="loadingThread"
-              :disabled="loadingThread || submitting" @click="loadThread">
+              :disabled="loadingThread || submitting" @click="loadThread()">
               {{ thread ? '刷新上下文' : '读取帖子和评论' }}
             </UiButton>
           </div>
-          <UiAlert v-if="threadError" tone="warning" role="alert">{{ threadError }}</UiAlert>
+          <UiSpinner v-if="loadingThread && !thread" aria-label="正在读取帖子上下文" />
           <p v-if="!reply.connectorAvailable">请在插件中心核对 Newbi 的启用状态和 Agent API 地址。</p>
           <template v-if="thread">
             <div class="console-actions">
@@ -307,16 +317,24 @@ onMounted(() => { void list() })
             </div>
             <p class="console-payload thread-content">{{ thread.post.content }}</p>
             <details v-if="thread.comments.length">
-              <summary>查看 {{ thread.comments.length }} 条可见评论</summary>
-              <ul class="thread-comments">
+              <summary>查看已加载的 {{ thread.comments.length }} 条可见评论</summary>
+              <ol class="thread-comments">
                 <li v-for="comment in thread.comments" :key="comment.id">
                   <strong>{{ comment.author.username }}</strong>
+                  <span v-if="comment.replyToCommentId" class="console-record-meta">
+                    · {{ commentPositions.has(comment.replyToCommentId)
+                      ? '回复第 ' + commentPositions.get(comment.replyToCommentId) + ' 条'
+                      : '回复另一条评论' }}
+                  </span>
                   <p class="console-payload">{{ comment.content }}</p>
                 </li>
-              </ul>
+              </ol>
             </details>
-            <p v-else>暂无可见评论。</p>
+            <p v-else>{{ thread.nextCursor ? '本批暂无可见评论。' : '暂无可见评论。' }}</p>
+            <UiButton v-if="thread.nextCursor" size="small" :loading="loadingThread" :disabled="loadingThread || submitting"
+              @click="loadThread(true)">加载更多评论</UiButton>
           </template>
+          <UiAlert v-if="threadError" tone="warning" role="alert">{{ threadError }}</UiAlert>
         </section>
         <template v-if="reply.content">
           <h4>拟发送内容</h4>
@@ -387,7 +405,7 @@ onMounted(() => { void list() })
 .thread-preview h4 { margin: 0; }
 .thread-content { margin-block-start: .5rem; }
 .thread-preview summary { cursor: pointer; }
-.thread-comments { list-style: none; padding: 0; }
+.thread-comments { list-style: decimal; padding-inline-start: 2rem; }
 .thread-comments .console-payload { margin-block-start: .375rem; }
 .filter { width: min(10rem, 100%); }
 dl { display: grid; gap: .4rem; }

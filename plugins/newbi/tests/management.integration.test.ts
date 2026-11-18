@@ -257,7 +257,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   assert.equal((await request('PUT', base + '/auto-review', {
     ifMatch: '"0"', data: { enabled: true, prompt },
   })).status, 200)
-  const previousComment = { id: randomUUID(), content: 'Previously approved', author: { username: 'fixture-agent' } }
+  const previousComment = { id: randomUUID(), content: 'Previously approved', author: { username: 'fixture-agent' }, replyToCommentId: null }
   let calls = 0
   let writes = 0
   let locked = false
@@ -266,7 +266,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
     writes++
     return { status: 'UNAVAILABLE' }
   }, async () => ({
-    post: { title: 'Test thread', content: 'Public topic', isLocked: locked }, comments: [previousComment],
+    post: { title: 'Test thread', content: 'Public topic', isLocked: locked }, comments: [previousComment], nextCursor: null,
   }), undefined, async (settings, { draft }) => {
     calls++
     assert.equal(settings.prompt, prompt)
@@ -333,6 +333,8 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
   const postId = randomUUID()
   const discussionComment = { id: randomUUID(), author: { id: 123, username: 'fixture-user' },
     content: 'Public context', isHidden: false, replyToCommentId: null }
+  const laterComment = { ...discussionComment, id: randomUUID(), content: 'Follow-up context', replyToCommentId: discussionComment.id }
+  const discussionCursor = 'fixture+/cursor'
   const secret = 'nbi_agent_' + 'x'.repeat(43)
   const sent = new Map<string, { id: string; content: string }>()
   let writes = 0
@@ -361,8 +363,10 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     if (path === '/agent-api/v1/posts/' + postId + '/comments') {
       if (req.method === 'GET') {
         reads++
+        const query = new URL(req.url!, 'http://localhost').searchParams
+        if (query.get('cursor') === discussionCursor) return reply({ items: [laterComment], nextCursor: null, hasMore: false })
         return reply({ items: [discussionComment, { ...discussionComment, id: randomUUID(), isHidden: true, content: 'Hidden context' }],
-          nextCursor: null, hasMore: false })
+          nextCursor: discussionCursor, hasMore: true })
       }
       writes++
       if (writeFailure === 'LIMIT') return res.writeHead(429, { 'Retry-After': '30' }).end()
@@ -404,7 +408,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     if (!host) return { status: 'UNAVAILABLE' }
     try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
     finally { await host.stop() }
-  }, (target) => readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target), (service, succeeded) => {
+  }, (target, preview) => readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target, preview), (service, succeeded) => {
     assert.equal(service, 'connector-executor')
     sendReports.push(succeeded)
   })
@@ -479,7 +483,14 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     const context = await request('GET', threadPath + '?postId=' + randomUUID(), { target: sendApp, actor: 'reviewer' })
     assert.equal(context.status, 200, JSON.stringify(context.body))
     assert.deepEqual(context.body, { post: { title: 'Fixture discussion', content: 'Original context', isLocked: false },
-      comments: [{ id: discussionComment.id, author: { username: 'fixture-user' }, content: discussionComment.content }] })
+      comments: [{ id: discussionComment.id, author: { username: 'fixture-user' }, content: discussionComment.content, replyToCommentId: null }],
+      nextCursor: discussionCursor })
+    const next = await request('GET', threadPath + '?cursor=' + encodeURIComponent(discussionCursor), { target: sendApp, actor: 'reviewer' })
+    assert.equal(next.status, 200)
+    assert.deepEqual(next.body.comments, [{
+      id: laterComment.id, author: { username: 'fixture-user' }, content: laterComment.content, replyToCommentId: discussionComment.id,
+    }])
+    assert.equal(next.body.nextCursor, null)
     assert.equal(writes, 0)
     const sendFromConsole = (path: string, actor = 'admin-a', retry = false) =>
       request('POST', path + '/send', { actor, target: sendApp, data: { retry } })

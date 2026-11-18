@@ -17,7 +17,7 @@ export function createNewbiReadClient(endpoint: string, credential: string, stop
     endpoint: client.endpoint,
     verify: () => withPlatformErrors(client.verify()),
     readEvents: (cursor: string | null) => withPlatformErrors(client.readEvents(cursor)),
-    readThread: (postId: string) => withPlatformErrors(client.readThread(postId)),
+    readThread: (postId: string, preview?: { cursor?: string }) => withPlatformErrors(client.readThread(postId, preview)),
   }
   return reader satisfies PlatformEventReader
 }

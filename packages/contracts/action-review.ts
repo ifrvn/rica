@@ -18,12 +18,21 @@ export const reviewTarget = z.object({
   contact: z.string().nullable(),
   message: z.string(),
 })
+const inboundReviewMessage = z.object({
+  id: z.uuid(), kind: z.enum(['POST', 'REPLY', 'MENTION']),
+  occurredAt: z.iso.datetime({ offset: true }), sender: z.string().nullable(), content: z.string(),
+})
+export const simulationReviewContext = z.object({
+  trigger: inboundReviewMessage.extend({ content: z.string().nullable() }),
+  previous: z.array(inboundReviewMessage),
+})
 export const actionView = z.object({
   id: z.uuid(), runId: z.uuid(), mode: z.literal('SIMULATION'), kind: z.literal('REPLY'),
   state: z.enum(['WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']),
   version: z.number().int(), target: reviewTarget,
   expiresAt: z.iso.datetime(), reviewDigest: z.string(),
   riskCodes: z.array(z.string()), content: z.string().nullable(),
+  messageContext: simulationReviewContext.nullable(),
   autoApproved: z.boolean(),
   autoReviewHandoff: autoReviewHandoff.nullable(),
   followUp: simulationFollowUp.nullable(),

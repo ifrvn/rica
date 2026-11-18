@@ -44,9 +44,13 @@ export const newbiReplyView = z.object({
   retryNotBefore: z.iso.datetime().nullable(), leaseUntil: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })
 export const newbiReviewView = newbiReplyView.extend({ connectorAvailable: z.boolean() })
+const newbiThreadCursor = z.string().min(1).max(2048)
+export const newbiThreadQuery = z.object({ cursor: newbiThreadCursor.optional() })
 export const newbiThreadView = z.object({
   post: z.object({ title: z.string(), content: z.string(), isLocked: z.boolean() }),
-  comments: z.array(z.object({ id: resourceId, author: z.object({ username: z.string() }), content: z.string() })),
+  comments: z.array(z.object({ id: resourceId, author: z.object({ username: z.string() }), content: z.string(),
+    replyToCommentId: resourceId.nullable() })),
+  nextCursor: newbiThreadCursor.nullable(),
 })
 export const newbiAccountCheckView = z.object({ verified: z.boolean(), checkedAt: z.iso.datetime() })
 
