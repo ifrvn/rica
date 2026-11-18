@@ -8,7 +8,7 @@ import { authorize, denyPermission, ManagementError, type Scope } from './manage
 import { autoReviewerId, type ReviewPublicReply } from '../contracts/auto-review.js'
 import { lockAutoReview, readAutoReviewSettings } from './auto-review.js'
 
-export const simulationReviewPolicyVersion = 3
+export const simulationReviewPolicyVersion = 4
 
 const reviewStates = [
   'WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED',

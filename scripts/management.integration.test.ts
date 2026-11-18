@@ -40,6 +40,7 @@ const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'nonmember'])
+const updatedDisclosure = 'AI role, version two.\n\n' + 'This virtual character is operated by AI. '.repeat(30).trim()
 const modelProfileIds = new Set<string>()
 const app = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
@@ -528,7 +529,7 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
 
 test('management commands reject stale updates and commit idempotency and audit atomically', async () => {
   const path = characterPath(a)
-  const core = { coreProfile: { aiDisclosure: 'AI role, version two' } }
+  const core = { coreProfile: { aiDisclosure: updatedDisclosure } }
   assert.equal((await request('PUT', path + '/core', { data: core })).status, 428)
   const updates = await Promise.all(Array.from({ length: 2 }, () =>
     request('PUT', path + '/core', { ifMatch: '"1"', data: core }),
@@ -625,7 +626,20 @@ test('role administrators can see the draft and concurrent approval has one effe
     key: 'enable-review', data: { subject: 'reviewer', action: 'GRANT', reason: 'Review fixture' },
   })
   assert.equal(role.status, 200)
-  const { action, proposalText } = await proposeReview()
+  const implementation = simulatedModelPlugin.implementation
+  const { action, proposalText } = await proposeReview(accountA, undefined, {
+    ...simulatedModelPlugin,
+    implementation: { ...implementation, async write(input, signal) {
+      assert.equal(input.corePrompt, updatedDisclosure)
+      return implementation.write(input, signal)
+    } },
+  })
+  await assert.rejects(proposeReview(accountA, undefined, {
+    ...simulatedModelPlugin,
+    implementation: { ...implementation, async write() {
+      return { text: updatedDisclosure.split('\n')[0], evidenceIds: [] }
+    } },
+  }), { code: 'P2025' })
   const path = actionPath(action.id)
   const adminQueue = await request('GET', characterPath(a) + '/actions')
   assert.equal(adminQueue.status, 200, JSON.stringify(adminQueue.body))
@@ -636,7 +650,7 @@ test('role administrators can see the draft and concurrent approval has one effe
   const preview = await request('GET', path, { actor: 'reviewer' })
   assert.equal(preview.status, 200, JSON.stringify(preview.body))
   assert.equal(preview.body.target.accountId, accountA)
-  assert.equal(preview.body.content, '供您参考：' + proposalText + '\n\nAI 披露：AI role, version two')
+  assert.equal(preview.body.content, '供您参考：' + proposalText)
   const adminPreview = await request('GET', path)
   assert.equal(adminPreview.status, 200, JSON.stringify(adminPreview.body))
   assert.equal(adminPreview.body.content, preview.body.content)
@@ -940,17 +954,17 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: revoked.action.runId } })).state, 'CANCELED')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: revoked.action.id } }), 0)
 
-    // A matching payload hash is insufficient if the approved content omits the authoritative disclosure.
-    const undisclosed = await approveSimulation(await newSimulationAccount())
-    const content = 'Previously approved content without disclosure'
+    // Earlier approvals bind bodies that included the private core setting.
+    const legacy = await approveSimulation(await newSimulationAccount())
+    const content = 'Previously approved reply\n\nAI 披露：' + updatedDisclosure
     await owner.simulatedDraft.update({
-      where: { characterId_runId: { characterId: a, runId: undisclosed.action.runId } }, data: { content },
+      where: { characterId_runId: { characterId: a, runId: legacy.action.runId } }, data: { content },
     })
     await owner.actionProposal.update({
-      where: { id: undisclosed.action.id }, data: { payloadHash: createHash('sha256').update(content).digest('hex') },
+      where: { id: legacy.action.id }, data: { policyVersion: 3, payloadHash: createHash('sha256').update(content).digest('hex') },
     })
-    assert.equal(await reserveSimulation(executor, undisclosed.action.id, simulationPlatforms.resolveAdapter), false)
-    assert.equal(await owner.simulationAttempt.count({ where: { actionId: undisclosed.action.id } }), 0)
+    assert.equal(await reserveSimulation(executor, legacy.action.id, simulationPlatforms.resolveAdapter), false)
+    assert.equal(await owner.simulationAttempt.count({ where: { actionId: legacy.action.id } }), 0)
 
     const paused = await approveSimulation(await newSimulationAccount())
     await executeSimulation(executor, paused.action.id, simulationPlatforms.resolveAdapter, async (db, id) => {
@@ -3072,8 +3086,7 @@ test('three identities on two platforms reach separate approved simulation recei
       assert.equal(preview.body.target.accountId, accountId)
       assert.equal(preview.body.target.identityId, identityId)
       assert.equal(preview.body.target.conversationId, conversationId)
-      assert.equal(preview.body.content.split('\n\nAI 披露：')[0], expected)
-      assert.match(preview.body.content, /\n\nAI 披露：\S/)
+      assert.equal(preview.body.content, expected)
       await executeSimulation(executor, action.id, simulationPlatforms.resolveAdapter)
       assert.equal(await owner.simulationReceipt.count({ where: { actionId: action.id } }), 0)
       const decision = await request('POST', path + '/decisions', {
@@ -3111,13 +3124,14 @@ test('three identities on two platforms reach separate approved simulation recei
 })
 
 test('console simulation runs use an isolated conversation, one approval and one receipt', { timeout: 30_000 }, async (t) => {
+  const writingPrompt = '内部身份提示，仅用于这个模拟账号。'
   const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-console') })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const characterId: string = created.body.id
   characterIds.push(characterId)
   const character = characterPath(characterId)
   const identity = await request('POST', character + '/identities', {
-    key: randomUUID(), data: { slug: 'console-persona', roleProfile: {} },
+    key: randomUUID(), data: { slug: 'console-persona', roleProfile: { writingPrompt } },
   })
   assert.equal(identity.status, 201, JSON.stringify(identity.body))
   const identityId: string = identity.body.id
@@ -3173,6 +3187,7 @@ test('console simulation runs use an isolated conversation, one approval and one
   assert.equal(initial.body.draft, null)
   assert.equal(initial.body.proposal, null)
   assert.equal(initial.body.transcript, null)
+  assert.equal(initial.body.systemPrompts, null)
   assert.equal(JSON.stringify(initial.body).includes(input.message), false)
 
   const runtime = createDatabase(scheduleRuntimeUrl())
@@ -3200,7 +3215,10 @@ test('console simulation runs use an isolated conversation, one approval and one
     const actionPath = character + '/actions/' + action.id
     const preview = await request('GET', actionPath)
     assert.equal(preview.status, 200)
-    assert.ok(preview.body.content.startsWith(generatedReply + '\n\nAI 披露：'))
+    assert.equal(preview.body.content, generatedReply)
+    const drafted = await request('GET', replayPath)
+    assert.deepEqual(drafted.body.systemPrompts, { core: 'AI role', identity: writingPrompt })
+    assert.equal(drafted.body.transcript, null)
     const denyNonmember = await request('POST', actionPath + '/decisions', {
       actor: 'nonmember', key: randomUUID(), ifMatch: preview.headers.get('ETag')!,
       data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest, reason: 'Caller lacks character access' },
@@ -3236,6 +3254,8 @@ test('console simulation runs use an isolated conversation, one approval and one
     const auditReplay = await request('GET', replayPath, { actor: 'reviewer' })
     assert.equal(auditReplay.status, 200)
     assert.deepEqual(auditReplay.body.transcript, replay.body.transcript)
+    assert.deepEqual(replay.body.systemPrompts, { core: 'AI role', identity: writingPrompt })
+    assert.equal((await request('GET', replayPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', replayPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', replayPath, { actor: 'admin-b' })).status, 404)
     await owner.inboundEvent.update({ where: { id: run.inboundEventId }, data: {

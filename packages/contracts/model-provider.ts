@@ -23,5 +23,5 @@ export type ModelProvider = Readonly<{
   hostedModel?: string
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
-  write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; identityPrompt?: string; suggestFollowUp?: boolean }>, signal: AbortSignal): Promise<unknown>
+  write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string; suggestFollowUp?: boolean }>, signal: AbortSignal): Promise<unknown>
 }>

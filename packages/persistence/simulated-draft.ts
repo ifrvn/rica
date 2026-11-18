@@ -4,6 +4,7 @@ import { modelFollowUp, simulationFollowUp } from '../contracts/simulation-follo
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './action-review.js'
 import type { ReviewPublicReply } from '../contracts/auto-review.js'
+import { containsWritingPrompt } from '../runtime/writing-prompts.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '@rica/contracts/model-provider'
 import { simulatedModelPlugin } from '@rica/plugin-simulated-model'
 import { maxSimulatedTextLength } from '@rica/contracts/model-provider'
@@ -97,11 +98,13 @@ async function buildSimulatedDraft(
   const writing = await db.$transaction(async (tx) => {
     const evidence = await readEvidence(tx, runId, writingRequest)
     if (!evidence) return null
-    const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null }[]>`
-      SELECT style, prompt FROM public.rica_simulated_writing_profile(${runId}::uuid)
+    const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null; corePrompt: string | null }[]>`
+      SELECT style, prompt, public.rica_simulation_core_prompt(${runId}::uuid) AS "corePrompt"
+      FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
     if (!profile) return null
     const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined,
+      corePrompt: profile.corePrompt ?? undefined,
       ...(suggestFollowUp ? { suggestFollowUp } : {}) }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
     return await reserveModelBudget(tx, runId, input, outputUnits) ? input : null
@@ -114,6 +117,7 @@ async function buildSimulatedDraft(
   const output = await provider.write(writing, signal)
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
+  if (containsWritingPrompt(draft.text, writing.corePrompt, writing.identityPrompt)) return null
   const suggestion = suggestFollowUp && output && typeof output === 'object' && 'followUp' in output
     ? modelFollowUp.safeParse(output.followUp).data : undefined
   const due = suggestion?.dueAt ? Date.parse(suggestion.dueAt) : NaN
@@ -238,14 +242,12 @@ export async function processSimulatedDraft(
     let actionId: string | undefined
     if (run.state === 'CONTEXT_READY') {
       const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
-      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; disclosure: string | null; crossPlatformDuplicate: boolean }[]>`
+      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; crossPlatformDuplicate: boolean }[]>`
         SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
-          public.rica_simulation_disclosure(${run.id}::uuid) AS disclosure,
           public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
       ` : []
       const target = bound?.target ? reviewTarget.parse(bound.target) : null
-      const content = accepted && bound?.disclosure
-        ? candidate.draft.text + '\n\nAI 披露：' + bound.disclosure : null
+      const content = accepted ? candidate.draft.text : null
       const adapter = target ? resolveAdapter(target.platform) : undefined
       const proposed = accepted && target && target.platform === input?.platform
         && adapter && matchesSimulationAdapter(input.adapter, adapter) && content

@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowR
 import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
-import type { characterView, identityView } from '../../../../../packages/contracts/management.js'
+import { maxAiDisclosureLength, type characterView, type identityView } from '../../../../../packages/contracts/management.js'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import { isSimulationPlatform, platformAccounts, type ConnectorAccount, type ConnectorRegistration, type ConsoleWorkspace } from '../../app/plugin-integrations.js'
@@ -143,7 +143,7 @@ const validationMessages: Record<string, string> = {
   slug: '使用小写字母或数字开头，最多 63 个字符，可含连字符。',
   name: '请输入不超过 120 个字符的名称。',
   timezone: '请选择可用的时区。',
-  disclosure: '请输入 1–240 个字符的 AI 身份说明。',
+  disclosure: `请输入有效的角色核心设定，最多 ${maxAiDisclosureLength} 个字符。`,
   style: '请选择写作风格。',
   writingPrompt: '提示词最多 4000 个字符，可分行填写。',
   registrationId: '请选择要关联的平台账号。',
@@ -449,8 +449,10 @@ onMounted(() => { if (props.characterId) void run(load) })
             <span id="workspace-timezone-error">{{ fieldError('timezone') }}</span>
           </template>
         </UiField>
-        <UiField v-if="isCharacter" label="AI 身份说明" for="workspace-disclosure" :invalid="!!fieldError('disclosure')">
-          <input class="ui-control" placeholder="例如：我是由 AI 驱动的虚拟角色" v-model="form.disclosure" v-bind="fieldInput('disclosure')" @blur="touched.add('disclosure')" maxlength="240" />
+        <UiField v-if="isCharacter" label="角色核心设定" for="workspace-disclosure" :invalid="!!fieldError('disclosure')"
+          :feedback="fieldError('disclosure') ? undefined : `可分行填写，最多 ${maxAiDisclosureLength} 个字符。内容用于内部写作提示。`">
+          <textarea class="ui-control" rows="5" placeholder="例如：我是由 AI 驱动的虚拟角色" v-model="form.disclosure"
+            :maxlength="maxAiDisclosureLength" v-bind="fieldInput('disclosure')" @blur="touched.add('disclosure')" />
           <template v-if="fieldError('disclosure')" #feedback>
             <span id="workspace-disclosure-error">{{ fieldError('disclosure') }}</span>
           </template>
@@ -478,7 +480,7 @@ onMounted(() => { if (props.characterId) void run(load) })
             @blur="touched.add('writingPrompt')"></textarea>
           <template #feedback>
             <span v-if="fieldError('writingPrompt')" id="workspace-writingPrompt-error">{{ fieldError('writingPrompt') }}</span>
-            <span v-else>模拟模型仍按模板生成回复。</span>
+            <span v-else>用于内部写作提示。模拟模型按模板生成回复。</span>
           </template>
         </UiField>
         <template v-if="editor === 'account'">
@@ -523,12 +525,22 @@ onMounted(() => { if (props.characterId) void run(load) })
         </template>
         <UiField v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明（可选）"
           for="workspace-reason" :invalid="!!fieldError('reason')">
-          <input class="ui-control" :placeholder="editor === 'core' ? '例如：统一 AI 身份披露文案' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model="form.reason" v-bind="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
+          <input class="ui-control" :placeholder="editor === 'core' ? '例如：更新角色核心设定' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model="form.reason" v-bind="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
           <template v-if="fieldError('reason')" #feedback>
             <span id="workspace-reason-error">{{ fieldError('reason') }}</span>
           </template>
         </UiField>
         <div class="workspace-actions editor-actions">
+          <UiButton v-if="editor === 'core' && workspace" class="editor-state-control" type="button"
+            variant="soft" :tone="workspace.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
+            @click="open('control', undefined, { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
+            {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
+          </UiButton>
+          <UiButton v-if="editor === 'identity-edit' && editingIdentity" class="editor-state-control" type="button"
+            variant="soft" :tone="editingIdentity.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
+            @click="open('control', undefined, { scope: 'IDENTITY', id: editingIdentity.id, name: identityName(editingIdentity), status: editingIdentity.status })">
+            {{ editingIdentity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
+          </UiButton>
           <UiButton :tone="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
             type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)
               || (editor === 'account' && (!form.platform || (registrationConnector && !registrationConnector.state.ready())))">
@@ -537,18 +549,6 @@ onMounted(() => { if (props.characterId) void run(load) })
           <UiButton :disabled="busy" @click="closeEditor">取消</UiButton>
         </div>
       </form>
-      <div v-if="editor === 'core' && workspace" class="editor-lifecycle">
-        <UiButton variant="soft" :tone="workspace.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
-          @click="open('control', undefined, { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
-          {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
-        </UiButton>
-      </div>
-      <div v-if="editor === 'identity-edit' && editingIdentity" class="editor-lifecycle">
-        <UiButton variant="soft" :tone="editingIdentity.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
-          @click="open('control', undefined, { scope: 'IDENTITY', id: editingIdentity.id, name: identityName(editingIdentity), status: editingIdentity.status })">
-          {{ editingIdentity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
-        </UiButton>
-      </div>
       </div>
     </DialogContent>
     </DialogPortal>
@@ -716,7 +716,7 @@ onMounted(() => { if (props.characterId) void run(load) })
 .workspace-editor h3 { margin: 0 0 1rem; }
 .editor-alert { margin-block-end: 1rem; }
 .editor-actions { justify-content: flex-end; }
-.editor-lifecycle { margin-block-start: 1rem; padding-block-start: 1rem; border-top: 1px solid var(--console-line); }
+.editor-state-control { margin-inline-end: auto; }
 .workspace-list > li { padding-block: .625rem; }
 .workspace-actions, .workspace-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .workspace-row { justify-content: space-between; overflow-wrap: anywhere; }

@@ -93,7 +93,7 @@ Invoke-Rica Get $ricaInboxPath
 | 方法与路径 | 权限 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
 | `GET /newbi/replies` | ADMIN | 分页，可选 `status`、`accountId`。 | 200，摘要列表。每项为 `{ id, identity, agentId, postId, status, createdAt }`。 |
-| `POST /newbi/replies` | ADMIN | 幂等。`{ accountId, postId, content }`。去首尾空白后正文非空，无 NUL。附加 AI 披露后总长最多 4000 Unicode 码点。 | 201，命令结果，初始 `status: "WAITING"`。 |
+| `POST /newbi/replies` | ADMIN | 幂等。`{ accountId, postId, content }`。去首尾空白后正文非空，无 NUL，最多 4000 Unicode 码点。正文包含内部写作提示时返回 422。 | 201，命令结果，初始 `status: "WAITING"`。 |
 | `GET /newbi/replies/{replyId}` | ADMIN | 无。 | 200，提案详情。 |
 | `GET /newbi/replies/{replyId}/thread` | ADMIN | 无，插件须可用。 | 200，`{ post: { title, content, isLocked }, comments: [{ id, author: { username }, content }] }`。上游不可读时返回 503。 |
 | `POST /newbi/replies/{replyId}/decision` | ADMIN，操作者须与提案人不同 | 幂等。`{ reviewDigest, decision, reason }`。摘要取详情中的 64 位小写十六进制字符串，决定为 `APPROVE` 或 `REJECT`，理由去首尾空白后 1–240 字符。 | 200，命令结果，状态为 `READY` 或 `REJECTED`。 |

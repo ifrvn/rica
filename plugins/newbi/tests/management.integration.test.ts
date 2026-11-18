@@ -247,7 +247,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   characterIds.push(characterId)
   const base = characterPath(characterId)
   const { id: accountId } = await owner.platformAccount.create({ data: {
-    characterId, identityId: await activeIdentity({}, characterId), status: 'ACTIVE',
+    characterId, identityId: await activeIdentity({ writingPrompt: 'Internal account writing instructions' }, characterId), status: 'ACTIVE',
     platform: 'newbi', instanceKey: 'http://127.0.0.1:5000/agent-api/v1', remoteAccountId: randomUUID(),
   } })
   assert.equal((await request('POST', base + '/memberships', {
@@ -269,7 +269,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   }), undefined, async (settings, { draft }) => {
     calls++
     assert.equal(settings.prompt, prompt)
-    assert.match(draft, /AI 披露/)
+    assert.equal(draft, 'Routine follow-up')
     return 'fixture/default-review-model'
   })
   const list = base + '/newbi/replies'
@@ -282,6 +282,8 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   const waiting = await inspect(first.body.id)
   assert.equal(waiting.body.status, 'WAITING')
   assert.equal(calls, 0)
+  assert.equal((await propose('Pasted core settings: AI role')).body.error.code, 'PRIVATE_WRITING_PROMPT')
+  assert.equal((await propose('Internal account writing instructions')).body.error.code, 'PRIVATE_WRITING_PROMPT')
   const human = await request('POST', list + '/' + first.body.id + '/decision', {
     target, actor: 'reviewer', key: randomUUID(),
     data: { decision: 'APPROVE', reviewDigest: waiting.body.reviewDigest, reason: 'Review first interaction' },
@@ -433,7 +435,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       assert.equal(preview.body.identity, (await owner.identity.findUniqueOrThrow({ where: { id: identityId } })).slug)
       assert.equal(preview.body.postId, postId)
       assert.equal(preview.body.accountId, accountId)
-      assert.equal(preview.body.content.split('\n\nAI 披露：')[0], text)
+      assert.equal(preview.body.content, text)
       const decide = (decision: 'APPROVE' | 'REJECT', actor = 'reviewer') => request('POST', path + '/decision', {
         actor, key: randomUUID(), data: { decision, reviewDigest: preview.body.reviewDigest, reason: 'Checked bound reply' },
       })
@@ -497,6 +499,11 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       SELECT public.rica_claim_newbi_reply(${approved.id}::uuid,false,${agentId}::uuid,${endpoint},${nextExecutor}) AS claim
     `
     assert.equal(foreignClaim.claim, null)
+    await owner.newbiReply.update({ where: { id: approved.id }, data: { content: approved.content + '\n\nAI 披露：AI role' } })
+    assert.deepEqual(await executeNewbiReply(executor, client, executorKey, approved.id), { status: 'UNAVAILABLE' })
+    assert.equal(reads, readCount)
+    assert.equal(writes, 0)
+    await owner.newbiReply.update({ where: { id: approved.id }, data: { content: approved.content } })
     currentAgent = randomUUID()
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, approved.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 0)
@@ -506,6 +513,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       [[200, { status: 'SENT', commentId: sent.get(approved.id)?.id }]])
     assert.equal(normal.filter(({ status, body }) => (status === 200 && body.status === 'UNAVAILABLE') || status === 409).length, 1)
     assert.equal((await request('GET', approved.path)).body.remoteCommentId, sent.get(approved.id)?.id)
+    assert.equal(sent.get(approved.id)?.content, 'Ordinary fixture reply')
     assert.equal(writes, 1)
 
     const lost = await propose('Lost response fixture reply', 'newbi-unknown')

@@ -24,7 +24,7 @@ Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单页只�
 1. 应用数据库迁移。使用分权部署时，`DATABASE_URL` 的登录须能切换到 `rica_runtime` 的成员角色，见[数据库角色说明](../../docs/database-roles.md)。
 2. ADMIN 在「平台账号池 → 添加账号」选择 Newbi，输入 Agent Key 并测试。核对返回的用户名和头像后确认添加。可以重复此流程接入其他 Agent。登记后关联到身份，再启用角色、身份和该账号。
 3. 审批前可读取专区状态、Agent 身份、规则、额度、帖子与全部可见评论。试点最多读取四页评论，超过范围时停止。社区内容始终作为不可信资料。
-4. ADMIN 在平台账号池打开对应账号的「查看读取状态」，从事件列表点击「拟写回复」，也可直接填写帖子 ID。提交后进入该提案的审批详情。Rica 附加核心档案中的 AI 披露并冻结待审正文。也可向 `POST /v1/characters/{characterId}/newbi/replies` 提交 `accountId`、`postId` 和 `content`，同时提供幂等键。
+4. ADMIN 在平台账号池打开对应账号的「查看读取状态」，从事件列表点击「拟写回复」，也可直接填写帖子 ID。提交后进入该提案的审批详情，审批绑定填写的回复正文。也可向 `POST /v1/characters/{characterId}/newbi/replies` 提交 `accountId`、`postId` 和 `content`，同时提供幂等键。
 5. 另一名角色管理员在「审批 → Newbi 平台提案」打开详情，点击「读取帖子和评论」查看平台当前的公开讨论，对照拟发送正文，再输入理由并批准或拒绝。也可调用 `GET /newbi/replies/{replyId}` 和 `POST /newbi/replies/{replyId}/decision`，路径同上。决定请求传 `reviewDigest`、`decision` 和 `reason`，并提供 `Idempotency-Key`。批准后由角色管理员触发单次执行。
 
 角色管理员可在「审批 → 自动审批设置」启用 AI 审批并编辑审核提示词。同一账号在该帖子已有可核验的回复时，系统可使用部署默认外部模型审核新的公开回复。首次回复、上下文不可用或模型要求复审时，提案留在人工审批队列。

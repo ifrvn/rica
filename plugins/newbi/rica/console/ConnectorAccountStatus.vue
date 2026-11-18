@@ -97,8 +97,13 @@ function submit() {
   const input = draft.value
   if (!props.canPropose || !input.success) return
   void run(async () => {
-    const result = await command(base + '/replies', input.data)
-    if (active) emit('proposals', props.accountId, result.id)
+    try {
+      const result = await command(base + '/replies', input.data)
+      if (active) emit('proposals', props.accountId, result.id)
+    } catch (cause) {
+      if (!(cause instanceof RequestError) || cause.code !== 'PRIVATE_WRITING_PROMPT') throw cause
+      if (active) submitError.value = '回复含内部写作提示，请从正文删去后再送审。'
+    }
   })
 }
 
@@ -139,7 +144,7 @@ onBeforeUnmount(() => { active = false })
           :invalid="invalidContent" :feedback="invalidContent ? '回复最多 4000 字符，请检查正文。' : undefined">
           <textarea class="ui-control" v-model="content" :rows="4" v-bind="{ id: 'newbi-composer-content', required: true, 'aria-invalid': invalidContent || undefined }" :disabled="submitting"></textarea>
         </UiField>
-        <p>送审时将附上角色的 AI 披露。通过审批后，回复才可进入发送流程。</p>
+        <p>通过审批后，回复才可进入发送流程。</p>
         <UiAlert v-if="submitError" tone="error" role="alert">{{ submitError }}</UiAlert>
         <div class="connector-actions">
           <UiButton tone="primary" type="submit" :loading="submitting" :disabled="!draft.success || submitting">提交回复提案</UiButton>

@@ -47,8 +47,8 @@ const timeline = computed(() => {
     : proposal?.attemptStatus === 'UNKNOWN' || state === 'RECONCILING' ? '待核对'
       : proposal?.attemptStatus === 'NOT_SENT' ? '已确认未写入' : '无回执'
   return [
-    { label: '收到消息', status: inboundKind[inbound.kind], at: inbound.receivedAt, quote: transcript?.message },
-    { label: '生成草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt, quote: transcript?.draft },
+    { label: '收到消息', status: inboundKind[inbound.kind], at: inbound.receivedAt },
+    { label: '生成草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt },
     { label: '人工审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt, quote: transcript?.reviewReason },
     { label: '执行许可', status: proposal?.permittedAt ? '已发放' : state === 'READY' ? '等待发放' : '未发放', at: proposal?.permittedAt },
     { label: '模拟回执', status: result, at: proposal?.receiptAt },
@@ -402,6 +402,26 @@ onMounted(() => {
             <div v-if="modelName"><dt>模型</dt><dd>{{ modelName }}</dd></div>
             <div><dt>运行 ID</dt><dd>{{ selected.id }}</dd></div>
           </dl>
+          <details v-if="selected.systemPrompts?.core || selected.systemPrompts?.identity" class="run-prompts">
+            <summary>系统提示词</summary>
+            <dl>
+              <template v-if="selected.systemPrompts.core">
+                <dt>角色核心设定</dt><dd class="console-payload">{{ selected.systemPrompts.core }}</dd>
+              </template>
+              <template v-if="selected.systemPrompts.identity">
+                <dt>身份提示词</dt><dd class="console-payload">{{ selected.systemPrompts.identity }}</dd>
+              </template>
+            </dl>
+          </details>
+          <section v-if="selected.transcript" aria-labelledby="run-messages-heading" class="run-messages">
+            <h4 id="run-messages-heading">消息内容</h4>
+            <dl>
+              <dt>入站消息</dt><dd class="console-payload">{{ selected.transcript.message }}</dd>
+              <template v-if="selected.transcript.draft">
+                <dt>回复正文</dt><dd class="console-payload">{{ selected.transcript.draft }}</dd>
+              </template>
+            </dl>
+          </section>
           <ol class="run-timeline" aria-label="运行轨迹">
             <li v-for="stage in timeline" :key="stage.label">
               <div class="run-actions">
@@ -442,6 +462,11 @@ onMounted(() => {
 .run-row-title { justify-content: space-between; }
 .run-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1rem; margin: 0; }
 .run-meta dd { margin: .15rem 0 0; }
+.run-prompts { min-width: 0; border-block: 1px solid var(--console-line); padding-block: .625rem; }
+.run-prompts summary { cursor: pointer; }
+.run-messages h4 { margin: 0; }
+.run-prompts dl, .run-messages dl { display: grid; gap: .375rem; margin-block: .625rem 0; }
+.run-prompts dd, .run-messages dd { min-width: 0; margin: 0 0 .375rem; }
 .run-timeline { list-style: none; display: grid; gap: 1rem; margin: 0; padding: 0; }
 .run-timeline li { display: grid; gap: .5rem; border-inline-start: 2px solid var(--console-line); padding-inline-start: .75rem; }
 .run-quote { margin: 0; }

@@ -7,9 +7,11 @@ const text = z.string().trim().min(1).max(240).regex(/^[^\p{Cc}]+$/u)
 const shortText = text.max(120)
 export const reasonInput = z.strictObject({ reason: text })
 const optionalReasonInput = reasonInput.partial()
+export const maxAiDisclosureLength = 3000
 export const coreProfile = z.strictObject({
   name: shortText.optional(),
-  aiDisclosure: text,
+  aiDisclosure: z.string().trim().min(1).max(maxAiDisclosureLength)
+    .refine((value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)),
   dailyModelBudget: z.number().int().min(1024).max(100_000_000).optional(),
   fictionalBackground: text.optional(),
   values: z.array(shortText).max(16).optional(),

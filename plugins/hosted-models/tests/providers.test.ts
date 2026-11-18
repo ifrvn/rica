@@ -8,6 +8,7 @@ const input = {
   text: '活动几点开始？',
   evidence: [{ id: 'internal-memory-id', revision: 2, content: '活动下午三点开始。' }],
   style: 'concise',
+  corePrompt: '内部角色设定，仅用于塑造行为。',
   identityPrompt: '用中文，以社区志愿者的口吻回答。',
   time: {
     occurredAt: '2026-11-10T02:00:00Z', now: '2026-11-10T02:00:00Z',
@@ -45,6 +46,7 @@ test('hosted models send only writing input and parse each provider response', a
       const instructions = id === 'gemini' ? body.systemInstruction.parts[0].text
         : id === 'anthropic' ? body.system : body.messages[0].content
       assert.ok(instructions.includes(input.identityPrompt))
+      assert.ok(instructions.includes(input.corePrompt))
       if (id === 'openai') assert.equal(body.store, false)
       if (id === 'deepseek') {
         assert.deepEqual(body.thinking, { type: 'disabled' })

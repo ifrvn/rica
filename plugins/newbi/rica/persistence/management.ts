@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../runtime/identity.js'
-import { coreProfile } from '@rica/contracts/management'
+import { coreProfile, identityProfile } from '@rica/contracts/management'
 import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput, type newbiThreadView } from '../management/contracts.js'
 import type { Prisma, PrismaClient } from '../../../../packages/persistence/generated/client.js'
 import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '../../../../packages/persistence/management.js'
 import { autoReviewerId, type ReviewPublicReply } from '../../../../packages/contracts/auto-review.js'
 import { lockAutoReview, readAutoReviewSettings } from '../../../../packages/persistence/auto-review.js'
+import { containsWritingPrompt } from '../../../../packages/runtime/writing-prompts.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -21,7 +22,9 @@ export async function bindNewbiAccount(tx: Prisma.TransactionClient, scope: Scop
 async function boundAccount(tx: Prisma.TransactionClient, characterId: string, id: string) {
   return tx.platformAccount.findFirst({
     where: { id, characterId, platform: 'newbi' },
-    include: { identity: { include: { character: { include: { activeCore: true } } } } },
+    include: { identity: { include: {
+      activeProfile: { select: { roleProfile: true } }, character: { include: { activeCore: true } },
+    } } },
   })
 }
 
@@ -34,10 +37,12 @@ export async function createNewbiReply(
   const character = identity.character
   if (account.status !== 'ACTIVE' || identity.status !== 'ACTIVE' || character.status !== 'ACTIVE') conflict()
   await requireConnector(account.instanceKey)
-  const disclosure = coreProfile.strip().safeParse(character.activeCore?.hardProfile).data?.aiDisclosure
-  if (!disclosure) throw new ManagementError(422, 'INVALID_INPUT', 'AI disclosure is required')
-  const content = input.content + '\n\nAI 披露：' + disclosure
-  if ([...content].length > 4000) throw new ManagementError(422, 'INVALID_INPUT', 'Reply plus disclosure exceeds the Newbi limit')
+  const { content } = input
+  const corePrompt = coreProfile.pick({ aiDisclosure: true }).strip().safeParse(character.activeCore?.hardProfile).data?.aiDisclosure
+  const identityPrompt = identityProfile.pick({ writingPrompt: true }).strip().safeParse(identity.activeProfile?.roleProfile).data?.writingPrompt
+  if (content.includes('\n\nAI 披露：') || containsWritingPrompt(content, corePrompt, identityPrompt)) {
+    throw new ManagementError(422, 'PRIVATE_WRITING_PROMPT', 'Reply contains internal writing instructions')
+  }
   const id = randomUUID()
   const reviewDigest = createHash('sha256').update(JSON.stringify([
     id, account.id, account.instanceKey, account.remoteAccountId, account.bindingVersion,

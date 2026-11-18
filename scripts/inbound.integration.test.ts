@@ -922,9 +922,9 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   const drafts = await db.simulatedDraft.findMany({ where: { runId: { in: runIds } } })
   assert.equal(drafts.length, 2)
   assert.deepEqual(drafts.find(({ runId }) => runId === accepted.runId)?.citationIds, [memory.id])
-  assert.equal(drafts.find(({ runId }) => runId === accepted.runId)?.content, reference + '\n\nAI 披露：Simulated AI character')
+  assert.equal(drafts.find(({ runId }) => runId === accepted.runId)?.content, reference)
   assert.deepEqual(drafts.find(({ runId }) => runId === outside.runId)?.citationIds, [])
-  assert.equal(drafts.find(({ runId }) => runId === outside.runId)?.content, '收到，我会考虑这条消息。\n\nAI 披露：Simulated AI character')
+  assert.equal(drafts.find(({ runId }) => runId === outside.runId)?.content, '收到，我会考虑这条消息。')
   const runs = await db.agentRun.findMany({
     where: { id: { in: runIds } }, include: { inboundEvent: true },
   })
@@ -1107,7 +1107,7 @@ test('registered platform payloads produce separate drafts for three identities 
       assert.equal(run.inboundEvent.occurredAt.toISOString(), occurredAt.toISOString())
       assert.equal(run.inboundEvent.adapterId, account.platform)
       assert.equal(run.inboundEvent.adapterVersion, '1.0.0')
-      expectedDrafts.set(result.runId, expected + '\n\nAI 披露：Simulated AI character')
+      expectedDrafts.set(result.runId, expected)
     }
     const runIds = [...expectedDrafts.keys()]
     await consumeRuns(runIds, draftQueuedEvent)
