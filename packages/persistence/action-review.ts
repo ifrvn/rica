@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { reviewTarget, type ActionView, type actionDecision } from '../contracts/action-review.js'
 import { simulationFollowUp } from '../contracts/simulation-follow-up.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
+import { autoReviewerId, type ReviewPublicReply } from '../contracts/auto-review.js'
+import { lockAutoReview, readAutoReviewSettings } from './auto-review.js'
 
 export const simulationReviewPolicyVersion = 3
 
@@ -27,6 +30,7 @@ type Proposal = {
   expiresAt: Date
   expired: boolean
   followUp: unknown
+  reviewerId: string | null
 }
 
 function notFound(): never {
@@ -43,9 +47,10 @@ async function proposalRows(
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
       a.proposer_id AS "proposerId", a.expires_at AS "expiresAt",
       a.expires_at <= statement_timestamp() AS expired,
-      r.state, r.state_version AS version
+      r.state, r.state_version AS version, approval.reviewer_id AS "reviewerId"
     FROM public.action_proposals a
     JOIN public.agent_runs r ON (r.character_id, r.id) = (a.character_id, a.run_id)
+    LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
     WHERE a.character_id = ${characterId}::uuid
       AND (${actionId}::uuid IS NULL OR a.id = ${actionId}::uuid)
       AND (${actionId}::uuid IS NOT NULL OR r.state = 'WAITING_APPROVAL')
@@ -94,8 +99,11 @@ export async function listReviewActions(
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
         reviewDigest: row.reviewDigest,
-        riskCodes: row.crossPlatformDuplicate
-          ? ['HUMAN_REVIEW_REQUIRED', 'CROSS_PLATFORM_NEAR_DUPLICATE'] : ['HUMAN_REVIEW_REQUIRED'],
+        autoApproved: row.reviewerId === autoReviewerId,
+        riskCodes: [
+          ...(row.reviewerId === autoReviewerId ? [] : ['HUMAN_REVIEW_REQUIRED']),
+          ...(row.crossPlatformDuplicate ? ['CROSS_PLATFORM_NEAR_DUPLICATE'] : []),
+        ],
         content: actionId && row.proposerId !== scope.actor.id ? content : null,
         followUp: actionId && content && row.proposerId !== scope.actor.id
           ? simulationFollowUp.safeParse(row.followUp).data ?? null : null,
@@ -103,6 +111,40 @@ export async function listReviewActions(
     }
     return { items: actions, nextCursor: rows.length > limit ? actions.at(-1)?.id ?? null : null }
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function autoReviewSimulation(
+  db: PrismaClient, characterId: string, actionId: string, discussion: string,
+  resolveAdapter: ResolveSimulationAdapter, review: ReviewPublicReply,
+) {
+  const input = await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
+    const settings = await readAutoReviewSettings(tx, characterId)
+    if (!settings?.enabled) return
+    const [proposal] = await proposalRows(tx, characterId, actionId)
+    if (!proposal || proposal.state !== 'WAITING_APPROVAL' || proposal.crossPlatformDuplicate || proposal.followUp) return
+    const { target, content } = await inspect(tx, characterId, proposal, resolveAdapter)
+    if (target.audience === 'PUBLIC' && content) return { settings, proposal, target, content }
+  }, { isolationLevel: 'RepeatableRead' })
+  if (!input) return
+  const { settings, proposal, target, content } = input
+  const model = await review(settings, { platform: target.platform, draft: content, discussion })
+  if (!model) return
+
+  await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
+    if (!await lockAutoReview(tx, characterId, settings.version)) return
+    const [current] = await proposalRows(tx, characterId, actionId)
+    if (!current || current.state !== 'WAITING_APPROVAL' || current.version !== proposal.version
+      || current.reviewDigest !== proposal.reviewDigest) return
+    if ((await inspect(tx, characterId, current, resolveAdapter)).content !== content) return
+    const result = await finishReview(tx, characterId, current, autoReviewerId, 'APPROVE',
+      `Auto-review v${settings.version} · ${model}`, resolveAdapter)
+    if (result.status === 'READY') await tx.managementAudit.create({ data: {
+      characterId, actorId: autoReviewerId, operation: 'action.auto-approve', targetId: actionId,
+      digest: current.reviewDigest, requestId: randomUUID(),
+    } })
+  })
 }
 
 export async function decideReviewAction(
@@ -116,13 +158,19 @@ export async function decideReviewAction(
   if (proposal.state !== 'WAITING_APPROVAL' || proposal.reviewDigest !== input.reviewDigest) {
     throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
   }
+  return finishReview(tx, scope.characterId, proposal, scope.actor.id, input.decision, input.reason, resolveAdapter)
+}
 
-  const { state } = await inspect(tx, scope.characterId, proposal, resolveAdapter)
+async function finishReview(
+  tx: Prisma.TransactionClient, characterId: string, proposal: Proposal, reviewerId: string,
+  decision: 'APPROVE' | 'REJECT', reason: string, resolveAdapter: ResolveSimulationAdapter,
+) {
+  const { state } = await inspect(tx, characterId, proposal, resolveAdapter, false)
   const valid = state === 'WAITING_APPROVAL'
-  const nextState = valid ? (input.decision === 'APPROVE' ? 'READY' : 'REJECTED') : state
+  const nextState = valid ? (decision === 'APPROVE' ? 'READY' : 'REJECTED') : state
   const [transition] = await tx.$queryRaw<{ version: number | null }[]>`
     SELECT public.rica_finish_action_review(
-      ${scope.characterId}::uuid, ${proposal.runId}::uuid, ${version}, ${nextState}::public."RunState"
+      ${characterId}::uuid, ${proposal.runId}::uuid, ${proposal.version}, ${nextState}::public."RunState"
     ) AS version
   `
   if (!transition?.version) throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
@@ -130,10 +178,10 @@ export async function decideReviewAction(
   if (valid) {
     await tx.actionApproval.create({
       data: {
-        characterId: scope.characterId, actionId, reviewDigest: proposal.reviewDigest,
-        reviewerId: scope.actor.id, decision: input.decision, reason: input.reason, expiresAt: proposal.expiresAt,
+        characterId, actionId: proposal.id, reviewDigest: proposal.reviewDigest,
+        reviewerId, decision, reason, expiresAt: proposal.expiresAt,
       },
     })
   }
-  return { id: actionId, status: nextState, version: transition.version }
+  return { id: proposal.id, status: nextState, version: transition.version }
 }

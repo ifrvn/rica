@@ -92,6 +92,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
 | `GET /c/audit` | ADMIN 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | ADMIN 读取模拟待办和经复核的提案预览。列表不含正文。 |
+| `GET /c/auto-review`、`PUT /c/auto-review` | ADMIN 读取和修改当前角色的自动审批开关和提示词。保存时在 If-Match 带上当前版本。 |
 | `POST /c/actions/{actionId}/decisions` | ADMIN 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
 
@@ -135,9 +136,15 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 命中时审批风险码包含 `CROSS_PLATFORM_NEAR_DUPLICATE`。提示绑定当前提案，审批员只收到风险码与该提案原本获准查看的内容。比较不读取私聊，不建立账号、联系人或身份关联。
 
-## 模拟审批
+## 审批
 
-用本地账号登录 Vue 控制台，在人工审批区选择角色。批准将提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
+用本地账号登录 Vue 控制台，在「审批」选择角色。批准将模拟提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
+
+「自动审批设置」按角色生效，初始关闭。管理员可编辑提示词或恢复默认。新产生的合格公开回复使用插件中心配置的部署默认外部模型。模型仅收到待发正文（含 AI 披露）和该讨论的公开内容。私聊、近似重复提示、拟定计划或承诺的模拟提案进入人工复审。
+
+模型返回明确批准时，服务端在提交决定前复查策略版本、提案和当前授权。模型未配置、停用、审核失败或要求复审时，仍可人工处理。修改或关闭设置会使尚未提交的旧审核结果失效。提案详情和审计记录标识自动批准。
+
+Newbi 首次向某帖子回复仍走人工审批。同一账号后续回复时，审核前须在当前公开讨论中查到该账号已确认的回复。自动批准后的 Newbi 提案进入待发送，由管理员触发发送。[Newbi 插件手册](../plugins/newbi/README.md)
 
 预览和决定都会复核绑定、正文摘要和授权证据。撤权或配置版本更新时，待审和已批准提案会随授权纪元变化失效。适配器或策略版本不匹配、证据过期以及正文变化时，预览会隐藏正文。提交决定时会记录失效或过期状态和审计。后台过期扫描随调度接入。执行许可和回执由独立执行进程处理。
 

@@ -7,6 +7,7 @@ import { hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hoste
 import { modelSettingsDirectory } from '../../packages/runtime/settings-directory.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
+import { createAutoReviewer } from '../auto-review.js'
 
 async function main() {
   const config = loadConfig()
@@ -41,7 +42,8 @@ async function main() {
 
   let worker: Awaited<ReturnType<typeof startOutboxWorker>>
   try {
-    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, getModel, platforms.resolveAdapter, sweepRuntimeRetention)
+    const review = createAutoReviewer(async (check) => check((await getModel()).implementation))
+    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, getModel, platforms.resolveAdapter, sweepRuntimeRetention, review)
   } catch (error) {
     await Promise.all([selected.stop(), platforms.stop()])
     await reportPluginResult(config.redisUrl, 'worker',

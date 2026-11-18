@@ -18,9 +18,11 @@ import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
+import { createAutoReviewer } from '../apps/auto-review.js'
 import { deriveMemory, revokeMemoryAccess } from '../packages/persistence/memory.js'
 import { reviewTarget } from '../packages/contracts/action-review.js'
-import { decideReviewAction, listReviewActions } from '../packages/persistence/action-review.js'
+import { autoReviewSimulation, decideReviewAction, listReviewActions } from '../packages/persistence/action-review.js'
+import { autoReviewerId, defaultAutoReviewPrompt } from '../packages/contracts/auto-review.js'
 import { sweepSimulationRetention } from '../packages/persistence/simulation-retention.js'
 import { loadRunContinuity } from '../packages/persistence/run-continuity.js'
 import { createDatabase } from '../packages/persistence/client.js'
@@ -663,6 +665,64 @@ test('role administrators can see the draft and concurrent approval has one effe
   assert.equal(invalidated.body.state, 'CANCELED')
   assert.equal(invalidated.body.content, null)
   assert.equal(await owner.managementAudit.count({ where: { targetId: action.id, operation: 'action.invalidate' } }), 1)
+})
+
+test('role auto-review settings are private, versioned, and fence in-flight approval when disabled', async () => {
+  const path = characterPath(a) + '/auto-review'
+  const initial = await request('GET', path)
+  assert.deepEqual(initial.body, { enabled: false, prompt: defaultAutoReviewPrompt, version: 0 })
+  const first = await proposeReview()
+  const input = { enabled: true, prompt: '只批准常规回复。' }
+  const save = (version: number, enabled: boolean, actor = 'admin-a') =>
+    request('PUT', path, { actor, ifMatch: '"' + version + '"', data: { ...input, enabled } })
+  assert.equal((await save(0, true, 'admin-b')).status, 404)
+  assert.equal((await save(0, true)).status, 200)
+  assert.equal((await save(0, false)).status, 412)
+  assert.deepEqual((await request('GET', path)).body, { ...input, version: 1 })
+
+  const url = new URL(config.databaseUrl)
+  url.searchParams.set('options', '-c role=rica_runtime')
+  const runtime = createDatabase(url.href)
+  const inspect = (id: string) => request('GET', actionPath(id))
+  let verdict = 'APPROVE\nextra'
+  let duringReview: (() => Promise<void>) | undefined
+  let observedPrompt: string | undefined
+  const review = createAutoReviewer(async (check) => check({
+    ...simulatedModelPlugin.implementation, hostedProvider: 'fixture', hostedModel: 'default-review-model',
+    async review(prompt) {
+      observedPrompt = prompt
+      await duringReview?.()
+      return verdict
+    },
+  }))
+  try {
+    const attempt = (action: typeof first) => autoReviewSimulation(runtime, a, action.action.id, action.proposalText,
+      simulationPlatforms.resolveAdapter, review)
+    await attempt(first)
+    assert.equal(observedPrompt, input.prompt)
+    assert.equal((await inspect(first.action.id)).body.state, 'WAITING_APPROVAL')
+    verdict = 'APPROVE'
+    duringReview = async () => { assert.equal((await save(1, false)).status, 200) }
+    await attempt(first)
+    assert.equal((await inspect(first.action.id)).body.state, 'WAITING_APPROVAL')
+    assert.equal(await owner.actionApproval.count({ where: { actionId: first.action.id } }), 0)
+
+    assert.equal((await save(2, true)).status, 200)
+    duringReview = undefined
+    const second = await proposeReview()
+    await attempt(second)
+    const approved = await inspect(second.action.id)
+    assert.equal(approved.body.state, 'READY')
+    assert.equal(approved.body.autoApproved, true)
+    const approval = await owner.actionApproval.findUniqueOrThrow({ where: { actionId: second.action.id } })
+    assert.equal(approval.reviewerId, autoReviewerId)
+    assert.equal(approval.reviewDigest, second.action.reviewDigest)
+    assert.match(approval.reason, /v3 · fixture\/default-review-model/)
+  } finally {
+    await runtime.$disconnect()
+    // Later tests share the character and its simulator queue.
+    await owner.character.update({ where: { id: a }, data: { autoReviewEnabled: false, authEpoch: { increment: 1 } } })
+  }
 })
 
 test('review rechecks evidence expiry and adapter version, and records a valid rejection', async () => {

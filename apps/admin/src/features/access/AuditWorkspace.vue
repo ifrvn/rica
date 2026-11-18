@@ -26,6 +26,8 @@ onBeforeUnmount(() => { active = false })
 
 const labels: Record<string, string> = {
   'simulation.start': '发起模拟', 'action.review': '提交审批', 'action.invalidate': '使提案失效',
+  'auto-review.update': '修改自动审批设置', 'action.auto-approve': 'AI 批准模拟回复',
+  'newbi.reply.auto-approve': 'AI 批准 Newbi 回复',
   'simulation.resolve': '模拟对账', 'outbox.retry': '恢复隔离事件',
   'character.create': '创建角色', 'character.core.update': '更新角色核心',
   'identity.create': '创建身份', 'identity.update': '更新身份', 'account.create': '登记平台账号',

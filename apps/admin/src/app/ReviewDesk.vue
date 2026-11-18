@@ -11,6 +11,7 @@ import ConsoleNavigation from './ConsoleNavigation.vue'
 import { startAuthentication } from '@simplewebauthn/browser'
 import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
+import AutoReviewSettings from '../features/review/AutoReviewSettings.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
 import { focusRecord } from '@rica/console-shared/console-data'
 import { request, RequestError } from '@rica/console-shared/request'
@@ -585,13 +586,14 @@ async function decide(decision: Decision) {
         </UiButton>
       </nav>
 
-      <nav v-if="characterId && (tab === 'connector' || (tab === 'review' && reviewTabs.length))" class="account-actions" aria-label="审批类型">
-        <UiButton size="small" :tone="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
+      <nav v-if="characterId && (tab === 'connector' || tab === 'review')" class="account-actions" aria-label="审批类型">
+        <UiButton v-if="reviewTabs.length" size="small" :tone="tab === 'review' ? 'primary' : 'default'" :aria-current="tab === 'review' ? 'page' : undefined" :disabled="busy || routing"
           @click="changeTab('review')">模拟提案</UiButton>
         <UiButton v-for="review in reviewTabs" :key="review.id" size="small"
           :tone="tab === 'connector' && activePlatformReview?.id === review.id ? 'primary' : 'default'"
           :aria-current="tab === 'connector' && activePlatformReview?.id === review.id ? 'page' : undefined" :disabled="busy || routing"
           @click="navigate({ characterId, page: 'connector', reviewPlugin: review.id })">{{ review.title }}</UiButton>
+        <AutoReviewSettings :key="characterId" :character-id="characterId" @expired="resetSession" />
       </nav>
       <UiSpinner v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter" :key="characterId" :character="currentCharacter"
@@ -695,6 +697,7 @@ async function decide(decision: Decision) {
           <div v-if="selected" class="console-actions proposal-actions">
             <UiBadge>模拟执行</UiBadge>
             <UiBadge :tone="statusTone(selected.state)">{{ statusText[selected.state] }}</UiBadge>
+            <UiBadge v-if="selected.autoApproved" tone="success">AI 自动批准</UiBadge>
             <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction(selected.id)">重新核对</UiButton>
             <UiButton size="small" variant="quiet" :disabled="busy" @click="openRun(selected.runId)">查看运行记录</UiButton>
           </div>

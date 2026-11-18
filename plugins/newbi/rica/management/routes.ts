@@ -5,11 +5,13 @@ import * as management from '../../../../packages/persistence/management.js'
 import type { PrismaClient, Prisma } from '../../../../packages/persistence/generated/client.js'
 import { body, character, characterParams, error, errors, security, success, failure, type ManagementEnvironment, type ManagementPlugin } from '../../../../packages/runtime/management-http.js'
 import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
-import { bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections, readPendingDeliveries } from '../persistence/management.js'
+import { autoReviewNewbiReply, bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections, readPendingDeliveries } from '../persistence/management.js'
+import type { ReviewPublicReply } from '../../../../packages/contracts/auto-review.js'
 import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadView } from './contracts.js'
 import type { newbiCatalog } from '../deployment/catalog.js'
 
 export type NewbiManagementOptions = {
+  reviewReply?: ReviewPublicReply
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
   pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
   sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
@@ -19,7 +21,7 @@ export type NewbiManagementOptions = {
 }
 
 export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { readNewbi(): Promise<{ endpoint: string } | undefined>; isInstalled(): Promise<boolean> } | undefined,
-  { identifyConnector, pollConnector, sendConnector, readConnectorThread, reportConnectorOperation }: NewbiManagementOptions): ManagementPlugin {
+  { identifyConnector, pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply }: NewbiManagementOptions): ManagementPlugin {
   async function observe<T>(service: keyof typeof newbiCatalog, run: () => Promise<T>, succeeded: (result: T) => boolean) {
     let completed = false
     try {
@@ -129,10 +131,19 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
       const scope = { ...c.req.valid('param'), actor: c.get('actor') }
       const input = c.req.valid('json')
       const requestId = c.get('requestId')
+      let created = false
       const result = await management.executeManagementCommand(db, {
         ...scope, operation: 'newbi.reply.create', targetScope: scope.characterId, input, requestId,
         key: c.req.valid('header')['idempotency-key'],
-      }, (tx) => createNewbiReply(tx, scope, input, requireNewbi))
+      }, async (tx) => {
+        const proposal = await createNewbiReply(tx, scope, input, requireNewbi)
+        created = true
+        return proposal
+      })
+      if (created && reviewReply && readConnectorThread) {
+        await autoReviewNewbiReply(db, scope.characterId, result.id, requestId, reviewReply, readConnectorThread, requireNewbi)
+          .catch(() => { console.warn(JSON.stringify({ service: 'api', event: 'newbi_auto_review_failed', requestId })) })
+      }
       return c.json({ ...result, requestId }, 201)
     })
 

@@ -1,4 +1,5 @@
 import type { RunContinuity, RunTime } from './run-continuity.js'
+import type { PublicReplyReview } from './auto-review.js'
 
 export const maxSimulatedTextLength = 4_000
 
@@ -20,6 +21,7 @@ export type WritingStyle = 'neutral' | 'formal' | 'casual' | 'concise'
 export type ModelProvider = Readonly<{
   hostedProvider?: string
   hostedModel?: string
+  review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; identityPrompt?: string; suggestFollowUp?: boolean }>, signal: AbortSignal): Promise<unknown>
 }>

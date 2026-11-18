@@ -36,6 +36,7 @@ export const newbiReplyView = z.object({
   id: resourceId, accountId: resourceId, identityId: resourceId, identity: z.string(), agentId: resourceId,
   endpoint: newbiEndpoint, postId: resourceId, content: z.string().nullable(), reviewDigest: z.string(),
   status: newbiReplyStatus,
+  autoApproved: z.boolean(),
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
   retryNotBefore: z.iso.datetime().nullable(), leaseUntil: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })

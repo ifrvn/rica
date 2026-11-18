@@ -13,6 +13,8 @@ import * as schema from '../../packages/contracts/management.js'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
 import { actionDecision, actionView, reconciliationInput, reconciliationView } from '../../packages/contracts/action-review.js'
 import { decideReviewAction, listReviewActions } from '../../packages/persistence/action-review.js'
+import { autoReviewInput, autoReviewView } from '../../packages/contracts/auto-review.js'
+import { readAutoReviewSettings } from '../../packages/persistence/auto-review.js'
 import * as management from '../../packages/persistence/management.js'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '../../packages/persistence/simulation-reconciliation.js'
 import type { PrismaClient } from '../../packages/persistence/generated/client.js'
@@ -102,6 +104,40 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     }
     console.error(JSON.stringify({ service: 'api', event: 'management_error', requestId }))
     return c.json(error(requestId, 'INTERNAL_ERROR', 'Request could not be completed'), 500)
+  })
+
+  const autoReviewPath = `${character}/auto-review` as const
+  app.openapi(createRoute({
+    method: 'get', path: autoReviewPath, security, request: { params: characterParams },
+    responses: { ...errors, 200: success(autoReviewView) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const settings = await db.$transaction(async (tx) => {
+      await management.authorize(tx, scope)
+      return readAutoReviewSettings(tx, scope.characterId)
+    }, { isolationLevel: 'RepeatableRead' })
+    return c.json(autoReviewView.parse(settings), 200)
+  })
+  app.openapi(createRoute({
+    method: 'put', path: autoReviewPath, security,
+    request: { params: characterParams, headers: schema.versionHeader, body: body(autoReviewInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const requestId = c.get('requestId')
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const result = await management.executeManagementCommand(db, {
+      ...scope, requestId, input, operation: 'auto-review.update', targetScope: scope.characterId,
+    }, async (tx) => {
+      const updated = await tx.character.updateMany({
+        where: { id: scope.characterId, autoReviewVersion: expected },
+        data: { autoReviewEnabled: input.enabled, autoReviewPrompt: input.prompt, autoReviewVersion: { increment: 1 } },
+      })
+      if (updated.count !== 1) throw new management.ManagementError(412, 'STALE_VERSION', 'Review settings changed')
+      return { id: scope.characterId, version: expected + 1 }
+    })
+    return c.json({ ...result, requestId }, 200)
   })
 
   const accountHooks = plugins.flatMap(({ account, accountFields }) => {

@@ -2,9 +2,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../runtime/identity.js'
 import { coreProfile } from '@rica/contracts/management'
-import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput } from '../management/contracts.js'
+import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput, type newbiThreadView } from '../management/contracts.js'
 import type { Prisma, PrismaClient } from '../../../../packages/persistence/generated/client.js'
 import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '../../../../packages/persistence/management.js'
+import { autoReviewerId, type ReviewPublicReply } from '../../../../packages/contracts/auto-review.js'
+import { lockAutoReview, readAutoReviewSettings } from '../../../../packages/persistence/auto-review.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -76,21 +78,82 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
       ...reply, identity: reply.account.identity.slug, agentId: reply.account.remoteAccountId,
       endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
       content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
+      autoApproved: reply.reviewerId === autoReviewerId,
       retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
       leaseUntil: reply.leaseUntil?.toISOString() ?? null,
     })
   }, { isolationLevel: 'RepeatableRead' })
 }
 
+export async function autoReviewNewbiReply(
+  db: PrismaClient, characterId: string, id: string, requestId: string, review: ReviewPublicReply,
+  readThread: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>) =>
+    Promise<z.infer<typeof newbiThreadView> | undefined>,
+  requireConnector: (endpoint: string) => Promise<void>,
+) {
+  const settings = await readAutoReviewSettings(db, characterId)
+  if (!settings?.enabled) return
+  const reply = await db.$transaction(async (tx) => {
+    if (!await lockAutoReview(tx, characterId, settings.version)) return
+    const current = await tx.newbiReply.findFirst({
+      where: { id, characterId, status: 'WAITING', executorKey, autoReviewVersion: null },
+    })
+    if (!current?.content) return
+    const account = await boundAccount(tx, characterId, current.accountId)
+    if (!account || account.status !== 'ACTIVE' || account.identity.status !== 'ACTIVE'
+      || account.bindingVersion !== current.bindingVersion || account.identity.character.authEpoch !== current.authEpoch
+      || current.expiresAt <= new Date()) return
+    const prior = await tx.newbiReply.findFirst({
+      where: {
+        characterId, accountId: current.accountId, postId: current.postId,
+        bindingVersion: current.bindingVersion, status: 'SENT',
+      },
+      select: { remoteCommentId: true }, orderBy: { createdAt: 'desc' },
+    })
+    if (!prior?.remoteCommentId) return
+    await tx.newbiReply.update({ where: { id }, data: { autoReviewVersion: settings.version }, select: { id: true } })
+    return { ...current, content: current.content, endpoint: account.instanceKey,
+      agentId: account.remoteAccountId, previousCommentId: prior.remoteCommentId }
+  })
+  if (!reply) return
+
+  await requireConnector(reply.endpoint)
+  const thread = await readThread(reply)
+  if (!thread || thread.post.isLocked || !thread.comments.some(({ id }) => id === reply.previousCommentId)
+    || thread.comments.some(({ content }) => content.trim() === reply.content.trim())) return
+  const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
+    comments: thread.comments.map(({ content }) => content) })
+  const model = await review(settings, { platform: 'newbi', draft: reply.content, discussion })
+  if (!model) return
+
+  await db.$transaction(async (tx) => {
+    if (!await lockAutoReview(tx, characterId, settings.version)) return
+    await decideReply(tx, characterId, autoReviewerId, id,
+      { decision: 'APPROVE', reviewDigest: reply.reviewDigest }, requireConnector)
+    await tx.managementAudit.create({ data: {
+      characterId, actorId: autoReviewerId, operation: 'newbi.reply.auto-approve', targetId: id,
+      requestId, digest: reply.reviewDigest,
+    } })
+  })
+}
+
 export async function decideNewbiReply(
   tx: Prisma.TransactionClient, scope: Scope, id: string, input: z.infer<typeof newbiDecisionInput>,
   requireConnector: (endpoint: string) => Promise<void>,
 ) {
-  const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId } })
+  return decideReply(tx, scope.characterId, scope.actor.id, id, input, requireConnector)
+}
+
+async function decideReply(
+  tx: Prisma.TransactionClient, characterId: string, reviewerId: string, id: string,
+  input: Pick<z.infer<typeof newbiDecisionInput>, 'decision' | 'reviewDigest'>,
+  requireConnector: (endpoint: string) => Promise<void>,
+) {
+  const reply = await tx.newbiReply.findFirst({ where: { id, characterId } })
   if (!reply) missing()
-  if (reply.proposerId === scope.actor.id) denyPermission()
+  if (reply.proposerId === reviewerId) denyPermission()
   if (reply.status !== 'WAITING' || reply.executorKey !== executorKey || reply.reviewDigest !== input.reviewDigest) conflict()
-  const account = await boundAccount(tx, scope.characterId, reply.accountId)
+  const account = await boundAccount(tx, characterId, reply.accountId)
   if (!account || account.status !== 'ACTIVE' || account.identity.status !== 'ACTIVE'
     || account.identity.character.status !== 'ACTIVE' || account.bindingVersion !== reply.bindingVersion
     || account.identity.character.authEpoch !== reply.authEpoch) conflict()
@@ -100,7 +163,7 @@ export async function decideNewbiReply(
   const status = input.decision === 'APPROVE' ? 'READY' : 'REJECTED'
   const { count } = await tx.newbiReply.updateMany({
     where: { id, status: 'WAITING', executorKey },
-    data: { status, reviewerId: scope.actor.id, approvedExecutorKey: status === 'READY' ? executorKey : null },
+    data: { status, reviewerId, approvedExecutorKey: status === 'READY' ? executorKey : null },
   })
   if (count !== 1) conflict()
   return { id, status }

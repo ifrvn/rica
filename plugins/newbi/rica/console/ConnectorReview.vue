@@ -271,6 +271,7 @@ onMounted(() => { void list() })
         <div class="console-actions">
           <UiBadge tone="warning">真实平台</UiBadge>
           <UiBadge>{{ statusText[reply.status] }}</UiBadge>
+          <UiBadge v-if="reply.autoApproved" tone="success">AI 自动批准</UiBadge>
         </div>
         <dl>
           <div><dt>平台</dt><dd>Newbi · {{ reply.endpoint }}</dd></div>

@@ -10,6 +10,7 @@ import { sweepSimulationRetention } from '../../packages/persistence/simulation-
 import { scanSimulationSchedules } from '../../packages/persistence/simulation-schedules.js'
 import { ModelProviderError } from '@rica/contracts/model-provider'
 import type { ResolveSimulationAdapter } from '../../packages/contracts/simulation-platform.js'
+import type { ReviewPublicReply } from '../../packages/contracts/auto-review.js'
 
 export const smokeEvent = 'BootstrapSmoke.v1'
 export const outboxQueueName = 'character-bootstrap'
@@ -26,6 +27,7 @@ export async function startOutboxWorker(
   databaseUrl: string, redisUrl: string, getModel: ResolveDraftModel,
   resolveAdapter: ResolveSimulationAdapter,
   sweepRetention: (db: ReturnType<typeof createDatabase>) => Promise<number> = sweepSimulationRetention,
+  review?: ReviewPublicReply,
 ) {
   const db = createDatabase(databaseUrl)
   const producer = new Redis(redisUrl, {
@@ -67,7 +69,7 @@ export async function startOutboxWorker(
           const model = await getModel(profile)
           modelId = model.id
           return model
-        }, attempt)
+        }, attempt, review)
       } else {
         await db.$executeRaw`
           UPDATE public.outbox SET processed_at = clock_timestamp()

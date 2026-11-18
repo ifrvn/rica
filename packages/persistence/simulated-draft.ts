@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { reviewTarget } from '../contracts/action-review.js'
 import { modelFollowUp, simulationFollowUp } from '../contracts/simulation-follow-up.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
-import { simulationReviewPolicyVersion } from './action-review.js'
+import { autoReviewSimulation, simulationReviewPolicyVersion } from './action-review.js'
+import type { ReviewPublicReply } from '../contracts/auto-review.js'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '@rica/contracts/model-provider'
 import { simulatedModelPlugin } from '@rica/plugin-simulated-model'
 import { maxSimulatedTextLength } from '@rica/contracts/model-provider'
@@ -169,7 +170,7 @@ export type ResolveDraftModel = (profile?: string) => Plugin<ModelProvider> | Pr
 
 export async function processSimulatedDraft(
   db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter,
-  configuredModel: Plugin<ModelProvider> | ResolveDraftModel, attempt?: OutboxAttempt,
+  configuredModel: Plugin<ModelProvider> | ResolveDraftModel, attempt?: OutboxAttempt, review?: ReviewPublicReply,
 ) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
@@ -225,7 +226,7 @@ export async function processSimulatedDraft(
       request.purpose === 'PUBLIC_REFERENCE' && Boolean(model.implementation.hostedModel))
     : null
 
-  await db.$transaction(async (tx) => {
+  const actionId = await db.$transaction(async (tx) => {
     const [pending] = await tx.$queryRaw<{ eventId: string }[]>`
       SELECT event_id AS "eventId" FROM public.outbox
       WHERE event_id = ${eventId}::uuid AND type = ${draftQueuedEvent} AND processed_at IS NULL
@@ -234,6 +235,7 @@ export async function processSimulatedDraft(
     `
     if (!pending) return
 
+    let actionId: string | undefined
     if (run.state === 'CONTEXT_READY') {
       const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
       const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; disclosure: string | null; crossPlatformDuplicate: boolean }[]>`
@@ -276,13 +278,14 @@ export async function processSimulatedDraft(
             modelVersion,
           },
         })
-        await tx.actionProposal.create({
+        const action = await tx.actionProposal.create({
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
             policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
             followUp,
-          },
+          }, select: { id: true },
         })
+        actionId = action.id
       }
       const { count } = await tx.agentRun.updateMany({
         where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
@@ -295,5 +298,12 @@ export async function processSimulatedDraft(
       if (count !== 1) throw new Error('Simulated run changed during drafting')
     }
     await tx.outboxEvent.update({ where: { eventId }, data: { processedAt: new Date() } })
+    return actionId
   }, { isolationLevel: 'ReadCommitted' })
+
+  if (actionId && review && text !== null && request?.purpose === 'PUBLIC_REFERENCE') {
+    await autoReviewSimulation(db, run.characterId, actionId, text, resolveAdapter, review).catch(() => {
+      console.warn(JSON.stringify({ service: 'worker', event: 'auto_review_failed', actionId }))
+    })
+  }
 }

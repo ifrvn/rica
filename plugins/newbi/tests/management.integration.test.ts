@@ -38,7 +38,8 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
   pollConnector?: NewbiManagementOptions['pollConnector'],
   sendConnector?: NewbiManagementOptions['sendConnector'],
   readConnectorThread?: NewbiManagementOptions['readConnectorThread'],
-  reportConnectorOperation?: NewbiManagementOptions['reportConnectorOperation']) =>
+  reportConnectorOperation?: NewbiManagementOptions['reportConnectorOperation'],
+  reviewReply?: NewbiManagementOptions['reviewReply']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
@@ -46,7 +47,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
     plugins: [createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
       identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
-      pollConnector, sendConnector, readConnectorThread, reportConnectorOperation,
+      pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply,
     })],
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
@@ -237,6 +238,73 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   assert.equal(disabled.body.connectorAvailable, false)
   assert.equal((await decide('APPROVE')).body.error.code, 'PLUGIN_STATE_CONFLICT')
   assert.equal((await decide('REJECT', 'admin-b')).body.status, 'REJECTED')
+})
+
+test('Newbi auto-approval requires a confirmed prior reply in the same discussion and never sends on creation', async () => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-auto-review') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const base = characterPath(characterId)
+  const { id: accountId } = await owner.platformAccount.create({ data: {
+    characterId, identityId: await activeIdentity({}, characterId), status: 'ACTIVE',
+    platform: 'newbi', instanceKey: 'http://127.0.0.1:5000/agent-api/v1', remoteAccountId: randomUUID(),
+  } })
+  assert.equal((await request('POST', base + '/memberships', {
+    key: randomUUID(), data: { subject: 'reviewer', action: 'GRANT', reason: 'Auto-review fixture' },
+  })).status, 200)
+  const prompt = '批准清楚简短的回复。'
+  assert.equal((await request('PUT', base + '/auto-review', {
+    ifMatch: '"0"', data: { enabled: true, prompt },
+  })).status, 200)
+  const previousComment = { id: randomUUID(), content: 'Previously approved', author: { username: 'fixture-agent' } }
+  let calls = 0
+  let writes = 0
+  let locked = false
+  const target = testApp(undefined, undefined, async () => {
+    writes++
+    return { status: 'UNAVAILABLE' }
+  }, async () => ({
+    post: { title: 'Test thread', content: 'Public topic', isLocked: locked }, comments: [previousComment],
+  }), undefined, async (settings, { draft }) => {
+    calls++
+    assert.equal(settings.prompt, prompt)
+    assert.match(draft, /AI 披露/)
+    return 'fixture/default-review-model'
+  })
+  const list = base + '/newbi/replies'
+  const postId = randomUUID()
+  const propose = (content: string, key = randomUUID()) =>
+    request('POST', list, { target, key, data: { accountId, postId, content } })
+  const inspect = (id: string) => request('GET', list + '/' + id, { target })
+  const first = await propose('First reply')
+  assert.equal(first.status, 201)
+  const waiting = await inspect(first.body.id)
+  assert.equal(waiting.body.status, 'WAITING')
+  assert.equal(calls, 0)
+  const human = await request('POST', list + '/' + first.body.id + '/decision', {
+    target, actor: 'reviewer', key: randomUUID(),
+    data: { decision: 'APPROVE', reviewDigest: waiting.body.reviewDigest, reason: 'Review first interaction' },
+  })
+  assert.equal(human.status, 200)
+  await owner.newbiReply.update({ where: { id: first.body.id },
+    data: { status: 'SENT', attempts: 1, remoteCommentId: previousComment.id } })
+
+  const key = randomUUID()
+  const second = await propose('Routine follow-up', key)
+  assert.equal(second.status, 201)
+  assert.equal((await propose('Routine follow-up', key)).body.id, second.body.id)
+  const approved = await inspect(second.body.id)
+  assert.equal(approved.body.status, 'READY')
+  assert.equal(approved.body.autoApproved, true)
+  assert.equal(calls, 1)
+  assert.equal(writes, 0)
+  assert.equal(await owner.managementAudit.count({ where: { targetId: second.body.id, operation: 'newbi.reply.auto-approve' } }), 1)
+
+  locked = true
+  const third = await propose('Locked discussion')
+  assert.equal((await inspect(third.body.id)).body.status, 'WAITING')
+  assert.equal(calls, 1)
 })
 
 test('Newbi binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async (t) => {

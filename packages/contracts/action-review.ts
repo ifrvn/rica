@@ -23,6 +23,7 @@ export const actionView = z.object({
   version: z.number().int(), target: reviewTarget,
   expiresAt: z.iso.datetime(), reviewDigest: z.string(),
   riskCodes: z.array(z.string()), content: z.string().nullable(),
+  autoApproved: z.boolean(),
   followUp: simulationFollowUp.nullable(),
 })
 export const actionDecision = reasonInput.extend({

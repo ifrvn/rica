@@ -6,7 +6,7 @@ import { localIssuer, loadManagementConfig } from './admin-auth.js'
 import { createAdminAuth } from './admin-auth-routes.js'
 import { createManagementApp } from './management.js'
 import { createApp } from './app.js'
-import { createHostedModelManagement, createModelSettingsStore } from '@rica/plugin-hosted-models'
+import { createHostedModelManagement, createModelSettingsStore, enabledModelSettings } from '@rica/plugin-hosted-models'
 import { hostedModelsPluginId, modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
 import { denyPermission } from '../../packages/persistence/management.js'
 import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@rica/plugin-newbi'
@@ -15,6 +15,7 @@ import { modelSettingsDirectory } from '../../packages/runtime/settings-director
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
+import { createAutoReviewer } from '../auto-review.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
@@ -40,6 +41,14 @@ const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsContracts)
 const activeModel = async () => (await modelSettings.read()).configuration.provider
+const reviewSettings = enabledModelSettings(modelSettings, () => deploymentPlugins.isEnabled(hostedModelsPluginId))
+const reviewReply = createAutoReviewer(async (check) => {
+  const { configuration } = await reviewSettings.read()
+  if (configuration.provider === 'simulated') return null
+  const selected = await startModelPlugin(configuration)
+  try { return await check(selected.model.implementation) }
+  finally { await selected.stop() }
+})
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
@@ -51,6 +60,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   plugins: [
     createNewbiManagement(managementDb, newbi, {
       ...createNewbiOperations(db, newbi),
+      reviewReply,
       reportConnectorOperation: (service, succeeded) =>
         reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
     }),
