@@ -1,9 +1,8 @@
 import { reviewTarget } from '@ricajs/contracts/action-review'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import { simulationReviewPolicyVersion } from './action-review.js'
-import type { Prisma, PrismaClient } from './generated/client.js'
+import type { Prisma, PrismaClient, RunStateReason } from './generated/client.js'
 
-const dailyLimit = 5
 const permitDurationMs = 30_000
 const batchSize = 16
 
@@ -45,9 +44,12 @@ async function audit(tx: Tx, action: Candidate, operation: string) {
   `
 }
 
-async function transition(tx: Tx, action: Candidate, state: 'EXECUTING' | 'RECONCILING' | 'SIMULATED' | 'BLOCKED' | 'EXPIRED') {
+async function transition(tx: Tx, action: Candidate, state: 'EXECUTING' | 'RECONCILING' | 'SIMULATED' | 'BLOCKED' | 'EXPIRED',
+  reason: RunStateReason | null = null,
+) {
   const count = await tx.$executeRaw`
-    UPDATE public.agent_runs SET state = ${state}::public."RunState", state_version = state_version + 1
+    UPDATE public.agent_runs SET state = ${state}::public."RunState", state_version = state_version + 1,
+      state_reason = ${reason}::public."RunStateReason"
     WHERE id = ${action.runId}::uuid AND state_version = ${action.version}
   `
   if (count !== 1) throw new Error('Simulation state changed during transaction')
@@ -74,7 +76,7 @@ export async function reserveSimulation(db: PrismaClient, actionId: string, reso
 
     const { now } = clock
     if (action.expiresAt <= now) {
-      await transition(tx, action, 'EXPIRED')
+      await transition(tx, action, 'EXPIRED', 'PROPOSAL_EXPIRED')
       return false
     }
     const target = reviewTarget.parse(action.target)
@@ -85,40 +87,22 @@ export async function reserveSimulation(db: PrismaClient, actionId: string, reso
     const [payload] = await tx.$queryRaw<{ allowed: boolean }[]>`
       SELECT public.rica_simulation_payload_allowed(${action.characterId}::uuid, ${action.id}::uuid) AS allowed
     `
-    if (!payload?.allowed || approval?.decision !== 'APPROVE' || approval.reviewDigest !== action.reviewDigest
-      || approval.expiresAt <= now || action.policyVersion !== simulationReviewPolicyVersion
-      || !matchesSimulationAdapter(action, resolveAdapter(target.platform))) {
-      await transition(tx, action, 'BLOCKED')
+    if (approval?.decision !== 'APPROVE' || approval.reviewDigest !== action.reviewDigest
+      || approval.expiresAt <= now || action.policyVersion !== simulationReviewPolicyVersion) {
+      await transition(tx, action, 'BLOCKED', 'APPROVAL_INVALID')
+      return false
+    }
+    const blocked = !matchesSimulationAdapter(action, resolveAdapter(target.platform)) ? 'ADAPTER_MISMATCH'
+      : !payload?.allowed ? 'PAYLOAD_INVALID' : null
+    if (blocked) {
+      await transition(tx, action, 'BLOCKED', blocked)
       return false
     }
 
-    if (clock.localHour < 8 || clock.localHour >= 22) {
-      const [chat] = await tx.$queryRaw<{ id: string | null }[]>`
-        SELECT public.rica_console_chat_for_run(${action.characterId}::uuid, ${action.runId}::uuid) AS id
-      `
-      if (!chat?.id) return false
-    }
-    const occupied = await tx.simulationAttempt.count({
-      where: { accountId: action.accountId, status: { in: ['PERMITTED', 'UNKNOWN'] } },
-    })
-    if (occupied) return false
-    const reserved = await tx.simulationAttempt.count({
-      where: { accountId: action.accountId, windowStart: clock.windowStart, status: { not: 'NOT_SENT' } },
-    })
-    if (reserved >= dailyLimit) return false
-
-    if (target.contactId) {
-      const [recent] = await tx.$queryRaw<{ occupied: boolean }[]>`
-        SELECT EXISTS (
-          SELECT 1 FROM public.simulation_attempts s
-          LEFT JOIN public.simulation_receipts r ON (r.character_id, r.action_id) = (s.character_id, s.action_id)
-          WHERE s.account_id = ${action.accountId}::uuid AND s.contact_id = ${target.contactId}::uuid
-            AND s.status <> 'NOT_SENT'
-            AND COALESCE(r.created_at, s.permit_until) > statement_timestamp() - interval '1 hour'
-        ) AS occupied
-      `
-      if (recent?.occupied) return false
-    }
+    const [check] = await tx.$queryRaw<{ wait: unknown }[]>`
+      SELECT public.rica_simulation_execution_wait(${action.characterId}::uuid, ${action.id}::uuid, ${now}::timestamptz) AS wait
+    `
+    if (check?.wait != null) return false
 
     // The attempt itself is the durable quota reservation. Unknown results keep their unit.
     await tx.simulationAttempt.create({

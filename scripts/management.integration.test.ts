@@ -1028,6 +1028,9 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(1) } })
     assert.equal(await reserveSimulation(executor, quiet.action.id, simulationPlatforms.resolveAdapter), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: quiet.action.runId } })).state, 'READY')
+    const quietView = await request('GET', characterPath(a) + '/runs/' + quiet.action.runId + '/replay')
+    assert.equal(quietView.body.executionWait.reason, 'QUIET_HOURS')
+    assert.ok(Date.parse(quietView.body.executionWait.nextAt) > await databaseNow())
     await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
 
     const stale = await approveSimulation()
@@ -1037,6 +1040,7 @@ test('simulation defers quiet hours and rejects stale evidence or a paused bindi
     })
     assert.equal(await reserveSimulation(executor, stale.action.id, simulationPlatforms.resolveAdapter), false)
     assert.equal((await owner.agentRun.findUniqueOrThrow({ where: { id: stale.action.runId } })).state, 'BLOCKED')
+    assert.equal((await request('GET', characterPath(a) + '/runs/' + stale.action.runId + '/replay')).body.stateReason, 'PAYLOAD_INVALID')
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: stale.action.id } }), 0)
 
     const revoked = await approveSimulation(await newSimulationAccount())
@@ -1100,6 +1104,11 @@ test('duplicate delivery uses one local receipt and the daily reservation cannot
     assert.equal(await owner.agentRun.count({
       where: { id: { in: proposals.map(({ runId }) => runId) }, state: 'READY' },
     }), 1)
+    const remaining = await owner.agentRun.findFirstOrThrow({
+      where: { id: { in: proposals.map(({ runId }) => runId) }, state: 'READY' }, select: { id: true },
+    })
+    const waiting = await request('GET', characterPath(a) + '/runs/' + remaining.id + '/replay')
+    assert.equal(waiting.body.executionWait.reason, 'DAILY_LIMIT')
     await assert.rejects(executor.simulatedDraft.findMany({ select: { content: true } }), /permission denied/i)
   } finally {
     await executor.$disconnect()
@@ -1124,6 +1133,9 @@ test('simulation rate limits the same contact across conversations for a rolling
     await executeSimulation(executor, other.id, simulationPlatforms.resolveAdapter)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [first.id, other.id] } } }), 2)
     assert.equal(await owner.simulationAttempt.count({ where: { actionId: second.id } }), 0)
+    const blocked = await request('GET', characterPath(a) + '/runs/' + second.runId + '/replay')
+    assert.equal(blocked.body.executionWait.reason, 'CONTACT_COOLDOWN')
+    assert.ok(Date.parse(blocked.body.executionWait.nextAt) > await databaseNow())
 
     await owner.simulationReceipt.update({
       where: { actionId: first.id }, data: { createdAt: new Date((await databaseNow()) - 3_601_000) },

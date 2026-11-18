@@ -75,6 +75,7 @@ async function readChatWritingContext(tx: Prisma.TransactionClient, runId: strin
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
   provider: ModelProvider, signal: AbortSignal, suggestFollowUp = false,
+  onSkip?: (reason: 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY') => void,
 ) {
   if (text.length > maxSimulatedTextLength) throw new Error('Simulated message is too long')
   signal.throwIfAborted()
@@ -87,7 +88,9 @@ async function buildSimulatedDraft(
     const context = evidence && await loadRunContinuity(tx, runId)
     if (!context || !await captureSelfModelSnapshot(tx, runId, context.characterId, context.self.facts)) return null
     const input = { text, evidence, context }
-    return await reserveModelBudget(tx, runId, input, 64) ? input : null
+    if (await reserveModelBudget(tx, runId, input, 64)) return input
+    onSkip?.('MODEL_BUDGET_EXHAUSTED')
+    return null
   })
   if (!prepared) return null
   const { evidence: decisionEvidence, context } = prepared
@@ -100,7 +103,10 @@ async function buildSimulatedDraft(
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
   const decision = await provider.decide(prepared, signal)
   signal.throwIfAborted()
-  if (decision === 'NO_OP') return null
+  if (decision === 'NO_OP') {
+    onSkip?.('MODEL_NO_REPLY')
+    return null
+  }
   if (decision !== 'REPLY') throw new Error('Invalid simulated decision output')
 
   const writing = await db.$transaction(async (tx) => {
@@ -116,7 +122,10 @@ async function buildSimulatedDraft(
       corePrompt: profile.corePrompt ?? undefined,
       ...(suggestFollowUp ? { suggestFollowUp } : {}) }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
-    if (!await reserveModelBudget(tx, runId, input, outputUnits)) return null
+    if (!await reserveModelBudget(tx, runId, input, outputUnits)) {
+      onSkip?.('MODEL_BUDGET_EXHAUSTED')
+      return null
+    }
     const { characterId, identityId, platform } = context
     return { ...input, attribution: { characterId, identityId, platform } }
   })
@@ -239,9 +248,10 @@ export async function processSimulatedDraft(
   // Stay within the 30-second outbox lease. Model calls run outside the write transaction.
   const signal = AbortSignal.timeout(model.implementation.hostedModel ? 20_000 : 5_000)
   const text = input?.text ?? null
+  let skipReason: 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY' = 'DRAFT_UNAVAILABLE'
   const candidate = request && text !== null
     ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal,
-      request.purpose === 'PUBLIC_REFERENCE' && Boolean(model.implementation.hostedModel))
+      request.purpose === 'PUBLIC_REFERENCE' && Boolean(model.implementation.hostedModel), reason => { skipReason = reason })
     : null
 
   const actionId = await db.$transaction(async (tx) => {
@@ -309,7 +319,7 @@ export async function processSimulatedDraft(
         where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
         data: {
           state: proposed ? 'WAITING_APPROVAL' : 'CANCELED',
-          stateReason: proposed ? null : 'DRAFT_UNAVAILABLE',
+          stateReason: proposed ? null : skipReason,
           stateVersion: { increment: 1 },
         },
       })

@@ -7,7 +7,8 @@ import type { runReplayView, simulationRunQuery, simulationRunSummary } from '@r
 import SimulationReconciliation from './SimulationReconciliation.vue'
 import SimulationChat from './SimulationChat.vue'
 import { simulationAccounts } from './simulation-accounts.js'
-import { readAll } from '@ricajs/console-shared/console-data'
+import { formatTime, readAll } from '@ricajs/console-shared/console-data'
+import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
 import type { ReconciliationView } from '@ricajs/contracts/action-review'
 import { runFilterKeys } from '../../app/console-location.js'
 import { request, RequestError } from '@ricajs/console-shared/request'
@@ -34,6 +35,29 @@ const chatLatest = ref<string>()
 const followingRoom = ref(false)
 const previewId = computed(() => props.detailId ?? (followingRoom.value ? chatLatest.value : rows.value[0]?.id))
 const selected = ref<Replay>()
+const waitReasons = {
+  QUIET_HOURS: '当前处于角色静默时段。',
+  DAILY_LIMIT: '这个模拟账号的当日执行额度已用完。',
+  CONTACT_COOLDOWN: '尚未达到可以再次回复这位联系人的时间。',
+  ACCOUNT_BUSY: '同一账号有一个正在执行的提案。',
+  ACCOUNT_RECONCILING: '同一账号有未确认的执行结果。完成对账后可继续。',
+  PROPOSAL_EXPIRED: '提案已过有效期，等待执行器标记为过期。',
+}
+const timedWaitReasons = new Set(['QUIET_HOURS', 'DAILY_LIMIT', 'CONTACT_COOLDOWN'])
+const stoppedReasons: Record<string, string> = {
+  ACCOUNT_UNAVAILABLE: '角色、身份或账号当前不可用。',
+  BINDING_CHANGED: '身份、账号或角色配置的绑定已经变化。',
+  CONVERSATION_UNAVAILABLE: '会话或联系人当前不可用。',
+  DRAFT_UNAVAILABLE: '这次运行未生成可用草稿。',
+  SCHEDULE_CHANGED: '关联的计划已更新、暂停或失效。',
+  APPROVAL_INVALID: '审批已失效，或已批准的内容与当前提案不匹配。',
+  ADAPTER_MISMATCH: '模拟适配器未启用，或当前版本与批准时不同。',
+  PAYLOAD_INVALID: '草稿、证据或当前授权未通过执行前核验。',
+  PROPOSAL_EXPIRED: '提案已过有效期。',
+  MODEL_BUDGET_EXHAUSTED: '角色当日模型预算不足，已跳过模型调用。',
+  MODEL_NO_REPLY: '决策模型选择不回复这条消息。',
+}
+const stopReason = computed(() => selected.value?.stateReason ? stoppedReasons[selected.value.stateReason] : undefined)
 const modelName = computed(() => [selected.value?.draft?.modelId, selected.value?.draft?.modelVersion].filter(Boolean).join(' · '))
 function accountName(id: string, platform?: string) {
   const account = accounts.value.find((item) => item.id === id)
@@ -363,16 +387,25 @@ onMounted(() => {
           </UiAlert>
           <UiAlert v-else-if="selected.state === 'WAITING_APPROVAL'" tone="info"
             :title="canReview ? '草稿已生成，等待人工审批' : '此提案需要审批权限'">
+            <p v-if="selected.autoReviewHandoff">
+              {{ autoReviewHandoffLabels[selected.autoReviewHandoff.status] }} · {{ selected.autoReviewHandoff.reason }}
+            </p>
             {{ canReview ? '点击「前往审批」即可查看拟回复正文，并决定是否批准。' : '请联系当前角色的管理员处理这次模拟提案。' }}
           </UiAlert>
           <UiAlert v-if="selected.state === 'READY'" tone="info"
             :title="selected.autoApproved ? 'AI 已批准，等待模拟执行器' : '已批准，等待模拟执行器'">
-            <p>执行器会自动领取许可并写入模拟回执。长时间等待时，先查看执行器状态。</p>
+            <template v-if="selected.executionWait">
+              <p>{{ waitReasons[selected.executionWait.reason] }}</p>
+              <p v-if="selected.executionWait.nextAt">预计最早可执行 {{ formatTime(selected.executionWait.nextAt) }}</p>
+              <p v-else-if="timedWaitReasons.has(selected.executionWait.reason)">等待结束前，提案将过期。</p>
+            </template>
+            <p v-else>等待执行器领取许可并写入模拟回执。</p>
             <UiButton size="small" variant="soft" @click="emit('executorHealth')">查看模拟执行器</UiButton>
           </UiAlert>
           <UiAlert v-else-if="selected.state === 'EXECUTING'" tone="info" title="已领取许可，正在等待模拟回执">
             回执写入后，这条运行会显示「模拟完成」。
           </UiAlert>
+          <UiAlert v-if="stopReason" tone="warning">{{ stopReason }}</UiAlert>
           <dl class="run-meta">
             <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
             <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>

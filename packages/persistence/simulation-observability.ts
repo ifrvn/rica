@@ -77,6 +77,10 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
             AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL
             AND r.state = 'WAITING_APPROVAL' AND c.auto_review_enabled, false),
           'autoApproved', COALESCE(approval.reviewer_id = ${autoReviewerId}, false),
+          'autoReviewHandoff', CASE WHEN r.state = 'WAITING_APPROVAL' AND a.auto_review_handoff IS NOT NULL
+            AND a.proposer_id IS DISTINCT FROM ${scope.actor.id}
+            AND public.rica_review_payload(a.character_id,a.id) IS NOT NULL THEN a.auto_review_handoff END,
+          'executionWait', CASE WHEN r.state = 'READY' THEN public.rica_simulation_execution_wait(a.character_id,a.id) END,
           'transcript', public.rica_console_simulation_transcript(${scope.characterId}::uuid, ${runId}::uuid),
           'systemPrompts', public.rica_run_system_prompts(${scope.characterId}::uuid, ${runId}::uuid)
         ) AS view

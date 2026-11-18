@@ -2,6 +2,7 @@ import { z } from '@hono/zod-openapi'
 
 import { listQuery, resourceId } from './management.js'
 import { maxSimulatedTextLength } from './model-provider.js'
+import { autoReviewHandoff } from './auto-review.js'
 
 const timestamp = z.iso.datetime({ offset: true })
 const consoleMessage = {
@@ -52,6 +53,11 @@ export const runReplayView = z.object({
   chatId: resourceId.nullable(),
   autoReviewPending: z.boolean(),
   autoApproved: z.boolean(),
+  autoReviewHandoff: autoReviewHandoff.nullable(),
+  executionWait: z.object({
+    reason: z.enum(['QUIET_HOURS', 'DAILY_LIMIT', 'CONTACT_COOLDOWN', 'ACCOUNT_BUSY', 'ACCOUNT_RECONCILING', 'PROPOSAL_EXPIRED']),
+    nextAt: timestamp.nullable(),
+  }).nullable(),
   inbound: z.object({ kind: z.enum(['POST', 'REPLY', 'MENTION']), receivedAt: timestamp }),
   draft: z.object({ createdAt: timestamp, modelId: z.string().nullable(), modelVersion: z.string().nullable() }).nullable(),
   systemPrompts: z.object({ core: z.string().nullable(), identity: z.string().nullable() }).nullable(),
