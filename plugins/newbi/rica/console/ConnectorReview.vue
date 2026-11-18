@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
+import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
 import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../management/contracts.js'
 import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
@@ -148,11 +149,11 @@ watch([() => props.detailId, () => props.accountId], ([id], previous) => {
 async function submit(action: 'APPROVE' | 'REJECT' | 'CLOSE') {
   const item = reply.value
   const note = reason.value.trim()
-  if (!item || !note || submitting.value || loadingDetail.value
+  if (!item || (action === 'CLOSE' && !note) || submitting.value || loadingDetail.value
     || (action === 'APPROVE' && !item.connectorAvailable)
     || (action === 'CLOSE' ? !canClose.value
       : !props.canReview || item.status !== 'WAITING' || !item.content)) return
-  const payload = action === 'CLOSE' ? { reason: note } : { reason: note, decision: action, reviewDigest: item.reviewDigest }
+  const payload = action === 'CLOSE' ? { reason: note } : { reason: note || undefined, decision: action, reviewDigest: item.reviewDigest }
   const body = JSON.stringify(payload)
   const path = base + '/' + encodeURIComponent(item.id) + (action === 'CLOSE' ? '/close' : '/decision')
   const signature = JSON.stringify([path, body])
@@ -322,6 +323,11 @@ onMounted(() => { void list() })
           <p class="console-payload">{{ reply.content }}</p>
         </template>
         <p v-else-if="reply.status === 'WAITING'">当前无法预览正文，暂不能审批。</p>
+        <UiAlert v-if="reply.autoReviewHandoff" tone="warning">
+          <strong>{{ autoReviewHandoffLabels[reply.autoReviewHandoff.status] }}</strong>
+          <p>{{ reply.autoReviewHandoff.reason }}</p>
+          <small v-if="reply.autoReviewHandoff.model">审核模型 {{ reply.autoReviewHandoff.model }}</small>
+        </UiAlert>
         <div v-if="canManage && (reply.status === 'READY' || canRetry)" class="send-actions">
           <UiButton v-if="canSend" tone="primary" :disabled="submitting" @click="confirmation = true">
             {{ canRetry ? '核对后重试' : '发送公开回复' }}
@@ -336,16 +342,16 @@ onMounted(() => { void list() })
           <UiAlert v-if="canClose" tone="warning">请先核对 Newbi 上的发送结果。结案会停止对此提案的发送尝试。</UiAlert>
           <UiAlert v-else-if="reply.connectorAvailable" tone="warning">批准后，管理员可确认向上述 Newbi 帖子公开发布这条回复。</UiAlert>
           <UiAlert v-else tone="warning">当前 Newbi 配置无法使用此账号。请在插件中心核对启用状态和 Agent API 地址。</UiAlert>
-          <UiField :label="canClose ? '结案理由' : '审批理由'" for="connector-reason">
+          <UiField :label="canClose ? '结案理由' : '审批理由（选填）'" for="connector-reason">
             <textarea class="ui-control" :placeholder="canClose ? '例如：已人工核对发送结果' : '例如：已核对回复内容和目标'" v-model="reason" :rows="2" :maxlength="240" :disabled="submitting"
-              v-bind="{ id: 'connector-reason' }"></textarea>
+              id="connector-reason" :required="canClose"></textarea>
           </UiField>
           <div class="connector-actions">
             <UiButton v-if="canClose || reply.connectorAvailable" :tone="canClose ? 'warning' : 'primary'"
-              type="submit" :disabled="submitting || !reason.trim()">
+              type="submit" :disabled="submitting || (canClose && !reason.trim())">
               {{ canClose ? '确认结案' : '批准公开回复' }}
             </UiButton>
-            <UiButton v-if="reply.status === 'WAITING'" tone="error" :disabled="submitting || !reason.trim()" @click="submit('REJECT')">拒绝</UiButton>
+            <UiButton v-if="reply.status === 'WAITING'" tone="error" :disabled="submitting" @click="submit('REJECT')">拒绝</UiButton>
           </div>
         </form>
       </template>

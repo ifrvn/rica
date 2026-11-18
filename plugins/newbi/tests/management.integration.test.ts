@@ -261,6 +261,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   let calls = 0
   let writes = 0
   let locked = false
+  let handoff = false
   const target = testApp(undefined, undefined, async () => {
     writes++
     return { status: 'UNAVAILABLE' }
@@ -269,8 +270,12 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   }), undefined, async (settings, { draft }) => {
     calls++
     assert.equal(settings.prompt, prompt)
+    if (handoff) {
+      assert.equal(draft, 'New assertion')
+      return { status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model' }
+    }
     assert.equal(draft, 'Routine follow-up')
-    return 'fixture/default-review-model'
+    return { status: 'APPROVE', model: 'fixture/default-review-model' }
   })
   const list = base + '/newbi/replies'
   const postId = randomUUID()
@@ -281,12 +286,13 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   assert.equal(first.status, 201)
   const waiting = await inspect(first.body.id)
   assert.equal(waiting.body.status, 'WAITING')
+  assert.match(waiting.body.autoReviewHandoff.reason, /首次互动/)
   assert.equal(calls, 0)
   assert.equal((await propose('Pasted core settings: AI role')).body.error.code, 'PRIVATE_WRITING_PROMPT')
   assert.equal((await propose('Internal account writing instructions')).body.error.code, 'PRIVATE_WRITING_PROMPT')
   const human = await request('POST', list + '/' + first.body.id + '/decision', {
     target, actor: 'reviewer', key: randomUUID(),
-    data: { decision: 'APPROVE', reviewDigest: waiting.body.reviewDigest, reason: 'Review first interaction' },
+    data: { decision: 'APPROVE', reviewDigest: waiting.body.reviewDigest },
   })
   assert.equal(human.status, 200)
   await owner.newbiReply.update({ where: { id: first.body.id },
@@ -303,10 +309,22 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   assert.equal(writes, 0)
   assert.equal(await owner.managementAudit.count({ where: { targetId: second.body.id, operation: 'newbi.reply.auto-approve' } }), 1)
 
+  handoff = true
+  const escalated = await propose('New assertion')
+  const manual = await inspect(escalated.body.id)
+  assert.equal(manual.body.status, 'WAITING')
+  assert.deepEqual(manual.body.autoReviewHandoff, {
+    status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
+  })
+  await owner.newbiReply.update({ where: { id: escalated.body.id }, data: { content: null } })
+  assert.equal((await owner.newbiReply.findUniqueOrThrow({ where: { id: escalated.body.id } })).autoReviewHandoff, null)
+
   locked = true
   const third = await propose('Locked discussion')
-  assert.equal((await inspect(third.body.id)).body.status, 'WAITING')
-  assert.equal(calls, 1)
+  const closedThread = await inspect(third.body.id)
+  assert.equal(closedThread.body.status, 'WAITING')
+  assert.match(closedThread.body.autoReviewHandoff.reason, /已锁定/)
+  assert.equal(calls, 2)
 })
 
 test('Newbi binds an agent, enforces independent approval and recovers the original remote receipt', { timeout: 30_000 }, async (t) => {

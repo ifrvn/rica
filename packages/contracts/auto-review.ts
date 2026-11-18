@@ -19,4 +19,20 @@ export const autoReviewerId = 'system:auto-review'
 export type AutoReviewSettings = z.infer<typeof autoReviewSettings>
 export type AutoReviewView = z.infer<typeof autoReviewView>
 export type PublicReplyReview = Readonly<{ platform: string; draft: string; discussion: string }>
-export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview, attribution: ModelAttribution) => Promise<string | null>
+export const autoReviewHandoff = z.object({
+  status: z.enum(['REVIEW', 'SKIPPED', 'UNAVAILABLE', 'UNKNOWN']),
+  reason: z.string().trim().min(1).max(240).regex(/^[^\p{Cc}]+$/u),
+  model: z.string().optional(),
+})
+export type AutoReviewHandoff = z.infer<typeof autoReviewHandoff>
+export type AutoReviewOutcome = AutoReviewHandoff | { status: 'APPROVE'; model: string }
+export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview, attribution: ModelAttribution) => Promise<AutoReviewOutcome>
+
+export const autoReviewHandoffLabels = {
+  REVIEW: 'AI 建议人工复审', SKIPPED: '未进行 AI 审核', UNAVAILABLE: 'AI 审核未完成',
+  UNKNOWN: '自动审批结果未记录',
+} satisfies Record<AutoReviewHandoff['status'], string>
+
+export const missingAutoReviewHandoff = {
+  status: 'UNKNOWN', reason: '此提案暂无可用的自动审批结果，请人工核对。',
+} as const satisfies AutoReviewHandoff

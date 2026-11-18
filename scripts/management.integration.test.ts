@@ -24,7 +24,7 @@ import { createAutoReviewer } from '../apps/auto-review.js'
 import { deriveMemory, revokeMemoryAccess } from '@ricajs/persistence/memory'
 import { reviewTarget } from '@ricajs/contracts/action-review'
 import { autoReviewSimulation, decideReviewAction, listReviewActions } from '@ricajs/persistence/action-review'
-import { autoReviewerId, defaultAutoReviewPrompt } from '@ricajs/contracts/auto-review'
+import { autoReviewerId, defaultAutoReviewPrompt, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { sweepSimulationRetention } from '@ricajs/persistence/simulation-retention'
 import { loadRunContinuity } from '@ricajs/persistence/run-continuity'
 import { createDatabase } from '@ricajs/persistence/client'
@@ -573,7 +573,7 @@ async function databaseNow() {
   return clock.now.getTime()
 }
 
-async function proposeReview(accountId = accountA, contactId?: string, model = simulatedModelPlugin, identityId = identityA) {
+async function proposeReview(accountId = accountA, contactId?: string, model = simulatedModelPlugin, identityId = identityA, review?: ReviewPublicReply) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(runtimeUrl.toString())
@@ -610,7 +610,7 @@ async function proposeReview(accountId = accountA, contactId?: string, model = s
     const runJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, runJob.eventId)
     const draftJob = await owner.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, draftJob.eventId, simulationPlatforms.resolveAdapter, model)
+    await processSimulatedDraft(runtime, draftJob.eventId, simulationPlatforms.resolveAdapter, model, undefined, review)
     const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: result.runId } })
     return { action, grant, proposalText }
   } finally {
@@ -772,7 +772,16 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
       simulationPlatforms.resolveAdapter, review)
     await attempt(first)
     assert.equal(observedPrompt, input.prompt)
-    assert.equal((await inspect(first.action.id)).body.state, 'WAITING_APPROVAL')
+    const invalid = await inspect(first.action.id)
+    assert.equal(invalid.body.state, 'WAITING_APPROVAL')
+    assert.equal(invalid.body.autoReviewHandoff.status, 'UNAVAILABLE')
+    verdict = 'REVIEW: 回复含有未核实的事实。'
+    await attempt(first)
+    assert.deepEqual((await inspect(first.action.id)).body.autoReviewHandoff, {
+      status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
+    })
+    const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
+    assert.equal(queue.body.items.find(({ id }: { id: string }) => id === first.action.id).autoReviewHandoff, null)
     verdict = 'APPROVE'
     duringReview = async () => { assert.equal((await save(1, false)).status, 200) }
     await attempt(first)
@@ -781,8 +790,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
 
     assert.equal((await save(2, true)).status, 200)
     duringReview = undefined
-    const second = await proposeReview()
-    await attempt(second)
+    const second = await proposeReview(accountA, undefined, simulatedModelPlugin, identityA, review)
     const approved = await inspect(second.action.id)
     assert.equal(approved.body.state, 'READY')
     assert.equal(approved.body.autoApproved, true)
@@ -790,6 +798,11 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
     assert.equal(approval.reviewerId, autoReviewerId)
     assert.equal(approval.reviewDigest, second.action.reviewDigest)
     assert.match(approval.reason, /v3 · fixture\/default-review-model/)
+
+    await owner.simulatedDraft.update({
+      where: { characterId_runId: { characterId: a, runId: first.action.runId } }, data: { content: null },
+    })
+    assert.equal((await owner.actionProposal.findUniqueOrThrow({ where: { id: first.action.id } })).autoReviewHandoff, null)
   } finally {
     await runtime.$disconnect()
     // Later tests share the character and its simulator queue.
@@ -831,7 +844,7 @@ test('review rechecks evidence expiry and adapter version, and records a valid r
     assert.equal(Boolean(preview.body.content), rejected)
     const result = await request('POST', path + '/decisions', {
       actor: 'reviewer', key: scenario, ifMatch: preview.headers.get('etag') ?? '',
-      data: { reviewDigest: action.reviewDigest, decision: 'REJECT', reason: 'Review fixture' },
+      data: { reviewDigest: action.reviewDigest, decision: 'REJECT' },
     })
     assert.equal(result.status, rejected ? 200 : 409)
     if (rejected) assert.equal(result.body.status, 'REJECTED')

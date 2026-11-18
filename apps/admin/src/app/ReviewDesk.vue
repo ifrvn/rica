@@ -19,6 +19,7 @@ import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePag
 import type { characterView } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
 import type { ActionView } from '@ricajs/contracts/action-review'
+import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
 import type { Readiness } from '@ricajs/contracts/health'
 
 defineProps<{ readiness?: Readiness; checkedAt?: string; checkingReadiness: boolean }>()
@@ -444,8 +445,8 @@ function openRunAudit(id: string) {
 async function decide(decision: Decision) {
   const proposal = selected.value
   const note = reason.value.trim()
-  if (busy.value || !proposal?.content || proposal.state !== 'WAITING_APPROVAL' || !note) return
-  const data = { decision, reviewDigest: proposal.reviewDigest, reason: note }
+  if (busy.value || !proposal?.content || proposal.state !== 'WAITING_APPROVAL') return
+  const data = { decision, reviewDigest: proposal.reviewDigest, reason: note || undefined }
   const signature = JSON.stringify([proposal.id, proposal.version, data])
   if (pending?.signature !== signature) pending = { signature, key: crypto.randomUUID() }
   const { key } = pending
@@ -716,7 +717,7 @@ async function decide(decision: Decision) {
               <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
               <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
             </dl>
-            <UiAlert v-if="selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
+            <UiAlert v-if="!selected.autoReviewHandoff && selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
               此回复与其他平台的内容相似，请核对后再审批。
             </UiAlert>
             <template v-if="selected.content">
@@ -737,17 +738,22 @@ async function decide(decision: Decision) {
               </UiAlert>
             </template>
             <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
+            <UiAlert v-if="selected.content && selected.autoReviewHandoff && selected.state === 'WAITING_APPROVAL'" tone="warning">
+              <strong>{{ autoReviewHandoffLabels[selected.autoReviewHandoff.status] }}</strong>
+              <p>{{ selected.autoReviewHandoff.reason }}</p>
+              <small v-if="selected.autoReviewHandoff.model">审核模型 {{ selected.autoReviewHandoff.model }}</small>
+            </UiAlert>
             <form v-if="selected.state === 'WAITING_APPROVAL' && selected.content"
               @submit.prevent="decide('APPROVE')">
-              <UiField label="审批理由" for="review-reason">
+              <UiField label="审批理由（选填）" for="review-reason">
                 <textarea class="ui-control" v-model="reason" :rows="3" :maxlength="240"
-                  v-bind="{ id: 'review-reason', required: true }" :disabled="busy" placeholder="例如：已核对目标和拟发送内容"></textarea>
+                  id="review-reason" :disabled="busy" placeholder="例如：已核对目标和拟发送内容"></textarea>
               </UiField>
               <div class="decision-buttons">
-                <UiButton tone="primary" type="submit" :disabled="busy || !reason.trim()">
+                <UiButton tone="primary" type="submit" :disabled="busy">
                   {{ selected.followUp ? '批准回复及后续事项' : '批准模拟回复' }}
                 </UiButton>
-                <UiButton tone="error" :disabled="busy || !reason.trim()" @click="decide('REJECT')">拒绝</UiButton>
+                <UiButton tone="error" :disabled="busy" @click="decide('REJECT')">拒绝</UiButton>
               </div>
             </form>
           </template>

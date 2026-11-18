@@ -5,7 +5,7 @@ import { coreProfile, identityProfile } from '@ricajs/contracts/management'
 import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput, type newbiThreadView } from '../management/contracts.js'
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '@ricajs/persistence/management'
-import { autoReviewerId, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
+import { autoReviewHandoff, autoReviewerId, missingAutoReviewHandoff, type AutoReviewOutcome, type AutoReviewSettings, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { lockAutoReview, readAutoReviewSettings } from '@ricajs/persistence/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
 
@@ -79,11 +79,14 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
     const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId },
       include: { account: { select: { instanceKey: true, remoteAccountId: true, identity: { select: { slug: true } } } } } })
     if (!reply) missing()
+    const canPreview = reply.status === 'WAITING' && reply.executorKey === executorKey && reply.content
     return newbiReplyView.parse({
       ...reply, identity: reply.account.identity.slug, agentId: reply.account.remoteAccountId,
       endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
       content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
       autoApproved: reply.reviewerId === autoReviewerId,
+      autoReviewHandoff: canPreview
+        ? autoReviewHandoff.safeParse(reply.autoReviewHandoff).data ?? missingAutoReviewHandoff : null,
       retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
       leaseUntil: reply.leaseUntil?.toISOString() ?? null,
     })
@@ -97,13 +100,18 @@ export async function autoReviewNewbiReply(
   requireConnector: (endpoint: string) => Promise<void>,
 ) {
   const settings = await readAutoReviewSettings(db, characterId)
-  if (!settings?.enabled) return
+  if (!settings) return
   const reply = await db.$transaction(async (tx) => {
-    if (!await lockAutoReview(tx, characterId, settings.version)) return
+    if (settings.enabled && !await lockAutoReview(tx, characterId, settings.version)) return
     const current = await tx.newbiReply.findFirst({
       where: { id, characterId, status: 'WAITING', executorKey, autoReviewVersion: null },
     })
     if (!current?.content) return
+    if (!settings.enabled) {
+      await tx.newbiReply.updateMany({ where: { id, characterId, status: 'WAITING', content: { not: null } },
+        data: { autoReviewHandoff: { status: 'SKIPPED', reason: '该角色未启用自动审批。' } } })
+      return
+    }
     const account = await boundAccount(tx, characterId, current.accountId)
     if (!account || account.status !== 'ACTIVE' || account.identity.status !== 'ACTIVE'
       || account.bindingVersion !== current.bindingVersion || account.identity.character.authEpoch !== current.authEpoch
@@ -115,25 +123,44 @@ export async function autoReviewNewbiReply(
       },
       select: { remoteCommentId: true }, orderBy: { createdAt: 'desc' },
     })
-    if (!prior?.remoteCommentId) return
+    if (!prior?.remoteCommentId) {
+      await tx.newbiReply.updateMany({ where: { id, characterId, status: 'WAITING', content: { not: null } },
+        data: { autoReviewHandoff: { status: 'SKIPPED', reason: '此账号在该帖暂无已确认发送的回复，首次互动须由人工审核。' } } })
+      return
+    }
     await tx.newbiReply.update({ where: { id }, data: { autoReviewVersion: settings.version }, select: { id: true } })
     return { ...current, content: current.content, endpoint: account.instanceKey,
       agentId: account.remoteAccountId, previousCommentId: prior.remoteCommentId }
   })
   if (!reply) return
 
-  await requireConnector(reply.endpoint)
-  const thread = await readThread(reply)
-  if (!thread || thread.post.isLocked || !thread.comments.some(({ id }) => id === reply.previousCommentId)
-    || thread.comments.some(({ content }) => content.trim() === reply.content.trim())) return
-  const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
-    comments: thread.comments.map(({ content }) => content) })
-  const model = await review(settings, { platform: 'newbi', draft: reply.content, discussion },
-    { characterId, identityId: reply.identityId, platform: 'newbi' })
-  if (!model) return
+  async function evaluate(current: NonNullable<typeof reply>, policy: AutoReviewSettings): Promise<AutoReviewOutcome> {
+    const thread = await requireConnector(current.endpoint).then(() => readThread(current)).catch(() => undefined)
+    if (!thread) return { status: 'UNAVAILABLE', reason: '无法读取 Newbi 帖子和评论，未能完成审核。' }
+    if (thread.post.isLocked) return { status: 'SKIPPED', reason: 'Newbi 帖子已锁定。' }
+    if (!thread.comments.some(({ id }) => id === current.previousCommentId)) {
+      return { status: 'SKIPPED', reason: '当前讨论中无法确认此账号此前的回复。' }
+    }
+    if (thread.comments.some(({ content }) => content.trim() === current.content.trim())) {
+      return { status: 'SKIPPED', reason: '讨论中已有相同内容的评论，请核对是否重复。' }
+    }
+    const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
+      comments: thread.comments.map(({ content }) => content) })
+    return review(policy, { platform: 'newbi', draft: current.content, discussion },
+      { characterId, identityId: current.identityId, platform: 'newbi' })
+  }
+  const outcome = await evaluate(reply, settings)
 
   await db.$transaction(async (tx) => {
-    if (!await lockAutoReview(tx, characterId, settings.version)) return
+    const policyMatches = await lockAutoReview(tx, characterId, settings.version)
+    if (!policyMatches || outcome.status !== 'APPROVE') {
+      const handoff = !policyMatches ? { status: 'SKIPPED', reason: '审核期间自动审批设置已更改。' } : outcome
+      await tx.newbiReply.updateMany({
+        where: { id, characterId, status: 'WAITING', executorKey, reviewDigest: reply.reviewDigest, content: reply.content },
+        data: { autoReviewHandoff: handoff },
+      })
+      return
+    }
     await decideReply(tx, characterId, autoReviewerId, id,
       { decision: 'APPROVE', reviewDigest: reply.reviewDigest }, requireConnector)
     await tx.managementAudit.create({ data: {

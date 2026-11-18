@@ -2,6 +2,8 @@ import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
 import { z } from '@hono/zod-openapi'
 import { accountRegistrationView, accountView, characterWorkspaceView, listQuery, resourceId } from '@ricajs/contracts/management'
 import { newbiCredential, newbiEndpoint } from '../../agent-api/connection.js'
+import { optionalDecisionReason } from '@ricajs/contracts/action-review'
+import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
 
 export const newbiAccountTest = z.strictObject({ credential: newbiCredential })
 export const newbiAccountPreview = z.object({ agentId: resourceId, username: z.string(), avatarUrl: z.string().nullable() })
@@ -13,7 +15,7 @@ export const newbiReplyInput = z.strictObject({
 })
 export const newbiDecisionInput = z.strictObject({
   reviewDigest: z.string().regex(/^[0-9a-f]{64}$/), decision: z.enum(['APPROVE', 'REJECT']),
-  reason: z.string().trim().min(1).max(240),
+  reason: optionalDecisionReason,
 })
 export const newbiClosureInput = z.strictObject({ reason: z.string().trim().min(1).max(240) })
 export const newbiSendInput = z.strictObject({ retry: z.boolean() })
@@ -37,6 +39,7 @@ export const newbiReplyView = z.object({
   endpoint: newbiEndpoint, postId: resourceId, content: z.string().nullable(), reviewDigest: z.string(),
   status: newbiReplyStatus,
   autoApproved: z.boolean(),
+  autoReviewHandoff: autoReviewHandoff.nullable(),
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
   retryNotBefore: z.iso.datetime().nullable(), leaseUntil: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })

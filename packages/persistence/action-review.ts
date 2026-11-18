@@ -5,7 +5,7 @@ import { simulationFollowUp } from '@ricajs/contracts/simulation-follow-up'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
-import { autoReviewerId, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
+import { autoReviewHandoff, autoReviewerId, missingAutoReviewHandoff, type AutoReviewHandoff, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { lockAutoReview, readAutoReviewSettings } from './auto-review.js'
 
 export const simulationReviewPolicyVersion = 4
@@ -31,6 +31,13 @@ type Proposal = {
   expired: boolean
   followUp: unknown
   reviewerId: string | null
+  autoReviewHandoff: unknown
+}
+
+function skipSimulationReview(proposal: Proposal, target: ActionView['target']): AutoReviewHandoff | undefined {
+  if (target.audience !== 'PUBLIC') return { status: 'SKIPPED', reason: '私密回复须由人工审核。' }
+  if (proposal.crossPlatformDuplicate) return { status: 'SKIPPED', reason: '回复与其他平台的内容相似，请核对是否重复。' }
+  if (proposal.followUp) return { status: 'SKIPPED', reason: '回复附带拟登记的计划或承诺，须由人工一并审核。' }
 }
 
 function notFound(): never {
@@ -42,6 +49,7 @@ async function proposalRows(
 ) {
   return tx.$queryRaw<Proposal[]>`
     SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest", a.follow_up AS "followUp",
+      a.auto_review_handoff AS "autoReviewHandoff",
       a.policy_version AS "policyVersion", a.adapter_id AS "adapterId", a.adapter_version AS "adapterVersion",
       a.adapter_contract_version AS "adapterContractVersion",
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
@@ -95,11 +103,15 @@ export async function listReviewActions(
     const actions: ActionView[] = []
     for (const row of rows.slice(0, limit)) {
       const { target, state, content } = await inspect(tx, scope.characterId, row, resolveAdapter, Boolean(actionId))
+      const canSeeDraft = Boolean(actionId && content && row.proposerId !== scope.actor.id)
       actions.push({
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
         reviewDigest: row.reviewDigest,
         autoApproved: row.reviewerId === autoReviewerId,
+        autoReviewHandoff: canSeeDraft && state === 'WAITING_APPROVAL'
+          ? autoReviewHandoff.safeParse(row.autoReviewHandoff).data ?? skipSimulationReview(row, target) ?? missingAutoReviewHandoff
+          : null,
         riskCodes: [
           ...(row.reviewerId === autoReviewerId ? [] : ['HUMAN_REVIEW_REQUIRED']),
           ...(row.crossPlatformDuplicate ? ['CROSS_PLATFORM_NEAR_DUPLICATE'] : []),
@@ -120,27 +132,36 @@ export async function autoReviewSimulation(
   const input = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
     const settings = await readAutoReviewSettings(tx, characterId)
-    if (!settings?.enabled) return
     const [proposal] = await proposalRows(tx, characterId, actionId)
-    if (!proposal || proposal.state !== 'WAITING_APPROVAL' || proposal.crossPlatformDuplicate || proposal.followUp) return
+    if (!settings || !proposal || proposal.state !== 'WAITING_APPROVAL') return
     const { target, content } = await inspect(tx, characterId, proposal, resolveAdapter)
-    if (target.audience === 'PUBLIC' && content) return { settings, proposal, target, content }
+    if (content && !skipSimulationReview(proposal, target)) return { settings, proposal, target, content }
   }, { isolationLevel: 'RepeatableRead' })
   if (!input) return
   const { settings, proposal, target, content } = input
-  const model = await review(settings, { platform: target.platform, draft: content, discussion },
-    { characterId, identityId: target.identityId, platform: target.platform })
-  if (!model) return
+  const outcome = settings.enabled
+    ? await review(settings, { platform: target.platform, draft: content, discussion },
+      { characterId, identityId: target.identityId, platform: target.platform })
+    : { status: 'SKIPPED', reason: '该角色未启用自动审批。' } as const
 
   await db.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
-    if (!await lockAutoReview(tx, characterId, settings.version)) return
+    const policyMatches = settings.enabled && await lockAutoReview(tx, characterId, settings.version)
     const [current] = await proposalRows(tx, characterId, actionId)
     if (!current || current.state !== 'WAITING_APPROVAL' || current.version !== proposal.version
       || current.reviewDigest !== proposal.reviewDigest) return
     if ((await inspect(tx, characterId, current, resolveAdapter)).content !== content) return
+    if (!policyMatches || outcome.status !== 'APPROVE') {
+      const handoff = settings.enabled && !policyMatches
+        ? { status: 'SKIPPED', reason: '审核期间自动审批设置已更改。' } : outcome
+      await tx.$executeRaw`
+        UPDATE public.action_proposals SET auto_review_handoff = ${JSON.stringify(handoff)}::jsonb
+        WHERE character_id = ${characterId}::uuid AND id = ${actionId}::uuid
+      `
+      return
+    }
     const result = await finishReview(tx, characterId, current, autoReviewerId, 'APPROVE',
-      `Auto-review v${settings.version} · ${model}`, resolveAdapter)
+      `Auto-review v${settings.version} · ${outcome.model}`, resolveAdapter)
     if (result.status === 'READY') await tx.managementAudit.create({ data: {
       characterId, actorId: autoReviewerId, operation: 'action.auto-approve', targetId: actionId,
       digest: current.reviewDigest, requestId: randomUUID(),
@@ -159,7 +180,7 @@ export async function decideReviewAction(
   if (proposal.state !== 'WAITING_APPROVAL' || proposal.reviewDigest !== input.reviewDigest) {
     throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
   }
-  return finishReview(tx, scope.characterId, proposal, scope.actor.id, input.decision, input.reason, resolveAdapter)
+  return finishReview(tx, scope.characterId, proposal, scope.actor.id, input.decision, input.reason ?? '', resolveAdapter)
 }
 
 async function finishReview(

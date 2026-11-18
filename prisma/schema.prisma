@@ -355,6 +355,7 @@ model NewbiReply {
   executorKey     String @map("executor_key")
   approvedExecutorKey String? @map("approved_executor_key")
   autoReviewVersion Int? @map("auto_review_version")
+  autoReviewHandoff Json? @map("auto_review_handoff")
   proposerId      String @map("proposer_id")
   reviewerId      String? @map("reviewer_id")
   status          String @default("WAITING")
@@ -793,6 +794,7 @@ model ActionProposal {
   adapterContractVersion Int            @map("adapter_contract_version")
   proposerId        String?            @map("proposer_id")
   followUp          Json?              @map("follow_up")
+  autoReviewHandoff Json?              @map("auto_review_handoff")
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
   draft             SimulatedDraft     @relation(fields: [characterId, runId], references: [characterId, runId], onDelete: Restrict, onUpdate: NoAction)
