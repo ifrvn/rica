@@ -1,5 +1,5 @@
-import type { Prisma } from '../../../../packages/persistence/generated/client.js'
-import { ManagementError, type PlatformAccountHooks } from '../../../../packages/persistence/management.js'
+import type { Prisma } from '@ricajs/persistence/prisma'
+import { ManagementError, type PlatformAccountHooks } from '@ricajs/persistence/management'
 
 type NewbiProfile = { username: string | null; avatarUrl: string | null }
 

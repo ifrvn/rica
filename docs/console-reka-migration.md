@@ -34,7 +34,7 @@
 | `NSelect` | 固定选项使用原生选择框或 Reka UI Select。需要搜索的角色、身份、账号、会话和时区使用 Combobox，分别核对输入文本、选中值、空值和选项刷新行为。参阅 [Select](https://reka-ui.com/docs/components/select) 与 [Combobox](https://reka-ui.com/docs/components/combobox)。 |
 | `NModal`、`NPopover` | 将业务弹窗迁移到 Reka UI Dialog，账号菜单使用与现有操作语义匹配的 Popover 或 Dropdown Menu。按场景校验初始焦点、焦点限制、关闭条件、焦点归还和移动端滚动。参阅 [Dialog](https://reka-ui.com/docs/components/dialog)。 |
 
-宿主和插件都需要的组件通过 `@rica/console-shared` 的公开入口提供。页面专用组件随所属功能维护。迁移时清理对应的 `.n-*` 样式，并确认生产构建能扫描到共享组件和插件使用的 UnoCSS 类及 Iconify 图标。
+宿主和插件都需要的组件通过 `@ricajs/console-shared` 的公开入口提供。页面专用组件随所属功能维护。迁移时清理对应的 `.n-*` 样式，并确认生产构建能扫描到共享组件和插件使用的 UnoCSS 类及 Iconify 图标。
 
 ## 回归检查
 

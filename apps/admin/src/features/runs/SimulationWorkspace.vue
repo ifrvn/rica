@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
-import type { runReplayView, simulationRunQuery, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
+import type { accountView, characterWorkspaceView, identityView } from '@ricajs/contracts/management'
+import type { runReplayView, simulationRunQuery, simulationRunSummary } from '@ricajs/contracts/simulation-observability'
 import SimulationReconciliation from './SimulationReconciliation.vue'
 import { simulationAccounts } from './simulation-accounts.js'
-import { readAll } from '@rica/console-shared/console-data'
-import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
+import { readAll } from '@ricajs/console-shared/console-data'
+import type { ReconciliationView } from '@ricajs/contracts/action-review'
 import { runFilterKeys } from '../../app/console-location.js'
-import { request, RequestError } from '@rica/console-shared/request'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Run = z.infer<typeof simulationRunSummary>
 type Replay = z.infer<typeof runReplayView>

@@ -1,5 +1,5 @@
 import type { z } from '@hono/zod-openapi'
-import type { reconciliationInput, ReconciliationView } from '../contracts/action-review.js'
+import type { reconciliationInput, ReconciliationView } from '@ricajs/contracts/action-review'
 import { authorize, ManagementError, type Scope } from './management.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 

@@ -10,6 +10,17 @@ Rica 是面向多平台、多身份 AI 虚拟角色的运行系统。同一个�
 
 ## 1. 安装并启动
 
+也可以从 npm 安装编译好的服务：
+
+```sh
+npm install --global @ricajs/rica
+rica --help
+```
+
+从部署目录设置下文的环境变量，或在该目录创建 `.env`。连接 PostgreSQL 和 Redis 后，运行 `rica migrate` 应用数据库迁移，分别运行 `rica api`、`rica worker` 和 `rica simulation` 启动服务。`rica admin-user` 管理本地用户。`rica admin-path` 打印已构建管理端的目录，可由静态服务器托管，并在同一来源将 `/health` 和 `/v1` 反向代理到管理 API。
+
+维护者从源码执行 `pnpm run release:pack` 可在 `dist/npm/tarballs` 生成发布包。子包的常规入口使用编译后的 ESM 和类型声明，`/console` 和 `/ui` 入口供支持 Vue 单文件组件的构建工具使用。发布时先上传依赖包，再上传服务入口 `@ricajs/rica`。
+
 需要 Node.js 22.12+（22.x）、24.x 或 26.x，**pnpm**（版本见 `package.json`），以及带 Compose 的 Docker。以下命令使用 PowerShell。克隆后，其余操作都在仓库根目录运行。已有 `.env` 时会保留现有配置。
 
 初始化前，请确认数据库连接指向空的开发数据库，Redis 使用独立的开发队列。
@@ -123,9 +134,9 @@ pnpm run test:integration
 插件测试通过对应工作区运行。
 
 ```powershell
-pnpm --filter @rica/plugin-hosted-models test
-pnpm --filter @rica/plugin-newbi test
-pnpm --filter @rica/plugin-newbi run test:integration
+pnpm --filter @ricajs/plugin-hosted-models test
+pnpm --filter @ricajs/plugin-newbi test
+pnpm --filter @ricajs/plugin-newbi run test:integration
 ```
 
 版本切换使用新的开发数据库和 Redis 队列，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供控制台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)

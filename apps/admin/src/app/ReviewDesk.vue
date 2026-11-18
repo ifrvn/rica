@@ -2,7 +2,7 @@
 import { platformReviews, type ConsoleWorkspace } from './plugin-integrations.js'
 import type { DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import {
   DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger,
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
@@ -13,13 +13,13 @@ import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
 import RunOperations from '../features/runs/RunOperations.vue'
 import AutoReviewSettings from '../features/review/AutoReviewSettings.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
-import { focusRecord } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { focusRecord } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
-import type { characterView } from '../../../../packages/contracts/management.js'
+import type { characterView } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
-import type { ActionView } from '../../../../packages/contracts/action-review.js'
-import type { Readiness } from '../../../../packages/contracts/health.js'
+import type { ActionView } from '@ricajs/contracts/action-review'
+import type { Readiness } from '@ricajs/contracts/health'
 
 defineProps<{ readiness?: Readiness; checkedAt?: string; checkingReadiness: boolean }>()
 const emit = defineEmits<{ checkReadiness: [] }>()
@@ -34,7 +34,7 @@ const SecuritySettings = defineAsyncComponent(() => import('../features/access/S
 const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
-const ModelUsage = defineAsyncComponent(() => import('@rica/plugin-hosted-models/console').then(({ ModelUsage }) => ModelUsage))
+const ModelUsage = defineAsyncComponent(() => import('@ricajs/plugin-hosted-models/console').then(({ ModelUsage }) => ModelUsage))
 const SystemHealth = defineAsyncComponent(() => import('../features/health/SystemHealth.vue'))
 
 type Character = z.infer<typeof characterView>

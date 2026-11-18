@@ -1,7 +1,7 @@
 import { newbiEndpoint } from '../../agent-api/connection.js'
 import { createNewbiReadClient } from './agent-adapter.js'
 import { newbiReaderIdentity } from './identity.js'
-import { startPluginHost, type PluginDefinition } from '@rica/plugin-host'
+import { startPluginHost, type PluginDefinition } from '@ricajs/plugin-host'
 
 const credentialService = 'local-agent-credential'
 

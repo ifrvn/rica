@@ -1,9 +1,9 @@
 import type { z } from '@hono/zod-openapi'
 import type { Component } from 'vue'
-import type { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@rica/plugin-newbi/shared'
-import { newbiAccounts, newbiCard, newbiConsole, newbiReview, type ConnectorCardStatus } from '@rica/plugin-newbi/console'
-import { hostedModelsCard, modelHealth } from '@rica/plugin-hosted-models/console'
-import { hostedModelsPluginId } from '@rica/plugin-hosted-models/shared'
+import type { newbiAccountRegistrationView, newbiAccountView, newbiCharacterWorkspaceView } from '@ricajs/plugin-newbi/shared'
+import { newbiAccounts, newbiCard, newbiConsole, newbiReview, type ConnectorCardStatus } from '@ricajs/plugin-newbi/console'
+import { hostedModelsCard, modelHealth } from '@ricajs/plugin-hosted-models/console'
+import { hostedModelsPluginId } from '@ricajs/plugin-hosted-models/shared'
 import type { DeploymentPluginId, DeploymentPluginsView } from '../../../deployment-plugin-contracts.js'
 
 export type ConnectorAccount = z.infer<typeof newbiAccountView>
@@ -13,7 +13,7 @@ export type ConsoleWorkspace = z.infer<typeof newbiCharacterWorkspaceView>
 export {
   registrationAvailable, newbiAuditLabels as pluginAuditLabels,
   newbiHealth as platformHealth, isNewbiReadNode as hasAccountHealthLink,
-} from '@rica/plugin-newbi/console'
+} from '@ricajs/plugin-newbi/console'
 
 type PluginCard = {
   description: string; editor: Component; upgradeStep?: string; invalidSettings?: string
@@ -70,4 +70,4 @@ export const platformReviews: readonly {
 
 export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, [hostedModelsPluginId]: '外部模型' }
 export { modelHealth as hostedModelHealth }
-export { isSimulationPlatform } from '@rica/contracts/simulation-platform'
+export { isSimulationPlatform } from '@ricajs/contracts/simulation-platform'

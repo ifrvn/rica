@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from 'vue'
-import { UiButton, UiBadge } from '@rica/console-shared/ui'
+import { UiButton, UiBadge } from '@ricajs/console-shared/ui'
 import {
   DropdownMenuContent, DropdownMenuItemIndicator, DropdownMenuPortal, DropdownMenuRadioGroup,
   DropdownMenuRadioItem, DropdownMenuRoot, DropdownMenuTrigger,
   PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger,
 } from 'reka-ui'
 import ReviewDesk from './ReviewDesk.vue'
-import type { Readiness } from '../../../../packages/contracts/health.js'
+import type { Readiness } from '@ricajs/contracts/health'
 import { darkPrimaryButton, palettes, readAppearance, saveAppearance } from './appearance.js'
 import '../styles/console-theme.css'
-import '@rica/console-shared/ui.css'
+import '@ricajs/console-shared/ui.css'
 
 const appearance = ref(readAppearance())
 const systemPreference = window.matchMedia('(prefers-color-scheme: dark)')

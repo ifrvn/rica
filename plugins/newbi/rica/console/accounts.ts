@@ -1,6 +1,6 @@
 import type { z } from '@hono/zod-openapi'
 import type { newbiAccountCheckView, newbiAccountPreview, newbiAccountTest } from '../management/contracts.js'
-import { request } from '@rica/console-shared/request'
+import { request } from '@ricajs/console-shared/request'
 
 export type AccountPreview = z.infer<typeof newbiAccountPreview>
 

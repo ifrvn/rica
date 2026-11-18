@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiCombobox } from '@rica/console-shared/ui'
+import { UiCombobox } from '@ricajs/console-shared/ui'
 
 const value = defineModel<string>('value', { required: true })
 const props = defineProps<{ id: string; inherited?: string; invalid?: boolean; disabled?: boolean }>()

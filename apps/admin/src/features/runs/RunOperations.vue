@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '../../../../../packages/contracts/simulation-observability.js'
-import { request, RequestError } from '@rica/console-shared/request'
+import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '@ricajs/contracts/simulation-observability'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Backlog = z.infer<typeof simulationBacklogView>
 type Event = z.infer<typeof quarantinedOutboxEvent>

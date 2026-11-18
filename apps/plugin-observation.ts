@@ -1,8 +1,8 @@
 import { Redis } from 'ioredis'
-import { newbiCatalog } from '@rica/plugin-newbi/shared'
+import { newbiCatalog } from '@ricajs/plugin-newbi/shared'
 import { pluginDiagnostic, pluginReport, type PluginDiagnostic, type PluginMetadata,
-  type PluginReport, type PluginService } from '../packages/contracts/plugin-status.js'
-import { PluginHostError } from '@rica/plugin-host'
+  type PluginReport, type PluginService } from '@ricajs/contracts/plugin-status'
+import { PluginHostError } from '@ricajs/plugin-host'
 import { cognitionCatalog, simulationPlatformCatalog } from './runtime-plugins.js'
 
 const catalog: Record<PluginService, PluginMetadata[]> = {

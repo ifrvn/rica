@@ -1,8 +1,8 @@
-import { modelSettingsContracts } from '@rica/plugin-hosted-models/shared'
+import { modelSettingsContracts } from '@ricajs/plugin-hosted-models/shared'
 import { z } from '@hono/zod-openapi'
-import { pluginStatusView } from '../packages/contracts/plugin-status.js'
+import { pluginStatusView } from '@ricajs/contracts/plugin-status'
 import { deploymentPluginsView } from './deployment-plugin-contracts.js'
-import { newbiConnectionsView, newbiPendingDeliveries } from '@rica/plugin-newbi/shared'
+import { newbiConnectionsView, newbiPendingDeliveries } from '@ricajs/plugin-newbi/shared'
 
 export const consolePluginStatusView = pluginStatusView.extend({
   deployment: deploymentPluginsView.optional(),

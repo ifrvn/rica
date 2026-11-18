@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { ModelProfileInput, ModelSettingsContracts, ModelSettingsInput, ModelSettingsView } from './contracts.js'
-import { writeSettings } from '../../../../packages/runtime/write-settings.js'
+import { writeSettings } from '@ricajs/runtime/write-settings'
 
 type ActiveSettings = { version: number; name?: string; configuration: ModelSettingsInput }
 const simulated = { provider: 'simulated' } as const

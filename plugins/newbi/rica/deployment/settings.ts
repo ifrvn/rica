@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import type { PluginStage } from '@rica/contracts/deployment-plugins'
+import type { PluginStage } from '@ricajs/contracts/deployment-plugins'
 import { newbiEndpoint } from '../../agent-api/connection.js'
 import type { NewbiConnectionStore } from '../persistence/database.js'
 

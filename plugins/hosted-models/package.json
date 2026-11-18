@@ -1,5 +1,5 @@
 {
-  "name": "@rica/plugin-hosted-models",
+  "name": "@ricajs/plugin-hosted-models",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,18 +9,36 @@
   "exports": {
     ".": "./index.ts",
     "./shared": "./rica/shared.ts",
-    "./console": "./rica/console/index.ts"
+    "./console": "./rica/console/index.ts",
+    "./persistence/usage": "./rica/persistence/usage.ts",
+    "./providers/usage": "./providers/usage.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
-    "@rica/console-shared": "workspace:*",
-    "@rica/contracts": "workspace:*",
-    "@rica/plugin-host": "workspace:*",
-    "@rica/plugin-simulated-model": "workspace:*",
+    "@ricajs/console-shared": "workspace:*",
+    "@ricajs/contracts": "workspace:*",
+    "@ricajs/plugin-host": "workspace:*",
+    "@ricajs/plugin-simulated-model": "workspace:*",
     "vue": "^3.5.45",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "@ricajs/persistence": "workspace:*",
+    "@ricajs/runtime": "workspace:*",
+    "@vue/runtime-core": "^3.5.45"
   },
   "devDependencies": {
     "typescript": "npm:@typescript/typescript6@^6.0.2"
+  },
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifrvn/rica.git",
+    "directory": "plugins/hosted-models"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

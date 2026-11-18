@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { simulationDailyMetricsView } from '../../../../../packages/contracts/simulation-observability.js'
-import { characterPath, queryPath, useConsoleTask } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import type { simulationDailyMetricsView } from '@ricajs/contracts/simulation-observability'
+import { characterPath, queryPath, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Metrics = z.infer<typeof simulationDailyMetricsView>
 const props = defineProps<{ characterId: string }>()

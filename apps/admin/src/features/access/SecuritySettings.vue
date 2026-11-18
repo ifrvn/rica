@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import { startRegistration } from '@simplewebauthn/browser'
-import { UiAlert, UiButton, UiDialog, UiEmpty, UiField, UiSpinner } from '@rica/console-shared/ui'
-import { formatTime, useConsoleTask } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { UiAlert, UiButton, UiDialog, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
+import { formatTime, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Passkey = { id: string; createdAt: string | null }
 type RegistrationOptions = { challengeId: string; options: Parameters<typeof startRegistration>[0]['optionsJSON'] }

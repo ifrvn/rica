@@ -1,5 +1,5 @@
-import type { MemoryCandidate } from '../contracts/memory.js'
-import { memoryPrefilterWords, rankMemoryCandidates } from '../runtime/memory-ranking.js'
+import type { MemoryCandidate } from '@ricajs/contracts/memory'
+import { memoryPrefilterWords, rankMemoryCandidates } from '@ricajs/runtime/memory-ranking'
 import { Prisma, type PrismaClient } from './generated/client.js'
 import { bindingMatches, lockEventContext, lockSimulatedBinding } from './run-context.js'
 

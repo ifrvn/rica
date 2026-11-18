@@ -1,4 +1,4 @@
-import type { HealthNode } from '@rica/console-shared/health'
+import type { HealthNode } from '@ricajs/console-shared/health'
 import type { z } from '@hono/zod-openapi'
 import type { newbiConnectionsView } from '../management/contracts.js'
 

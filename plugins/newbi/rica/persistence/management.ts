@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../runtime/identity.js'
-import { coreProfile, identityProfile } from '@rica/contracts/management'
+import { coreProfile, identityProfile } from '@ricajs/contracts/management'
 import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput, type newbiThreadView } from '../management/contracts.js'
-import type { Prisma, PrismaClient } from '../../../../packages/persistence/generated/client.js'
-import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '../../../../packages/persistence/management.js'
-import { autoReviewerId, type ReviewPublicReply } from '../../../../packages/contracts/auto-review.js'
-import { lockAutoReview, readAutoReviewSettings } from '../../../../packages/persistence/auto-review.js'
-import { containsWritingPrompt } from '../../../../packages/runtime/writing-prompts.js'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
+import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '@ricajs/persistence/management'
+import { autoReviewerId, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
+import { lockAutoReview, readAutoReviewSettings } from '@ricajs/persistence/auto-review'
+import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 

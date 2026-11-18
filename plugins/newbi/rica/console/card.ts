@@ -1,4 +1,4 @@
-import type { PluginMetadata } from '../../../../packages/contracts/plugin-status.js'
+import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
 import type { NewbiDeploymentView } from '../deployment/settings.js'
 import { newbiDeployment } from '../deployment/catalog.js'
 import { newbiConsole } from './labels.js'

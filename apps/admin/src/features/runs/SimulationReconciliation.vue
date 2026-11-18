@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { UiAlert, UiButton, UiField } from '@rica/console-shared/ui'
-import type { ReconciliationView } from '../../../../../packages/contracts/action-review.js'
-import { request, RequestError } from '@rica/console-shared/request'
+import { UiAlert, UiButton, UiField } from '@ricajs/console-shared/ui'
+import type { ReconciliationView } from '@ricajs/contracts/action-review'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 const props = defineProps<{ characterId: string; actionId: string }>()
 const emit = defineEmits<{ expired: []; resolved: [outcome: NonNullable<ReconciliationView['outcome']>] }>()

@@ -1,5 +1,5 @@
-import { defaultAutoReviewPrompt } from '../contracts/auto-review.js'
-import type { AutoReviewSettings } from '../contracts/auto-review.js'
+import { defaultAutoReviewPrompt } from '@ricajs/contracts/auto-review'
+import type { AutoReviewSettings } from '@ricajs/contracts/auto-review'
 import type { Prisma } from './generated/client.js'
 
 export async function readAutoReviewSettings(db: Pick<Prisma.TransactionClient, 'character'>, characterId: string) {

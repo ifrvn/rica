@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises'
 import { deploymentPlugins } from './deployment-plugin-contracts.js'
-import { pluginReleaseManifest, type PluginMetadata, type PluginReleaseView, type PluginService } from '../packages/contracts/plugin-status.js'
+import { pluginReleaseManifest, type PluginMetadata, type PluginReleaseView, type PluginService } from '@ricajs/contracts/plugin-status'
 
 type ServiceCatalog = { service: PluginService; catalog: PluginMetadata[] }
 const maxManifestBytes = 64 * 1024

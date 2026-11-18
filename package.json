@@ -1,7 +1,8 @@
 {
-  "name": "rica",
-  "description": "A multi-platform AI character runtime with a unified core self, isolated persona memory, and policy-controlled actions.",
+  "name": "@ricajs/rica",
   "version": "0.1.0",
+  "private": true,
+  "description": "A multi-platform AI character runtime with a unified core self, isolated persona memory, and policy-controlled actions.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "packageManager": "pnpm@12.18.0",
@@ -20,16 +21,17 @@
     "typecheck": "tsc -p tsconfig.server.json && vue-tsc --noEmit",
     "test": "tsx --test apps/api/app.test.ts apps/api/admin-auth.test.ts apps/api/plugin-releases.test.ts apps/api/management-plugins.test.ts packages/runtime/memory-ranking.test.ts packages/runtime/plugin-registry.test.ts",
     "test:integration": "tsx --test --test-concurrency=1 scripts/inbound.integration.test.ts scripts/management.integration.test.ts && tsx scripts/outbox-smoke.ts",
-    "build": "vite build --config apps/admin/vite.config.ts"
+    "build": "vite build --config apps/admin/vite.config.ts",
+    "release:pack": "node scripts/pack-release.mjs"
   },
   "dependencies": {
-    "@rica/console-shared": "workspace:*",
-    "@rica/contracts": "workspace:*",
-    "@rica/plugin-host": "workspace:*",
-    "@rica/plugin-hosted-models": "workspace:*",
-    "@rica/plugin-newbi": "workspace:*",
-    "@rica/plugin-simulated-model": "workspace:*",
-    "@rica/plugin-simulated-platforms": "workspace:*",
+    "@ricajs/console-shared": "workspace:*",
+    "@ricajs/contracts": "workspace:*",
+    "@ricajs/plugin-host": "workspace:*",
+    "@ricajs/plugin-hosted-models": "workspace:*",
+    "@ricajs/plugin-newbi": "workspace:*",
+    "@ricajs/plugin-simulated-model": "workspace:*",
+    "@ricajs/plugin-simulated-platforms": "workspace:*",
     "@hono/node-server": "^2.1.6",
     "@hono/zod-openapi": "^1.6.3",
     "@prisma/adapter-pg": "^7.10.1",
@@ -42,7 +44,10 @@
     "ioredis": "^6.0.0",
     "reka-ui": "^2.11.0",
     "vue": "^3.5.45",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "@ricajs/persistence": "workspace:*",
+    "@ricajs/runtime": "workspace:*",
+    "prisma": "^7.10.1"
   },
   "devDependencies": {
     "@iconify-json/lucide": "^1.2.152",
@@ -52,11 +57,21 @@
     "@unocss/preset-icons": "^66.12.0",
     "@unocss/preset-wind4": "^66.12.0",
     "@vitejs/plugin-vue": "^6.0.10",
-    "prisma": "^7.10.1",
     "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "unocss": "^66.12.0",
     "vite": "^8.3.6",
     "vue-tsc": "^3.3.14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifrvn/rica.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "bin": {
+    "rica": "./bin/rica.js"
   }
 }

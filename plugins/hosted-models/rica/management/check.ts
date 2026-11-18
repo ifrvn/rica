@@ -1,5 +1,5 @@
-import { ModelProviderError, type ModelProvider } from '@rica/contracts/model-provider'
-import type { Plugin } from '@rica/plugin-host'
+import { ModelProviderError, type ModelProvider } from '@ricajs/contracts/model-provider'
+import type { Plugin } from '@ricajs/plugin-host'
 import type { ModelCheckResult, ModelSettingsInput } from './contracts.js'
 
 function failureStatus(cause: unknown): ModelCheckResult['status'] {

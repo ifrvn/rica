@@ -1,8 +1,8 @@
 import type { NewbiDeploymentView } from '../deployment/settings.js'
 import type { z } from '@hono/zod-openapi'
 import type { newbiCharacterWorkspaceView, newbiReplySummary } from '../management/contracts.js'
-import { characterPath, queryPath, type Page } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
+import { characterPath, queryPath, type Page } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
 import { newbiConsole } from './labels.js'
 import Review from './ConnectorReview.vue'
 

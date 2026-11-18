@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { UiButton, UiField, UiBadge } from '@rica/console-shared/ui'
+import { UiButton, UiField, UiBadge } from '@ricajs/console-shared/ui'
 import type { AccountPreview } from './accounts.js'
 const credential = defineModel<string>('credential', { required: true })
 defineProps<{ busy: boolean; preview?: AccountPreview }>()

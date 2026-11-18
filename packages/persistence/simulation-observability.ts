@@ -1,7 +1,7 @@
-import { simulationPlatformId } from '../contracts/simulation-platform.js'
+import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
 import type { z } from '@hono/zod-openapi'
-import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '../contracts/simulation-observability.js'
-import type { ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
+import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '@ricajs/contracts/simulation-observability'
+import type { ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, ManagementError, type Scope } from './management.js'
 

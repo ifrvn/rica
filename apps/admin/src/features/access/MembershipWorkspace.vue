@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiSpinner } from '@rica/console-shared/ui'
-import type { LocalUser } from '../../../../../packages/contracts/local-users.js'
-import { formatTime, queryPath, useConsoleTask } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
+import { UiAlert, UiButton, UiEmpty, UiSpinner } from '@ricajs/console-shared/ui'
+import type { LocalUser } from '@ricajs/contracts/local-users'
+import { formatTime, queryPath, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
 
 const props = defineProps<{ revision: number; canCreate: boolean }>()
 const emit = defineEmits<{ expired: []; createAccount: [] }>()

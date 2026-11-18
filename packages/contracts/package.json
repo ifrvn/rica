@@ -1,5 +1,5 @@
 {
-  "name": "@rica/contracts",
+  "name": "@ricajs/contracts",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,10 +10,34 @@
     "./platform-reader": "./platform-reader.ts",
     "./platform-reply-executor": "./platform-reply-executor.ts",
     "./management": "./management.ts",
-    "./deployment-plugins": "./deployment-plugins.ts"
+    "./deployment-plugins": "./deployment-plugins.ts",
+    "./health": "./health.ts",
+    "./action-review": "./action-review.ts",
+    "./local-users": "./local-users.ts",
+    "./plugin-status": "./plugin-status.ts",
+    "./simulation-observability": "./simulation-observability.ts",
+    "./plans": "./plans.ts",
+    "./commitments": "./commitments.ts",
+    "./schedules": "./schedules.ts",
+    "./auto-review": "./auto-review.ts",
+    "./simulation-follow-up": "./simulation-follow-up.ts",
+    "./memory": "./memory.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
-    "@rica/plugin-host": "workspace:*"
+    "@ricajs/plugin-host": "workspace:*"
+  },
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifrvn/rica.git",
+    "directory": "packages/contracts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

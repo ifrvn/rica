@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { UiAlert, UiButton, UiSpinner } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiSpinner } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, characterView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
-import type { simulationBacklogView, simulationRunSummary } from '../../../../../packages/contracts/simulation-observability.js'
-import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '@rica/console-shared/console-data'
+import type { accountView, characterView, characterWorkspaceView, identityView } from '@ricajs/contracts/management'
+import type { simulationBacklogView, simulationRunSummary } from '@ricajs/contracts/simulation-observability'
+import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '@ricajs/console-shared/console-data'
 import { consoleHash, type ConsolePage } from '../../app/console-location.js'
 import { platformReviews, type ReviewQueue } from '../../app/plugin-integrations.js'
 import { simulationAccounts } from '../runs/simulation-accounts.js'
-import { request } from '@rica/console-shared/request'
+import { request } from '@ricajs/console-shared/request'
 
 type Backlog = z.infer<typeof simulationBacklogView>
 type Run = z.infer<typeof simulationRunSummary>

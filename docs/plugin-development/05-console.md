@@ -135,6 +135,6 @@ type HealthNode = {
 
 | 导入 | API |
 | --- | --- |
-| `@rica/console-shared/request` | `request<T>(url: string, init?: RequestInit): Promise<T>`，携带同源 Cookie，使用 10 秒超时并返回解析后的 JSON。HTTP 错误抛出 `RequestError`，含 `status: number` 与可选 `code: string`。 |
-| `@rica/console-shared/console-data` | `characterPath(id)` 返回角色 API 前缀。`queryPath(path, params)` 编码查询参数。 |
-| `@rica/console-shared/console-data` | `useConsoleTask(expired)` 在组件 setup 中使用，提供 `busy`、`error`、`notice`、`active()`、`run(task)` 和 `command(path, payload, method?, version?)`。给定版本时发送 `If-Match`，否则同一次重试保留幂等键。 |
+| `@ricajs/console-shared/request` | `request<T>(url: string, init?: RequestInit): Promise<T>`，携带同源 Cookie，使用 10 秒超时并返回解析后的 JSON。HTTP 错误抛出 `RequestError`，含 `status: number` 与可选 `code: string`。 |
+| `@ricajs/console-shared/console-data` | `characterPath(id)` 返回角色 API 前缀。`queryPath(path, params)` 编码查询参数。 |
+| `@ricajs/console-shared/console-data` | `useConsoleTask(expired)` 在组件 setup 中使用，提供 `busy`、`error`、`notice`、`active()`、`run(task)` 和 `command(path, payload, method?, version?)`。给定版本时发送 `If-Match`，否则同一次重试保留幂等键。 |

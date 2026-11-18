@@ -8,8 +8,8 @@ import {
   generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse,
 } from '@simplewebauthn/server'
 import type { Redis } from 'ioredis'
-import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { localUserCreate, localUserPassword } from '../../packages/contracts/local-users.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
+import { localUserCreate, localUserPassword } from '@ricajs/contracts/local-users'
 import {
   allowAuthAttempt, createAdminSessions, hashPassword, localPrincipal, passwordInput, sessionKey, sessionSeconds, usernameInput,
   verifyPassword, type Authenticate, type ManagementConfig,

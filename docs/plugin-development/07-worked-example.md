@@ -4,11 +4,11 @@
 
 ## 建包
 
-新建 `plugins/demo-echo/package.json`。根目录 `package.json` 的 `dependencies` 也加入 `"@rica/plugin-demo-echo": "workspace:*"`。然后在仓库根目录执行 `pnpm install`，提交实际生成的锁文件。
+新建 `plugins/demo-echo/package.json`。根目录 `package.json` 的 `dependencies` 也加入 `"@ricajs/plugin-demo-echo": "workspace:*"`。然后在仓库根目录执行 `pnpm install`，提交实际生成的锁文件。
 
 ```json
 {
-  "name": "@rica/plugin-demo-echo",
+  "name": "@ricajs/plugin-demo-echo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -25,12 +25,12 @@
 
 ```ts
 import { createRoute, z } from '@hono/zod-openapi'
-import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { authorize } from '../../packages/persistence/management.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
+import { authorize } from '@ricajs/persistence/management'
 import {
   body, character, characterParams, errors, security, success,
   type ManagementPlugin,
-} from '../../packages/runtime/management-http.js'
+} from '@ricajs/persistence/management-http'
 
 const previewInput = z.strictObject({ text: z.string().trim().min(1).max(200) })
 const previewOutput = z.object({ preview: z.string() })
@@ -59,7 +59,7 @@ export function createDemoEcho(db: PrismaClient): ManagementPlugin {
 }
 ```
 
-在 `apps/api/main.ts` 增加 `import { createDemoEcho } from '@rica/plugin-demo-echo'`，再将 `createDemoEcho(managementDb)` 加到 `createManagementApp({ ..., plugins: [...] })` 的列表。管理 API 启用时，宿主会把插件路由挂在 `/v1` 下。
+在 `apps/api/main.ts` 增加 `import { createDemoEcho } from '@ricajs/plugin-demo-echo'`，再将 `createDemoEcho(managementDb)` 加到 `createManagementApp({ ..., plugins: [...] })` 的列表。管理 API 启用时，宿主会把插件路由挂在 `/v1` 下。
 
 ## 发请求
 
@@ -80,7 +80,7 @@ Invoke-Rica Post "$ricaCharacter/demo-echo/preview" -Body @{ text = '  活动报
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createManagementApp } from '../../apps/api/management.js'
-import type { PrismaClient } from '../../packages/persistence/generated/client.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
 import { createDemoEcho } from './index.js'
 
 test('echo preview requires an authenticated role administrator', async () => {

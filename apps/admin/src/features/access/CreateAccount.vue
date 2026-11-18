@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { UiAlert, UiButton, UiDialog, UiField } from '@rica/console-shared/ui'
-import { localUserCreate } from '../../../../../packages/contracts/local-users.js'
-import { useConsoleTask } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { UiAlert, UiButton, UiDialog, UiField } from '@ricajs/console-shared/ui'
+import { localUserCreate } from '@ricajs/contracts/local-users'
+import { useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 const emit = defineEmits<{ close: []; expired: []; created: [username: string] }>()
 const { busy, error, run } = useConsoleTask(() => emit('expired'))

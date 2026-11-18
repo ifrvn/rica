@@ -1,5 +1,5 @@
-import type { ReviewPublicReply } from '../packages/contracts/auto-review.js'
-import type { ModelProvider } from '../packages/contracts/model-provider.js'
+import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
+import type { ModelProvider } from '@ricajs/contracts/model-provider'
 
 export function createAutoReviewer(useDefaultModel: (review: (model: ModelProvider) => Promise<string | null>) =>
   Promise<string | null>): ReviewPublicReply {

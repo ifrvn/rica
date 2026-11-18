@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { MemoryCandidate } from '../contracts/memory.js'
+import type { MemoryCandidate } from '@ricajs/contracts/memory'
 import { rankMemoryCandidates } from './memory-ranking.js'
 
 const now = new Date('2026-11-06T00:00:00Z')

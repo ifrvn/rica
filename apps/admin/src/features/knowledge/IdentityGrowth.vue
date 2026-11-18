@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { beliefSummary, beliefView, contactBoundaryView, contactSummary, dailyEnergyView, identityReflectionView, manualGoalView } from '../../../../../packages/contracts/management.js'
-import { characterPath, formatTime, queryPath, useConsoleTask, utcToday, type Page } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import type { beliefSummary, beliefView, contactBoundaryView, contactSummary, dailyEnergyView, identityReflectionView, manualGoalView } from '@ricajs/contracts/management'
+import { characterPath, formatTime, queryPath, useConsoleTask, utcToday, type Page } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Goal = z.infer<typeof manualGoalView>
 type Belief = z.infer<typeof beliefView>

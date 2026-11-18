@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import { actorId, hashPassword, localIssuer, passwordInput, usernameInput } from '../apps/api/admin-auth.js'
-import { createDatabase } from '../packages/persistence/client.js'
+import { createDatabase } from '@ricajs/persistence/client'
 
 async function main() {
   const [command, name, ...flags] = process.argv.slice(2)

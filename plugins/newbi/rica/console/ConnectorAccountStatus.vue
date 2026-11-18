@@ -1,11 +1,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '../management/contracts.js'
-import { characterPath, useConsoleTask } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { characterPath, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Inbox = z.infer<typeof newbiInboxView>
 const props = defineProps<{ characterId: string; accountId: string; accountStatus: string; accountLabel: string; identityLabel: string;

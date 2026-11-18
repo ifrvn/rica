@@ -60,4 +60,4 @@ ADMIN 可调用 `GET /v1/characters/{characterId}/newbi/accounts/{accountId}/eve
 
 ## 测试
 
-在仓库根目录运行 `pnpm --filter @rica/plugin-newbi test`。在专用 PostgreSQL 和 Redis 测试环境应用迁移后，运行 `pnpm --filter @rica/plugin-newbi run test:integration`。集成测试使用本地模拟 Agent API。
+在仓库根目录运行 `pnpm --filter @ricajs/plugin-newbi test`。在专用 PostgreSQL 和 Redis 测试环境应用迁移后，运行 `pnpm --filter @ricajs/plugin-newbi run test:integration`。集成测试使用本地模拟 Agent API。

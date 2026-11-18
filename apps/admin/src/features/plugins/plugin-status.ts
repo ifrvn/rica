@@ -1,8 +1,8 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { z } from '@hono/zod-openapi'
 import type { consolePluginStatusView } from '../../../../plugin-status-view.js'
-import { characterPath, useConsoleTask } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
+import { characterPath, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
 
 export type PluginStatus = z.infer<typeof consolePluginStatusView>
 export { pluginNames } from '../../app/plugin-integrations.js'

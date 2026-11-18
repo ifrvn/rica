@@ -1,5 +1,5 @@
-import type { HealthNode } from '@rica/console-shared/health'
-import type { PluginReport } from '../../../../packages/contracts/plugin-status.js'
+import type { HealthNode } from '@ricajs/console-shared/health'
+import type { PluginReport } from '@ricajs/contracts/plugin-status'
 import type { ModelCheckStatus, ModelProfileChoice } from '../management/contracts.js'
 import { hostedModelCatalog } from '../../providers/catalog.js'
 import { hostedModelsPluginId } from '../identity.js'

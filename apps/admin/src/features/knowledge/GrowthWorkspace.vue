@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { UiAlert, UiEmpty, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiEmpty, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { identityView } from '../../../../../packages/contracts/management.js'
-import { characterPath, readAll, useConsoleTask } from '@rica/console-shared/console-data'
+import type { identityView } from '@ricajs/contracts/management'
+import { characterPath, readAll, useConsoleTask } from '@ricajs/console-shared/console-data'
 import IdentityGrowth from './IdentityGrowth.vue'
 
 type Identity = z.infer<typeof identityView>

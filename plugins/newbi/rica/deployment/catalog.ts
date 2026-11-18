@@ -1,5 +1,5 @@
 import { newbiExecutorIdentity, newbiReaderIdentity } from '../runtime/identity.js'
-import type { PluginMetadata } from '../../../../packages/contracts/plugin-status.js'
+import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
 
 export const newbiCatalog = {
   'connector-reader': [{ ...newbiReaderIdentity, kind: 'platform-reader' }],

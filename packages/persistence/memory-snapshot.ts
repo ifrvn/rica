@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { memoryRankingVersion, rankMemoryCandidates } from '../runtime/memory-ranking.js'
+import { memoryRankingVersion, rankMemoryCandidates } from '@ricajs/runtime/memory-ranking'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { loadMemoryReadScope, readMemoryCandidates, type MemoryRequest } from './memory.js'
 

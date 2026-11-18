@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { startCognitionPlugins, startObservedModelPlugin } from '../../../apps/runtime-plugins.js'
 import { HostedModelError } from '../rica/model.js'
-import type { ModelProvider } from '@rica/contracts/model-provider'
+import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import type { HostedUsageRecord } from '../providers/usage.js'
 
 const input = {

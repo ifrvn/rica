@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { UiAlert, UiButton, UiCheckbox, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiCheckbox, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, identityView } from '../../../../../packages/contracts/management.js'
-import { planInput, type planView } from '../../../../../packages/contracts/plans.js'
-import { characterPath, formatTime, readAll, useConsoleTask } from '@rica/console-shared/console-data'
+import type { accountView, identityView } from '@ricajs/contracts/management'
+import { planInput, type planView } from '@ricajs/contracts/plans'
+import { characterPath, formatTime, readAll, useConsoleTask } from '@ricajs/console-shared/console-data'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 
 type Plan = z.infer<typeof planView>

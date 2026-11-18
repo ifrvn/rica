@@ -21,8 +21,8 @@ import { createNewbiManagement, type NewbiManagementOptions } from '../rica/mana
 import { connectNewbiSettings } from '../rica/deployment/settings.js'
 import { createManagementApp } from '../../../apps/api/management.js'
 import { sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
-import { createDatabase } from '../../../packages/persistence/client.js'
-import { loadConfig } from '../../../packages/runtime/config.js'
+import { createDatabase } from '@ricajs/persistence/client'
+import { loadConfig } from '@ricajs/runtime/config'
 import { createDeploymentPluginStore } from '../../../apps/deployment-plugins.js'
 import { readPluginStatus, reportPluginResult } from '../../../apps/plugin-observation.js'
 

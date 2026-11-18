@@ -1,13 +1,13 @@
-import type { PlatformAdapter, ResolveSimulationAdapter } from '../packages/contracts/simulation-platform.js'
-import { hostedModelsPluginId, type ModelSettingsInput } from '@rica/plugin-hosted-models/shared'
-import type { ModelProvider } from '@rica/contracts/model-provider'
-import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
-import { simulatedModelDefinition } from '@rica/plugin-simulated-model'
-import { hostedModelDefinition, observedHostedModelDefinition, type createModelSettingsStore } from '@rica/plugin-hosted-models'
-import type { RecordHostedUsage, UsagePurpose } from '../plugins/hosted-models/providers/usage.js'
-import { simulatedPlatformDefinitions } from '@rica/plugin-simulated-platforms'
+import type { PlatformAdapter, ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
+import { hostedModelsPluginId, type ModelSettingsInput } from '@ricajs/plugin-hosted-models/shared'
+import type { ModelProvider } from '@ricajs/contracts/model-provider'
+import { PluginHostError, startPluginHost, type PluginDefinition } from '@ricajs/plugin-host'
+import { simulatedModelDefinition } from '@ricajs/plugin-simulated-model'
+import { hostedModelDefinition, observedHostedModelDefinition, type createModelSettingsStore } from '@ricajs/plugin-hosted-models'
+import type { RecordHostedUsage, UsagePurpose } from '@ricajs/plugin-hosted-models/providers/usage'
+import { simulatedPlatformDefinitions } from '@ricajs/plugin-simulated-platforms'
 
-import type { PluginMetadata } from '../packages/contracts/plugin-status.js'
+import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
 
 function metadata(kind: PluginMetadata['kind'], { id, version, contractVersion }: Omit<PluginMetadata, 'kind'>): PluginMetadata {
   return { kind, id, version, contractVersion }

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiSpinner } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiSpinner } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { auditView } from '../../../../../packages/contracts/management.js'
+import type { auditView } from '@ricajs/contracts/management'
 import { platformReviews, pluginAuditLabels } from '../../app/plugin-integrations.js'
-import { request, RequestError } from '@rica/console-shared/request'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Entry = z.infer<typeof auditView>
 type Page = { items: Entry[]; nextCursor: string | null }

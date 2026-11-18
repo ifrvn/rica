@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { z } from '@hono/zod-openapi'
-import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import type { ManagementPlugin } from '../../packages/runtime/management-http.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
+import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { createManagementApp } from './management.js'
 
 const origin = 'http://localhost:5173'

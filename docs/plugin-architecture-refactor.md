@@ -22,12 +22,12 @@
 
 | 工作区包 | 职责 |
 | --- | --- |
-| [`@rica/plugin-newbi`](../plugins/newbi/README.md) | Newbi 专用契约、协议、管理路由、账号资料、事件游标、发送账本、清理任务、命令和控制台组件。读取与发送分别注册和报告。 |
-| [`@rica/plugin-hosted-models`](../plugins/hosted-models/README.md) | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的协议适配、模型配置契约与存储、测试路由、控制台设置和健康节点。 |
-| `@rica/plugin-simulated-model` | 模拟决策与本地模板回复。外部模型复用这里的本地决策。 |
-| `@rica/plugin-simulated-platforms` | mock-a 与 mock-b 的模拟事件适配器。 |
-| `@rica/contracts`、`@rica/plugin-host` | 共用输入输出、插件定义、注册校验和生命周期。 |
-| `@rica/console-shared` | 宿主页面和插件组件共用的浏览器请求、错误处理和任务状态。 |
+| [`@ricajs/plugin-newbi`](../plugins/newbi/README.md) | Newbi 专用契约、协议、管理路由、账号资料、事件游标、发送账本、清理任务、命令和控制台组件。读取与发送分别注册和报告。 |
+| [`@ricajs/plugin-hosted-models`](../plugins/hosted-models/README.md) | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的协议适配、模型配置契约与存储、测试路由、控制台设置和健康节点。 |
+| `@ricajs/plugin-simulated-model` | 模拟决策与本地模板回复。外部模型复用这里的本地决策。 |
+| `@ricajs/plugin-simulated-platforms` | mock-a 与 mock-b 的模拟事件适配器。 |
+| `@ricajs/contracts`、`@ricajs/plugin-host` | 共用输入输出、插件定义、注册校验和生命周期。 |
+| `@ricajs/console-shared` | 宿主页面和插件组件共用的浏览器请求、错误处理和任务状态。 |
 
 数据库连接池由宿主创建。Newbi 的管理路由复用宿主的会话中间件和持久化权限规则，插件内的数据库适配按操作切换到对应的受限角色。通用账号管理在原事务内调用插件的资料查询、删除和恢复核验逻辑。宿主组合插件接口响应和部署配置。控制台在账号池、审批、插件中心和系统运行状况挂载插件提供的界面。包为仓库内的私有工作区成员，继续通过根目录的命令启动和构建。
 

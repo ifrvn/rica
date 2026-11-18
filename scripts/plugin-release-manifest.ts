@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { pluginReleaseManifest } from '../packages/contracts/plugin-status.js'
+import { pluginReleaseManifest } from '@ricajs/contracts/plugin-status'
 import { readPluginStatus } from '../apps/plugin-observation.js'
 
 const [releaseUrl, ...extra] = process.argv.slice(2)

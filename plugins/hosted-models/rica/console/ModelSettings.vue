@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { UiAlert, UiBadge, UiButton, UiDialog, UiEmpty, UiField, UiSpinner } from '@rica/console-shared/ui'
-import { useConsoleTask } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
+import { UiAlert, UiBadge, UiButton, UiDialog, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
+import { useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
 import { hostedModelCatalog } from '../../providers/catalog.js'
 import { modelSettingsContracts, type ModelCheckResult, type ModelSettingsView } from '../management/contracts.js'
 import { modelCheckLabels } from './labels.js'

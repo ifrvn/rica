@@ -1,6 +1,6 @@
 import { newbiReadError, type NewbiReadError } from '../management/contracts.js'
-import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '@rica/contracts/platform-reader'
-import type { RawQueryClient } from '../../../../packages/persistence/client.js'
+import { PlatformReadError, type PlatformEventPage, type PlatformEventReader } from '@ricajs/contracts/platform-reader'
+import type { RawQueryClient } from '@ricajs/persistence/client'
 
 type Claim = { ticket: string; cursor: string | null; agentId: string; bindingVersion: number; authEpoch: number }
 type Deferred = { nextAt: string }

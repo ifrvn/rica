@@ -3,7 +3,7 @@ import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, sco
 import { pollNewbiEvents } from '../persistence/events.js'
 import { executeNewbiReply } from '../persistence/execution.js'
 import { newbiExecutorKey } from '../runtime/identity.js'
-import type { PrismaClient } from '../../../../packages/persistence/generated/client.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { NewbiManagementOptions } from './routes.js'
 
 export function createNewbiOperations(db: PrismaClient, deploymentPlugins: NewbiConnectionStore): NewbiManagementOptions {

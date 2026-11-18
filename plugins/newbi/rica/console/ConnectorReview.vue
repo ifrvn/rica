@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../management/contracts.js'
-import { focusRecord, formatTime } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Summary = z.infer<typeof newbiReplySummary>
 type Reply = z.infer<typeof newbiReviewView>

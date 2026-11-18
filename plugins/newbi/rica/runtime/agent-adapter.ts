@@ -1,5 +1,5 @@
-import type { PlatformEventReader } from '@rica/contracts/platform-reader'
-import { PlatformReplyError, type PlatformReplyExecutor } from '@rica/contracts/platform-reply-executor'
+import type { PlatformEventReader } from '@ricajs/contracts/platform-reader'
+import { PlatformReplyError, type PlatformReplyExecutor } from '@ricajs/contracts/platform-reply-executor'
 import { createNewbiReadClient as createAgentReader, createNewbiReplyClient, NewbiApiError } from '../../agent-api/client.js'
 
 async function withPlatformErrors<T>(result: Promise<T>): Promise<T> {

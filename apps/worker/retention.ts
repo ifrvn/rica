@@ -1,6 +1,6 @@
-import { createDatabase } from '../../packages/persistence/client.js'
+import { createDatabase } from '@ricajs/persistence/client'
 import { sweepRuntimeRetention } from './runtime-retention.js'
-import { loadConfig } from '../../packages/runtime/config.js'
+import { loadConfig } from '@ricajs/runtime/config'
 
 const db = createDatabase(loadConfig().databaseUrl)
 try {

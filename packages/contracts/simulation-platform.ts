@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import type { Plugin } from '@rica/plugin-host'
+import type { Plugin } from '@ricajs/plugin-host'
 
 export const simulationPlatformId = z.enum(['mock-a', 'mock-b'])
 export const isSimulationPlatform = (platform: string) => simulationPlatformId.safeParse(platform).success

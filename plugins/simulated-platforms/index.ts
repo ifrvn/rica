@@ -1,6 +1,6 @@
-import { maxSimulatedTextLength } from '@rica/contracts/model-provider'
-import type { NormalizedPlatformEvent, PlatformAdapter } from '@rica/contracts/simulation-platform'
-import type { PluginDefinition } from '@rica/plugin-host'
+import { maxSimulatedTextLength } from '@ricajs/contracts/model-provider'
+import type { NormalizedPlatformEvent, PlatformAdapter } from '@ricajs/contracts/simulation-platform'
+import type { PluginDefinition } from '@ricajs/plugin-host'
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

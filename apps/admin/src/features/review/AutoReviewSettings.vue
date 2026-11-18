@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { UiAlert, UiButton, UiDialog, UiField, UiSpinner } from '@rica/console-shared/ui'
-import { characterPath, useConsoleTask } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
-import { defaultAutoReviewPrompt, type AutoReviewView } from '../../../../../packages/contracts/auto-review.js'
+import { UiAlert, UiButton, UiDialog, UiField, UiSpinner } from '@ricajs/console-shared/ui'
+import { characterPath, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
+import { defaultAutoReviewPrompt, type AutoReviewView } from '@ricajs/contracts/auto-review'
 
 const props = defineProps<{ characterId: string }>()
 const emit = defineEmits<{ expired: [] }>()

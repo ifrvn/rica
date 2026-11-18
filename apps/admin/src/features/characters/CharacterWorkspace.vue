@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { z } from '@hono/zod-openapi'
-import { maxAiDisclosureLength, type characterView, type identityView } from '../../../../../packages/contracts/management.js'
+import { maxAiDisclosureLength, type characterView, type identityView } from '@ricajs/contracts/management'
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
 import { isSimulationPlatform, platformAccounts, type ConnectorAccount, type ConnectorRegistration, type ConsoleWorkspace } from '../../app/plugin-integrations.js'
-import { request, RequestError } from '@rica/console-shared/request'
-import { hostedModelCatalog } from '@rica/plugin-hosted-models/shared'
+import { request, RequestError } from '@ricajs/console-shared/request'
+import { hostedModelCatalog } from '@ricajs/plugin-hosted-models/shared'
 
 type Workspace = ConsoleWorkspace
 type Character = z.infer<typeof characterView>
@@ -101,12 +101,12 @@ function accountControl(account: Account, revoke = false) {
     status: account.status, platform: account.platform, revoke })
 }
 const schemas = shallowRef<{
-  management: typeof import('../../../../../packages/contracts/management.js')
+  management: typeof import('@ricajs/contracts/management')
 }>()
 
 async function loadSchemas() {
   if (schemas.value) return
-  const management = await import('../../../../../packages/contracts/management.js')
+  const management = await import('@ricajs/contracts/management')
   if (active) schemas.value = { management }
 }
 const attempted = ref(false)

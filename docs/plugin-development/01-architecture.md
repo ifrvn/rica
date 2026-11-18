@@ -10,7 +10,7 @@
 | 外部平台写入 | 独立执行能力，配审批、许可、幂等回执及对账 | [写入能力](04-platform-safety.md#写入) |
 | 管理与控制台 | `ManagementPlugin` 加控制台贡献，可按需提供账号、设置、审批与健康视图 | [完整管理示例](07-worked-example.md)、[控制台契约](05-console.md) |
 
-一个包可以提供多种能力。假设 `@rica/plugin-acme` 对应部署 ID `acme`，它可以另外登记 `acme-reader` 和 `acme-executor` 作为两个运行组件。包名供工作区依赖解析，部署 ID 用于启停，组件 ID 用于版本绑定，进程 ID 用于状态展示。
+一个包可以提供多种能力。假设 `@ricajs/plugin-acme` 对应部署 ID `acme`，它可以另外登记 `acme-reader` 和 `acme-executor` 作为两个运行组件。包名供工作区依赖解析，部署 ID 用于启停，组件 ID 用于版本绑定，进程 ID 用于状态展示。
 
 ## 宿主与插件的分工
 
@@ -24,7 +24,7 @@
 
 ## 建包和装配
 
-1. 在 `plugins/<plugin-name>/` 新建私有 ESM 包。包名用 `@rica/plugin-<plugin-name>`。在 `index.ts` 集中导出服务端使用的接口，`package.json` 的根入口指向该文件。需要跨服务端和浏览器共享契约时增加 `/shared`，需要挂载界面时增加 `/console`。每个入口只导出宿主实际使用的内容。
+1. 在 `plugins/<plugin-name>/` 新建私有 ESM 包。包名用 `@ricajs/plugin-<plugin-name>`。在 `index.ts` 集中导出服务端使用的接口，`package.json` 的根入口指向该文件。需要跨服务端和浏览器共享契约时增加 `/shared`，需要挂载界面时增加 `/console`。每个入口只导出宿主实际使用的内容。
 2. 在插件清单声明本包直接使用的依赖，内部工作区包使用 `workspace:*`。宿主的依赖声明位于仓库根目录的 [package.json](../../package.json)。新插件路径已包含在 [pnpm 工作区](../../pnpm-workspace.yaml)及 TypeScript 检查范围中。
 3. 在 [运行时装配](../../apps/runtime-plugins.ts)、[管理 API 入口](../../apps/api/main.ts)、[部署目录](../../apps/deployment-plugin-contracts.ts)和[控制台装配](../../apps/admin/src/app/plugin-integrations.ts)中登记实际提供的能力。专用协议、文案、表单和持久化代码放在插件包内。
 4. 修改依赖后运行 `pnpm install` 更新根锁文件，再用 `pnpm install --frozen-lockfile` 验证。

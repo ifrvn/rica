@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import type { MemoryCandidate, RankedMemory } from '../contracts/memory.js'
+import type { MemoryCandidate, RankedMemory } from '@ricajs/contracts/memory'
 
 export const memoryRankingVersion = 2
 

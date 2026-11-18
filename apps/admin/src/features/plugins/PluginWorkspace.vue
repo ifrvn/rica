@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { UiAlert, UiButton, UiDialog, UiEmpty, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiDialog, UiEmpty, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import { deploymentPluginChange, deploymentPluginIds, type DeploymentPluginId, type DeploymentPluginsView } from '../../../../deployment-plugin-contracts.js'
-import { useConsoleTask } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
+import { useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
 import { pluginCards as cards, pluginServiceNames, registrationAvailable } from '../../app/plugin-integrations.js'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
-import type { PluginMetadata } from '../../../../../packages/contracts/plugin-status.js'
+import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean; canReview: boolean }>()
 const emit = defineEmits<{

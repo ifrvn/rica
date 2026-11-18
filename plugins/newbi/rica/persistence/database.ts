@@ -1,5 +1,5 @@
-import type { RawQueryClient } from '../../../../packages/persistence/client.js'
-import type { Prisma, PrismaClient } from '../../../../packages/persistence/generated/client.js'
+import type { RawQueryClient } from '@ricajs/persistence/client'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 import { startNewbiReader, type NewbiConnection } from '../runtime/reader.js'
 import { startNewbiExecutor } from '../runtime/executor.js'
 

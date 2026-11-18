@@ -1,7 +1,7 @@
-import { isSimulationPlatform } from '../contracts/simulation-platform.js'
+import { isSimulationPlatform } from '@ricajs/contracts/simulation-platform'
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
-import type { planInput, planView } from '../contracts/plans.js'
+import type { planInput, planView } from '@ricajs/contracts/plans'
 import { Prisma, type PrismaClient } from './generated/client.js'
 import { authorize, makePage, ManagementError, pageArgs, scheduleTiming, type Page, type Scope } from './management.js'
 

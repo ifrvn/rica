@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
-import { reviewTarget, type ActionView, type actionDecision } from '../contracts/action-review.js'
-import { simulationFollowUp } from '../contracts/simulation-follow-up.js'
-import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
+import { reviewTarget, type ActionView, type actionDecision } from '@ricajs/contracts/action-review'
+import { simulationFollowUp } from '@ricajs/contracts/simulation-follow-up'
+import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, denyPermission, ManagementError, type Scope } from './management.js'
-import { autoReviewerId, type ReviewPublicReply } from '../contracts/auto-review.js'
+import { autoReviewerId, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { lockAutoReview, readAutoReviewSettings } from './auto-review.js'
 
 export const simulationReviewPolicyVersion = 4

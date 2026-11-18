@@ -4,7 +4,7 @@
 
 ## 挂载管理 API
 
-在插件包导出返回 [`ManagementPlugin`](../../packages/runtime/management-http.ts) 的工厂，由 [API 启动入口](../../apps/api/main.ts)传入已装配的数据库、连接配置和授权函数。工厂返回稳定的 `id` 与 `registerRoutes(app)`。插件使用 `app.openapi` 声明输入、响应和错误，路由路径以管理应用为根。宿主统一挂载在 `/v1` 下，运行时的接口描述见登录后的 `GET /v1/openapi.json`。新路径使用插件名作为命名空间，并确认方法与路径组合属于该插件。
+在插件包导出返回 [`ManagementPlugin`](../../packages/persistence/management-http.ts) 的工厂，由 [API 启动入口](../../apps/api/main.ts)传入已装配的数据库、连接配置和授权函数。工厂返回稳定的 `id` 与 `registerRoutes(app)`。插件使用 `app.openapi` 声明输入、响应和错误，路由路径以管理应用为根。宿主统一挂载在 `/v1` 下，运行时的接口描述见登录后的 `GET /v1/openapi.json`。新路径使用插件名作为命名空间，并确认方法与路径组合属于该插件。
 
 宿主提供会话、写请求 Origin 检查、请求大小限制和错误包络。路由继续验证该操作的权限及资源归属。角色作用域的管理接口先根据已认证的 `actor`、`characterId` 调用持久化层的 `authorize`，并在查询中绑定目标角色。角色管理员可审批及查看审计记录。部署级操作使用本地部署管理员权限，参考 [API 启动入口](../../apps/api/main.ts)对 `localIssuer` 和 `canCreate` 的检查。
 
@@ -12,7 +12,7 @@
 
 ## ManagementPlugin
 
-从 `packages/runtime/management-http.ts` 导入类型。在 `plugins/<id>/management.ts` 使用本仓库的 ESM 写法 `../../packages/runtime/management-http.js`。
+从 `@ricajs/persistence/management-http` 导入类型，并在插件的 `package.json` 声明 `@ricajs/persistence` 依赖。
 
 ```ts
 type ManagementPrincipal = { issuer: string; subject: string; id: string; canCreate?: boolean }
@@ -242,10 +242,10 @@ $ricaDeployment.acme
 
 ```ts
 import { z } from '@hono/zod-openapi'
-import { resourceId } from '@rica/contracts/management'
-import { ManagementError, registerAccount } from '../../packages/persistence/management.js'
-import type { Prisma } from '../../packages/persistence/generated/client.js'
-import type { ManagementPlugin } from '../../packages/runtime/management-http.js'
+import { resourceId } from '@ricajs/contracts/management'
+import { ManagementError, registerAccount } from '@ricajs/persistence/management'
+import type { Prisma } from '@ricajs/persistence/prisma'
+import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 
 const registration = z.strictObject({
   platform: z.literal('acme'),

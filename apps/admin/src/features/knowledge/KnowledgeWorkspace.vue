@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, identityView, memoryProvenanceView, memoryView } from '../../../../../packages/contracts/management.js'
+import type { accountView, identityView, memoryProvenanceView, memoryView } from '@ricajs/contracts/management'
 import MemoryGrantWorkspace from './MemoryGrantWorkspace.vue'
-import { characterPath, focusRecord, formatTime, queryPath, readAll, useConsoleTask, type Page } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { characterPath, focusRecord, formatTime, queryPath, readAll, useConsoleTask, type Page } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Memory = z.infer<typeof memoryView>
 type Provenance = z.infer<typeof memoryProvenanceView>

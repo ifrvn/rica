@@ -1,7 +1,7 @@
 import { z } from '@hono/zod-openapi'
-import { newbiConfiguration, newbiDeployment } from '@rica/plugin-newbi/shared'
-import { hostedModelsPluginId } from '@rica/plugin-hosted-models/shared'
-import { pluginStage } from '../packages/contracts/deployment-plugins.js'
+import { newbiConfiguration, newbiDeployment } from '@ricajs/plugin-newbi/shared'
+import { hostedModelsPluginId } from '@ricajs/plugin-hosted-models/shared'
+import { pluginStage } from '@ricajs/contracts/deployment-plugins'
 
 const hostedModelsDeployment = {
   id: hostedModelsPluginId,

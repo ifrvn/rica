@@ -1,5 +1,5 @@
 import type { z } from '@hono/zod-openapi'
-import type { conversationListQuery, memberListQuery } from '../contracts/management.js'
+import type { conversationListQuery, memberListQuery } from '@ricajs/contracts/management'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, makePage, ManagementError, pageArgs, parsePage, type Page, type Scope } from './management.js'
 

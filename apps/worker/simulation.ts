@@ -1,8 +1,8 @@
 import 'dotenv/config'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { createDatabase } from '../../packages/persistence/client.js'
-import { runtimeDatabaseUrl } from '../../packages/runtime/config.js'
-import { runSimulationBatch } from '../../packages/persistence/simulation-execution.js'
+import { createDatabase } from '@ricajs/persistence/client'
+import { runtimeDatabaseUrl } from '@ricajs/runtime/config'
+import { runSimulationBatch } from '@ricajs/persistence/simulation-execution'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 

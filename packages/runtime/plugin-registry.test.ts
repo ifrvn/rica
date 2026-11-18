@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { startCognitionPlugins, startSimulationPlatforms } from '../../apps/runtime-plugins.js'
-import { PluginHostError, startPluginHost, type PluginDefinition } from '@rica/plugin-host'
+import { PluginHostError, startPluginHost, type PluginDefinition } from '@ricajs/plugin-host'
 
 test('registration rejects duplicate IDs, incompatible contracts and unknown model configuration', async () => {
   const enabled = await startCognitionPlugins({})

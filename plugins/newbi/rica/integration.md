@@ -30,7 +30,7 @@ Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在
 已经持有宿主数据库客户端和配置存储时，可以按下例装配，回调中使用的数据库权限由操作工厂切换。
 
 ```ts
-import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@rica/plugin-newbi'
+import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@ricajs/plugin-newbi'
 
 const settings = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const operations = createNewbiOperations(runtimeDb, settings)

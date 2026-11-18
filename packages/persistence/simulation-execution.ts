@@ -1,5 +1,5 @@
-import { reviewTarget } from '../contracts/action-review.js'
-import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/simulation-platform.js'
+import { reviewTarget } from '@ricajs/contracts/action-review'
+import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import { simulationReviewPolicyVersion } from './action-review.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 

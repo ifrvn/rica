@@ -1,5 +1,5 @@
 import type { z } from '@hono/zod-openapi'
-import type { accountView, characterWorkspaceView, identityView } from '../../../../../packages/contracts/management.js'
+import type { accountView, characterWorkspaceView, identityView } from '@ricajs/contracts/management'
 
 type Account = z.infer<typeof accountView>
 type Identity = z.infer<typeof identityView>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { UiButton, UiField } from '@rica/console-shared/ui'
+import { UiButton, UiField } from '@ricajs/console-shared/ui'
 const props = defineProps<{ value: string; busy: boolean }>()
 const emit = defineEmits<{ close: []; save: [endpoint: string] }>()
 const endpoint = ref(props.value)

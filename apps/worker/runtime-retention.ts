@@ -1,6 +1,6 @@
-import { newbiRetentionSweep } from '@rica/plugin-newbi'
-import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import { sweepSimulationRetention } from '../../packages/persistence/simulation-retention.js'
+import { newbiRetentionSweep } from '@ricajs/plugin-newbi'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
+import { sweepSimulationRetention } from '@ricajs/persistence/simulation-retention'
 
 export function sweepRuntimeRetention(db: PrismaClient) {
   return sweepSimulationRetention(db, newbiRetentionSweep)

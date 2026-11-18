@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ModelAttribution } from '@rica/contracts/model-provider'
+import type { ModelAttribution } from '@ricajs/contracts/model-provider'
 import type { HostedModel } from './catalog.js'
 
 export type UsagePurpose = 'DRAFT' | 'REVIEW' | 'CHECK'

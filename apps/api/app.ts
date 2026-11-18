@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import type { Readiness } from '../../packages/contracts/health.js'
+import type { Readiness } from '@ricajs/contracts/health'
 
 import type { createAdminAuth } from './admin-auth-routes.js'
 import type { createManagementApp } from './management.js'

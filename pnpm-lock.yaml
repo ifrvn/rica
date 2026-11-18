@@ -178,27 +178,33 @@ importers:
       '@prisma/client':
         specifier: ^7.10.1
         version: 7.10.1(@typescript/typescript6@6.0.2)(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
-      '@rica/console-shared':
+      '@ricajs/console-shared':
         specifier: workspace:*
         version: link:packages/console-shared
-      '@rica/contracts':
+      '@ricajs/contracts':
         specifier: workspace:*
         version: link:packages/contracts
-      '@rica/plugin-host':
+      '@ricajs/persistence':
+        specifier: workspace:*
+        version: link:packages/persistence
+      '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:packages/plugin-host
-      '@rica/plugin-hosted-models':
+      '@ricajs/plugin-hosted-models':
         specifier: workspace:*
         version: link:plugins/hosted-models
-      '@rica/plugin-newbi':
+      '@ricajs/plugin-newbi':
         specifier: workspace:*
         version: link:plugins/newbi
-      '@rica/plugin-simulated-model':
+      '@ricajs/plugin-simulated-model':
         specifier: workspace:*
         version: link:plugins/simulated-model
-      '@rica/plugin-simulated-platforms':
+      '@ricajs/plugin-simulated-platforms':
         specifier: workspace:*
         version: link:plugins/simulated-platforms
+      '@ricajs/runtime':
+        specifier: workspace:*
+        version: link:packages/runtime
       '@simplewebauthn/browser':
         specifier: ^14.0.0
         version: 14.0.0
@@ -217,6 +223,9 @@ importers:
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
+      prisma:
+        specifier: ^7.10.1
+        version: 7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       reka-ui:
         specifier: ^2.11.0
         version: 2.11.0(vue@3.5.45(@typescript/typescript6@6.0.2))
@@ -248,9 +257,6 @@ importers:
       '@vitejs/plugin-vue':
         specifier: ^6.0.10
         version: 6.0.10(vite@8.3.6(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(vue@3.5.45(@typescript/typescript6@6.0.2))
-      prisma:
-        specifier: ^7.10.1
-        version: 7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -269,6 +275,9 @@ importers:
 
   packages/console-shared:
     dependencies:
+      '@vue/runtime-core':
+        specifier: ^3.5.45
+        version: 3.5.45
       reka-ui:
         specifier: ^2.11.0
         version: 2.11.0(vue@3.5.45(@typescript/typescript6@6.0.2))
@@ -285,29 +294,71 @@ importers:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
-      '@rica/plugin-host':
+      '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
 
+  packages/persistence:
+    dependencies:
+      '@hono/zod-openapi':
+        specifier: ^1.6.3
+        version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@prisma/adapter-pg':
+        specifier: ^7.10.1
+        version: 7.10.1
+      '@prisma/client':
+        specifier: ^7.10.1
+        version: 7.10.1(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3))(typescript@6.0.3)
+      '@ricajs/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@ricajs/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+      '@ricajs/plugin-simulated-model':
+        specifier: workspace:*
+        version: link:../../plugins/simulated-model
+      '@ricajs/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+
   packages/plugin-host: {}
+
+  packages/runtime:
+    dependencies:
+      '@ricajs/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      dotenv:
+        specifier: ^18.0.9
+        version: 18.0.9
 
   plugins/hosted-models:
     dependencies:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
-      '@rica/console-shared':
+      '@ricajs/console-shared':
         specifier: workspace:*
         version: link:../../packages/console-shared
-      '@rica/contracts':
+      '@ricajs/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@rica/plugin-host':
+      '@ricajs/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+      '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
-      '@rica/plugin-simulated-model':
+      '@ricajs/plugin-simulated-model':
         specifier: workspace:*
         version: link:../simulated-model
+      '@ricajs/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@vue/runtime-core':
+        specifier: ^3.5.45
+        version: 3.5.45
       vue:
         specifier: ^3.5.45
         version: 3.5.45(@typescript/typescript6@6.0.2)
@@ -324,15 +375,27 @@ importers:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
-      '@rica/console-shared':
+      '@prisma/client':
+        specifier: ^7.10.1
+        version: 7.10.1(@typescript/typescript6@6.0.2)(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
+      '@ricajs/console-shared':
         specifier: workspace:*
         version: link:../../packages/console-shared
-      '@rica/contracts':
+      '@ricajs/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@rica/plugin-host':
+      '@ricajs/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+      '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
+      '@ricajs/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@vue/runtime-core':
+        specifier: ^3.5.45
+        version: 3.5.45
       vue:
         specifier: ^3.5.45
         version: 3.5.45(@typescript/typescript6@6.0.2)
@@ -343,19 +406,19 @@ importers:
 
   plugins/simulated-model:
     dependencies:
-      '@rica/contracts':
+      '@ricajs/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@rica/plugin-host':
+      '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
 
   plugins/simulated-platforms:
     dependencies:
-      '@rica/contracts':
+      '@ricajs/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@rica/plugin-host':
+      '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
 
@@ -2766,6 +2829,13 @@ snapshots:
       prisma: 7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       typescript: '@typescript/typescript6@6.0.2'
 
+  '@prisma/client@7.10.1(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3))(typescript@6.0.3)':
+    dependencies:
+      '@prisma/client-runtime-utils': 7.10.1
+    optionalDependencies:
+      prisma: 7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
+      typescript: 6.0.3
+
   '@prisma/config@7.10.1':
     dependencies:
       c12: 3.3.4
@@ -2798,6 +2868,27 @@ snapshots:
       zeptomatch: 2.1.0
     transitivePeerDependencies:
       - typescript
+
+  '@prisma/dev@0.24.17(typescript@6.0.3)':
+    dependencies:
+      '@electric-sql/pglite': 0.4.3
+      '@electric-sql/pglite-socket': 0.1.3(@electric-sql/pglite@0.4.3)
+      '@electric-sql/pglite-tools': 0.3.3(@electric-sql/pglite@0.4.3)
+      '@prisma/get-platform': 7.2.0
+      '@prisma/query-plan-executor': 7.2.0
+      '@prisma/streams-local': 0.1.11
+      find-my-way: 9.7.0
+      foreground-child: 3.3.1
+      get-port-please: 3.2.0
+      pathe: 2.0.3
+      proper-lockfile: 4.1.2
+      remeda: 2.33.4
+      std-env: 3.10.0
+      valibot: 1.4.2(typescript@6.0.3)
+      zeptomatch: 2.1.0
+    transitivePeerDependencies:
+      - typescript
+    optional: true
 
   '@prisma/driver-adapter-utils@7.10.1':
     dependencies:
@@ -3997,6 +4088,25 @@ snapshots:
       - react
       - react-dom
 
+  prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3):
+    dependencies:
+      '@prisma/config': 7.10.1
+      '@prisma/dev': 0.24.17(typescript@6.0.3)
+      '@prisma/engines': 7.10.1
+      '@prisma/studio-core': 0.33.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      mysql2: 3.24.4(@types/node@24.19.2)
+      postgres: 3.4.7
+    optionalDependencies:
+      typescript: 6.0.3
+    transitivePeerDependencies:
+      - '@types/node'
+      - '@types/react'
+      - '@types/react-dom'
+      - magicast
+      - react
+      - react-dom
+    optional: true
+
   proper-lockfile@4.1.2:
     dependencies:
       graceful-fs: 4.2.11
@@ -4210,6 +4320,11 @@ snapshots:
   valibot@1.4.2(@typescript/typescript6@6.0.2):
     optionalDependencies:
       typescript: '@typescript/typescript6@6.0.2'
+
+  valibot@1.4.2(typescript@6.0.3):
+    optionalDependencies:
+      typescript: 6.0.3
+    optional: true
 
   vite@8.3.6(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1):
     dependencies:

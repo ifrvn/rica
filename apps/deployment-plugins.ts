@@ -5,8 +5,8 @@ import {
   deploymentConfigurations, deploymentPluginChange, deploymentPluginId, deploymentPluginIds,
   deploymentPluginsView, type DeploymentPluginId, type DeploymentPluginsView,
 } from './deployment-plugin-contracts.js'
-import { pluginStage } from '../packages/contracts/deployment-plugins.js'
-import { writeSettings } from '../packages/runtime/write-settings.js'
+import { pluginStage } from '@ricajs/contracts/deployment-plugins'
+import { writeSettings } from '@ricajs/runtime/write-settings'
 
 const recordSchema = z.strictObject({
   version: z.number().int().nonnegative(),

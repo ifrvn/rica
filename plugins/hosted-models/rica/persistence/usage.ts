@@ -1,4 +1,4 @@
-import type { PrismaClient } from '../../../../packages/persistence/generated/client.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { RecordHostedUsage } from '../../providers/usage.js'
 import { usageView, type UsageQuery, type UsageRow } from '../management/usage-contracts.js'
 

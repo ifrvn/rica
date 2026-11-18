@@ -1,12 +1,12 @@
 import { createRoute, z, type OpenAPIHono } from '@hono/zod-openapi'
-import { resourceId, versionHeader } from '@rica/contracts/management'
+import { resourceId, versionHeader } from '@ricajs/contracts/management'
 import type { ModelCheckStatus, ModelSettingsView } from './contracts.js'
 import { checkModel } from './check.js'
 import { ModelSettingsError, type createModelSettingsStore } from './settings.js'
 import { hostedModelsPluginId } from '../identity.js'
-import { ManagementError } from '../../../../packages/persistence/management.js'
+import { ManagementError } from '@ricajs/persistence/management'
 import { usageQuery, usageView, type UsageQuery } from './usage-contracts.js'
-import { body, error, errors, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '../../../../packages/runtime/management-http.js'
+import { body, error, errors, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin, type ManagementPrincipal } from '@ricajs/persistence/management-http'
 
 export function createHostedModelManagement({ modelSettings, authorize, isEnabled, startModelPlugin, readUsage }: {
   modelSettings: ReturnType<typeof createModelSettingsStore>

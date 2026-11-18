@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@rica/console-shared/ui'
-import { queryPath, useConsoleTask } from '@rica/console-shared/console-data'
-import { request, RequestError } from '@rica/console-shared/request'
+import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
+import { queryPath, useConsoleTask } from '@ricajs/console-shared/console-data'
+import { request, RequestError } from '@ricajs/console-shared/request'
 import { hostedModelCatalog } from '../../providers/catalog.js'
 import { maxUsageDays, usageQuery, type UsageRow } from '../management/usage-contracts.js'
 

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { UiAlert, UiButton, UiBadge } from '@rica/console-shared/ui'
-import type { PluginService } from '../../../../../packages/contracts/plugin-status.js'
-import type { Readiness } from '../../../../../packages/contracts/health.js'
+import { UiAlert, UiButton, UiBadge } from '@ricajs/console-shared/ui'
+import type { PluginService } from '@ricajs/contracts/plugin-status'
+import type { Readiness } from '@ricajs/contracts/health'
 import { platformHealth, hostedModelHealth, hasAccountHealthLink } from '../../app/plugin-integrations.js'
-import { formatTime } from '@rica/console-shared/console-data'
+import { formatTime } from '@ricajs/console-shared/console-data'
 import { usePluginStatus } from '../plugins/plugin-status.js'
 
-import type { HealthNode as Node } from '@rica/console-shared/health'
+import type { HealthNode as Node } from '@ricajs/console-shared/health'
 const props = defineProps<{ characterId: string; readiness?: Readiness; checkedAt?: string; checking: boolean; initialNode?: string }>()
 const emit = defineEmits<{ expired: []; plugins: []; accounts: []; runs: []; check: [] }>()
 const { status, busy, error, refresh: refreshPlugins } = usePluginStatus(props.characterId, () => emit('expired'))

@@ -1,11 +1,11 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import type { Redis } from 'ioredis'
-import type { PrismaClient } from '../../packages/persistence/generated/client.js'
-import type { ManagementPrincipal } from '../../packages/runtime/management-http.js'
-import { localIssuer, passwordInput } from '../../packages/contracts/local-users.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
+import type { ManagementPrincipal } from '@ricajs/persistence/management-http'
+import { localIssuer, passwordInput } from '@ricajs/contracts/local-users'
 
-export { localIssuer, passwordInput, usernameInput } from '../../packages/contracts/local-users.js'
+export { localIssuer, passwordInput, usernameInput } from '@ricajs/contracts/local-users'
 export const sessionSeconds = 8 * 60 * 60
 export const sessionToken = /^[A-Za-z0-9_-]{43}$/u
 const dummyHash = '0'.repeat(32) + ':' + '0'.repeat(64)

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '../../../../../packages/contracts/management.js'
-import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from '@rica/console-shared/console-data'
-import { request } from '@rica/console-shared/request'
+import type { accountView, conversationOption, grantView, identityView, memoryGrantInput, memoryView } from '@ricajs/contracts/management'
+import { characterPath, formatTime, queryPath, useConsoleTask, type Page } from '@ricajs/console-shared/console-data'
+import { request } from '@ricajs/console-shared/request'
 
 type Identity = z.infer<typeof identityView>
 type Account = z.infer<typeof accountView>
