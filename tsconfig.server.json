@@ -8,5 +8,5 @@
     "scripts/**/*.ts",
     "prisma.config.ts"
   ],
-  "exclude": ["packages/console-shared/ui/**", "plugins/**/console/**"]
+  "exclude": ["packages/console-shared/ui/**", "packages/simulation/console/**", "plugins/**/console/**"]
 }

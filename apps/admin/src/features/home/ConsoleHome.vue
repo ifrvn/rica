@@ -7,7 +7,7 @@ import type { simulationBacklogView, simulationRunSummary } from '@ricajs/simula
 import { characterPath, formatTime, readAll, useConsoleTask, type Page } from '@ricajs/console-shared/console-data'
 import { consoleHash, type ConsolePage } from '../../app/console-location.js'
 import { platformReviews, type ReviewQueue } from '../../app/plugin-integrations.js'
-import { simulationAccounts } from '../runs/simulation-accounts.js'
+import { simulationAccounts } from '@ricajs/simulation/console/accounts'
 import { request } from '@ricajs/console-shared/request'
 
 type Backlog = z.infer<typeof simulationBacklogView>

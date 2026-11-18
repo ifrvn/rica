@@ -17,6 +17,10 @@
     "registry": "https://registry.npmjs.org/"
   },
   "exports": {
+    "./console": "./console/index.ts",
+    "./console/accounts": "./console/simulation-accounts.ts",
+    "./console/metrics": "./console/MetricsWorkspace.vue",
+    "./console/run-filters": "./console/run-filters.ts",
     "./contracts/follow-up": "./contracts/follow-up.ts",
     "./contracts/observability": "./contracts/observability.ts",
     "./contracts/platforms": "./contracts/platforms.ts",
@@ -34,9 +38,15 @@
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",
+    "@ricajs/console-shared": "workspace:*",
     "@ricajs/contracts": "workspace:*",
     "@ricajs/persistence": "workspace:*",
     "@ricajs/plugin-host": "workspace:*",
-    "@ricajs/runtime": "workspace:*"
+    "@ricajs/runtime": "workspace:*",
+    "@vue/runtime-core": "^3.5.45",
+    "vue": "^3.5.45"
+  },
+  "devDependencies": {
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }

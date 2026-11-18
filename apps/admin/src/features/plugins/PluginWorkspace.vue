@@ -7,7 +7,7 @@ import { request } from '@ricajs/console-shared/request'
 import { pluginCards as cards, pluginServiceNames, registrationAvailable } from '../../app/plugin-integrations.js'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
 import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
-import BuiltInPlugins from './BuiltInPlugins.vue'
+import { SimulationComponents } from '@ricajs/simulation/console'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean; canReview: boolean }>()
 const emit = defineEmits<{
@@ -18,9 +18,23 @@ const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
 const deployment = computed(() => status.value?.deployment)
-function updateBuiltIn(updated: DeploymentPluginsView) {
+async function saveSimulationPlatforms(platforms: NonNullable<DeploymentPluginsView['simulationPlatforms']> | null) {
+  if (!deployment.value) return
+  const updated = await request<DeploymentPluginsView>('/v1/deployment-plugins', {
+    method: 'PUT',
+    headers: { 'If-Match': '"' + deployment.value.version + '"', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'CONFIGURE_SIMULATED_PLATFORMS', platforms }),
+  })
   if (status.value) status.value = { ...status.value, deployment: updated }
   emit('deploymentChanged', updated)
+}
+
+async function selectLocalModel() {
+  const { version } = await request<{ version: number }>('/v1/model-settings')
+  await request('/v1/model-settings/active', {
+    method: 'PUT', headers: { 'If-Match': '"' + version + '"', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: null }),
+  })
 }
 const editing = ref<DeploymentPluginId>()
 const changedPlugin = ref<DeploymentPluginId>()
@@ -128,8 +142,10 @@ function changeStage(id: DeploymentPluginId) {
     <UiEmpty v-else-if="!deployment" description="暂无部署插件目录。" />
     <template v-else>
       <UiAlert v-if="release?.status === 'UNAVAILABLE'" tone="warning" role="status">发布清单暂不可用。部署维护者可核对清单文件，再刷新插件。</UiAlert>
-      <BuiltInPlugins v-if="status" :status="status" :deployment="deployment" :can-configure="canConfigureModel"
-        @expired="expired" @changed="updateBuiltIn" @refresh="refresh" />
+      <SimulationComponents v-if="status" :services="status.services" :platforms="deployment.simulationPlatforms"
+        :configured-model="deployment.plugins['hosted-models'] === 'ENABLED' ? deployment.configuredModel : null"
+        :can-configure="canConfigureModel" :save-platforms="saveSimulationPlatforms" :select-local-model="selectLocalModel"
+        @expired="expired" @refresh="refresh" />
       <article v-for="id in deploymentPluginIds" :key="id" class="console-record-workspace plugin-card"
         :aria-labelledby="'plugin-heading-' + id">
         <div class="console-section-heading plugin-title">

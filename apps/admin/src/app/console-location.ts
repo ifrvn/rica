@@ -1,7 +1,7 @@
+import { runFilterKeys } from '@ricajs/simulation/console/run-filters'
+
 export type ConsolePage = 'home' | 'character' | 'review' | 'runs' | 'outbox' | 'audit' | 'plugins' | 'health' | 'connector' | 'accounts' | 'members' | 'knowledge' | 'growth' | 'planning' | 'metrics' | 'model-usage'
 export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string; reviewPlugin?: string; reviewStatus?: string; auditTarget?: string; healthNode?: 'simulation-executor' }
-
-export const runFilterKeys = ['state', 'identityId', 'accountId', 'from', 'through'] as const
 
 const id = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu
 

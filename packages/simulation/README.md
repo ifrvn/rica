@@ -8,6 +8,7 @@
 | [workflow/](workflow/) | 模拟入站、草稿生成、自动审批与人工复审、定时触发、执行许可、回执和对账。 |
 | [operations/](operations/) | 群聊模拟记录、运行回放、指标、积压查询、失败任务重试和保留清理。 |
 | [contracts/](contracts/) | 模拟平台适配协议、审批、后续行动、运行记录和指标的请求及响应结构。 |
+| [console/](console/) | 模拟群聊、运行详情、模拟审批、失败任务、指标和内置组件配置卡。 |
 
 ## 运行链路
 
@@ -18,6 +19,8 @@
 ## 接入与验证
 
 API 和 Worker 通过 `@ricajs/simulation/model`、`@ricajs/simulation/execution` 等子路径使用实现。控制台和 API 可通过 `@ricajs/simulation/contracts/*` 共用模拟契约。共享权限、事务工具和 Prisma Client 来自 `@ricajs/persistence`。账号管理共用的平台标识与模型接口来自 `@ricajs/contracts`。
+
+管理端通过 `@ricajs/simulation/console` 装配模拟页面和配置卡，并通过 `@ricajs/simulation/console/metrics` 按需加载指标页。宿主负责导航、会话和部署设置写入，组件使用 `@ricajs/console-shared` 提供的 UI 与请求工具。
 
 管理端可在「插件中心」的「模拟平台」卡片配置模拟平台。各进程优先读取部署设置，其次读取 `RICA_SIMULATED_PLATFORMS`，两处均未设置时启用 `mock-a` 和 `mock-b`。本地开发用 `pnpm run dev:simulation` 启动模拟执行器。
 

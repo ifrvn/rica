@@ -15,6 +15,7 @@
     "apps/**/*.ts",
     "apps/**/*.vue",
     "packages/**/*.ts",
+    "packages/**/*.vue",
     "plugins/**/*.ts",
     "plugins/**/*.vue",
     "scripts/**/*.ts",

@@ -329,6 +329,9 @@ importers:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@ricajs/console-shared':
+        specifier: workspace:*
+        version: link:../console-shared
       '@ricajs/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -341,6 +344,16 @@ importers:
       '@ricajs/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@vue/runtime-core':
+        specifier: ^3.5.45
+        version: 3.5.45
+      vue:
+        specifier: ^3.5.45
+        version: 3.5.45(@typescript/typescript6@6.0.2)
+    devDependencies:
+      typescript:
+        specifier: npm:@typescript/typescript6@^6.0.2
+        version: '@typescript/typescript6@6.0.2'
 
   plugins/hosted-models:
     dependencies:

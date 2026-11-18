@@ -9,17 +9,13 @@ import {
 } from 'reka-ui'
 import ConsoleNavigation from './ConsoleNavigation.vue'
 import { startAuthentication } from '@simplewebauthn/browser'
-import SimulationWorkspace from '../features/runs/SimulationWorkspace.vue'
-import RunOperations from '../features/runs/RunOperations.vue'
+import { RunOperations, SimulationReview, SimulationWorkspace, useSimulationReview } from '@ricajs/simulation/console'
 import AutoReviewSettings from '../features/review/AutoReviewSettings.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
-import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
-import type { ActionView } from '@ricajs/simulation/contracts/review'
-import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
 import type { Readiness } from '@ricajs/contracts/health'
 
 defineProps<{ readiness?: Readiness; checkedAt?: string; checkingReadiness: boolean }>()
@@ -32,7 +28,7 @@ const KnowledgeWorkspace = defineAsyncComponent(() => import('../features/knowle
 const MembershipWorkspace = defineAsyncComponent(() => import('../features/access/MembershipWorkspace.vue'))
 const CreateAccount = defineAsyncComponent(() => import('../features/access/CreateAccount.vue'))
 const SecuritySettings = defineAsyncComponent(() => import('../features/access/SecuritySettings.vue'))
-const MetricsWorkspace = defineAsyncComponent(() => import('../features/runs/MetricsWorkspace.vue'))
+const MetricsWorkspace = defineAsyncComponent(() => import('@ricajs/simulation/console/metrics'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
 const ModelUsage = defineAsyncComponent(() => import('@ricajs/plugin-hosted-models/console').then(({ ModelUsage }) => ModelUsage))
@@ -40,7 +36,6 @@ const SystemHealth = defineAsyncComponent(() => import('../features/health/Syste
 
 type Character = z.infer<typeof characterView>
 type Page<T> = { items: T[]; nextCursor: string | null }
-type Decision = 'APPROVE' | 'REJECT'
 
 const usernameInput = ref('')
 const password = ref('')
@@ -77,14 +72,6 @@ const pageTitle: Record<ConsolePage, string> = {
   'model-usage': '外部模型统计',
 }
 const detailId = ref<string>()
-const reviewListHeading = ref<HTMLElement>()
-const reviewDetailHeading = ref<HTMLElement>()
-watch(detailId, (id, previous) => {
-  if (tab.value === 'review') void nextTick(() => {
-    if (tab.value === 'review' && id === detailId.value) focusRecord('review-row-', id, previous,
-      reviewDetailHeading.value, reviewListHeading.value)
-  })
-})
 const runQuery = ref('')
 const startSimulation = ref(false)
 const connectorAccountId = ref<string>()
@@ -95,8 +82,6 @@ const characterCursor = ref<string | null>(null)
 const installedReviews = ref<string[]>([])
 const reviewPlugin = ref<string>()
 const reviewStatus = ref<string>()
-const reviewHistory = computed(() => tab.value === 'review' && ['HISTORY', 'APPROVE', 'REJECT'].includes(reviewStatus.value ?? ''))
-let reviewTimer: ReturnType<typeof setTimeout> | undefined
 const auditTarget = ref<string>()
 const activePlatformReview = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)
   ?? (reviewPlugin.value ? undefined : platformReviews.find(({ id }) => installedReviews.value.includes(id)) ?? platformReviews[0]))
@@ -109,29 +94,13 @@ function refreshReviewTabs(deployment: DeploymentPluginsView) {
 const characterId = ref('')
 const characterOptions = computed(() => characters.value.map(({ id, profile, slug }) => ({ label: profile?.name || slug, value: id })))
 const currentCharacter = computed(() => characters.value.find(({ id }) => id === characterId.value))
-const actions = ref<ActionView[]>([])
-const nextCursor = ref<string | null>(null)
-let queueLoaded = false
-const selected = ref<ActionView>()
-const reason = ref('')
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
-let pending: { signature: string; key: string } | undefined
-const path = computed(() => '/v1/characters/' + encodeURIComponent(characterId.value) + '/actions')
-const statusText: Record<ActionView['state'], string> = {
-  WAITING_APPROVAL: '待审批', READY: '已批准', REJECTED: '已拒绝', CANCELED: '已失效', EXPIRED: '已过期',
-  EXECUTING: '模拟执行中', RECONCILING: '待对账', SIMULATED: '模拟完成', BLOCKED: '执行已拦截',
-}
-
-function statusTone(state: ActionView['state']) {
-  if (state === 'WAITING_APPROVAL' || state === 'RECONCILING') return 'warning'
-  if (state === 'READY' || state === 'SIMULATED') return 'success'
-  if (state === 'BLOCKED' || state === 'REJECTED') return 'error'
-  return 'default'
-}
-
-
+const { actions, nextCursor, selected, reason, reviewHistory, loadQueue, loadRoute,
+  fetchAction, decide, clearQueue, resetReview, hideContent } = useSimulationReview({
+  characterId, reviewStatus, busy, notice, revision: () => revision, run,
+})
 function authPost<T>(path: string, data: object = {}) {
   return request<T>('/v1/auth/' + path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
@@ -159,9 +128,7 @@ async function run(task: () => Promise<void>, scope?: number) {
       409: '当前操作无法完成，请刷新后重试。', 412: '提案已更新，请重新打开后核对。',
       422: '提交的信息无法验证。', 429: '尝试次数过多，请稍后再试。', 503: '管理服务暂时不可用。',
     } as Record<number, string>)[status] ?? '操作未完成，请重试。'
-    if ([401, 403, 404, 409, 412].includes(status) && selected.value) {
-      selected.value = { ...selected.value, content: null }
-    }
+    if ([401, 403, 404, 409, 412].includes(status)) hideContent()
   } finally {
     busy.value = false
   }
@@ -213,9 +180,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
   const changedCharacter = target !== characterId.value
   const changedPage = tab.value !== location?.page
   if (changedCharacter || changedPage || (location?.page === 'review' && reviewStatus.value !== location.reviewStatus)) {
-    actions.value = []
-    nextCursor.value = null
-    queueLoaded = false
+    clearQueue()
   }
   resetReview()
   error.value = ''
@@ -253,10 +218,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
         runQuery: runQuery.value, startSimulation: startSimulation.value, connectorAccountId: connectorAccountId.value,
         reviewPlugin: reviewPlugin.value, reviewStatus: reviewStatus.value, auditTarget: auditTarget.value, healthNode: healthNode.value }))
     }
-    if (tab.value === 'review') {
-      if (!queueLoaded) await fetchQueue(current)
-      if (current === revision && location.detail) await fetchAction(location.detail, current)
-    }
+    if (tab.value === 'review') await loadRoute(location.detail, current)
   } catch (cause) {
     if (current !== revision) return
     const status = cause instanceof RequestError ? cause.status : 0
@@ -304,7 +266,6 @@ function syncNavigation(event: MediaQueryListEvent) {
 }
 
 onBeforeUnmount(() => {
-  clearTimeout(reviewTimer)
   navigationBreakpoint.removeEventListener('change', syncNavigation)
   ++revision
   window.removeEventListener('hashchange', restoreLocation)
@@ -335,13 +296,6 @@ async function passkeyLogin() {
   })
 }
 
-function resetReview() {
-  clearTimeout(reviewTimer)
-  selected.value = undefined
-  reason.value = ''
-  pending = undefined
-}
-
 async function disconnect() {
   await run(async () => {
     await authPost('logout')
@@ -366,9 +320,7 @@ function resetSession() {
   characterCursor.value = null
   characters.value = []
   characterId.value = ''
-  actions.value = []
-  nextCursor.value = null
-  queueLoaded = false
+  clearQueue()
   error.value = ''
   notice.value = ''
   resetReview()
@@ -402,42 +354,8 @@ function closeSecuritySettings() {
   void nextTick(() => document.getElementById('console-account-menu')?.focus())
 }
 
-async function fetchQueue(current: number, append = false) {
-  const query = new URLSearchParams()
-  if (reviewHistory.value) query.set('status', reviewStatus.value!)
-  if (append && nextCursor.value) query.set('cursor', nextCursor.value)
-  const result = await request<Page<ActionView>>(path.value + (query.size ? '?' + query : ''))
-  if (current !== revision) return
-  actions.value = append ? [...actions.value, ...result.items] : result.items
-  nextCursor.value = result.nextCursor
-  queueLoaded = true
-}
-
-async function loadQueue(append = false) {
-  const current = revision
-  await run(async () => {
-    await fetchQueue(current, append)
-    const preview = selected.value
-    if (current === revision && !append && preview?.state === 'WAITING_APPROVAL'
-      && !actions.value.some(({ id }) => id === preview.id)) selected.value = { ...preview, content: null }
-  }, current)
-}
-
 function changeCharacter(id: string) {
   navigate({ characterId: id, page: 'character' })
-}
-
-async function fetchAction(id: string, current: number) {
-  clearTimeout(reviewTimer)
-  const action = await request<ActionView>(path.value + '/' + id)
-  if (current !== revision) return
-  selected.value = action
-  if (action.autoReviewPending) reviewTimer = setTimeout(() => {
-    if (current === revision) void run(async () => {
-      await fetchAction(id, current)
-      if (current === revision && selected.value?.state !== 'WAITING_APPROVAL') await fetchQueue(current)
-    }, current)
-  }, 1500)
 }
 
 function openAction(id?: string) {
@@ -456,33 +374,6 @@ function openRunAudit(id: string) {
   navigate({ characterId: characterId.value, page: 'audit', detail: id })
 }
 
-async function decide(decision: Decision) {
-  const proposal = selected.value
-  const note = reason.value.trim()
-  if (busy.value || !proposal?.content || proposal.state !== 'WAITING_APPROVAL' || proposal.autoReviewPending) return
-  const data = { decision, reviewDigest: proposal.reviewDigest, reason: note || undefined }
-  const signature = JSON.stringify([proposal.id, proposal.version, data])
-  if (pending?.signature !== signature) pending = { signature, key: crypto.randomUUID() }
-  const { key } = pending
-  const current = revision
-  await run(async () => {
-    const outcome = await request<{ status: 'READY' | 'REJECTED'; version: number }>(
-      path.value + '/' + proposal.id + '/decisions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'If-Match': '"run-v' + proposal.version + '"',
-          'Idempotency-Key': key },
-        body: JSON.stringify(data),
-      },
-    )
-    if (current !== revision) return
-    actions.value = actions.value.filter(({ id }) => id !== proposal.id)
-    selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version,
-      review: { decision, at: new Date().toISOString(), reason: note || null } }
-    reason.value = ''
-    pending = undefined
-    notice.value = outcome.status === 'READY' ? '已批准，等待模拟执行。' : '已拒绝模拟提案。'
-  }, current)
-}
 </script>
 
 <template>
@@ -686,130 +577,12 @@ async function decide(decision: Decision) {
           @all="navigate({ characterId, page: 'connector', reviewPlugin: activePlatformReview?.id, reviewStatus })" />
         <UiEmpty v-else description="此插件未注册审批页面。" />
       </template>
-      <div v-else-if="tab === 'review' && characterId" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
-        <section class="console-split-list" aria-labelledby="review-list-heading">
-          <div class="console-section-heading">
-            <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">模拟提案</h3>
-            <UiButton size="small" variant="quiet" :disabled="busy || routing" @click="loadQueue()">刷新</UiButton>
-          </div>
-          <UiField label="审批状态" for="simulation-review-status">
-            <select id="simulation-review-status" class="ui-control" :value="reviewHistory ? reviewStatus : 'WAITING'"
-              @change="navigate({ characterId, page: 'review', reviewStatus: ($event.target as HTMLSelectElement).value })">
-              <option value="WAITING">待审批</option>
-              <option value="HISTORY">审批历史</option>
-              <option value="APPROVE">已批准</option>
-              <option value="REJECT">已拒绝</option>
-            </select>
-          </UiField>
-          <UiSpinner v-if="routing && !actions.length" aria-label="正在加载提案" />
-          <UiEmpty v-else-if="!actions.length && !busy && !error" :description="reviewHistory ? '暂无符合条件的审批记录。' : '暂无待审批提案。'" />
-          <ul v-if="actions.length" class="console-select-list">
-            <li v-for="item in actions" :key="item.id">
-              <button :id="'review-row-' + item.id" type="button" class="console-record" :disabled="busy"
-                :aria-current="detailId === item.id ? 'true' : undefined" @click="openAction(item.id)">
-                <span class="console-record-main">
-                  <strong>{{ item.target.identity }}</strong>
-                  <span>{{ item.target.platform }} · {{ item.target.account }}</span>
-                  <span class="console-record-meta">{{ item.target.audience === 'PUBLIC' ? '公开' : '私聊' }} · {{ item.target.conversation }}</span>
-                  <time v-if="item.review" class="console-record-meta" :datetime="item.review.at">{{ formatTime(item.review.at) }}</time>
-                </span>
-                <UiBadge v-if="item.autoReviewPending" tone="info">AI 审核中</UiBadge>
-                <UiBadge v-else-if="item.review" :tone="item.review.decision === 'APPROVE' ? 'success' : 'error'">
-                  {{ item.autoApproved ? 'AI 已批准' : item.review.decision === 'APPROVE' ? '人工已批准' : '已拒绝' }}
-                </UiBadge>
-                <UiBadge v-else :tone="statusTone(item.state)">{{ statusText[item.state] }}</UiBadge>
-              </button>
-            </li>
-          </ul>
-          <UiButton v-if="nextCursor" size="small" variant="quiet" :disabled="busy" @click="loadQueue(true)">加载更多</UiButton>
-        </section>
 
-        <section v-if="detailId" class="console-split-detail proposal" aria-labelledby="review-detail-heading">
-          <div class="console-section-heading">
-            <h3 id="review-detail-heading" ref="reviewDetailHeading" tabindex="-1">模拟回复</h3>
-            <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction()">返回列表</UiButton>
-          </div>
-          <UiSpinner v-if="routing && !selected" aria-label="正在加载提案" />
-          <div v-if="selected" class="console-actions proposal-actions">
-            <UiBadge>模拟执行</UiBadge>
-            <UiBadge :tone="statusTone(selected.state)">{{ statusText[selected.state] }}</UiBadge>
-            <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction(selected.id)">重新核对</UiButton>
-            <UiButton size="small" variant="quiet" :disabled="busy" @click="openRun(selected.runId)">查看模拟运行</UiButton>
-          </div>
-          <UiButton v-else-if="error" size="small" :disabled="busy" @click="openAction(detailId)">重新加载提案</UiButton>
-          <template v-if="selected">
-            <dl class="metadata">
-              <div><dt>平台</dt><dd>{{ selected.target.platform }} / {{ selected.target.instance }}</dd></div>
-              <div><dt>身份与账号</dt><dd>{{ selected.target.identity }} / {{ selected.target.account }}</dd></div>
-              <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
-              <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
-              <div v-if="selected.review"><dt>审批决定</dt><dd>{{ selected.autoApproved ? 'AI 已批准' : selected.review.decision === 'APPROVE' ? '人工已批准' : '人工已拒绝' }} · {{ formatTime(selected.review.at) }}</dd></div>
-              <div v-if="selected.review?.reason"><dt>审批理由</dt><dd>{{ selected.review.reason }}</dd></div>
-            </dl>
-            <UiAlert v-if="selected.autoReviewPending" tone="info">AI 审核中，结果会自动更新。</UiAlert>
-            <UiAlert v-if="!selected.autoReviewHandoff && selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
-              此回复与其他平台的内容相似，请核对后再审批。
-            </UiAlert>
-            <template v-if="selected.content">
-              <section aria-labelledby="simulation-context-heading">
-                <h4 id="simulation-context-heading">原消息</h4>
-                <template v-if="selected.messageContext">
-                  <p class="console-record-meta">
-                    {{ selected.messageContext.trigger.sender ? selected.messageContext.trigger.sender + ' · ' : '' }}
-                    {{ formatTime(selected.messageContext.trigger.occurredAt) }}
-                  </p>
-                  <p v-if="selected.messageContext.trigger.content" class="console-payload">{{ selected.messageContext.trigger.content }}</p>
-                  <p v-else class="console-record-meta">原消息正文已过保留期或不可用。</p>
-                  <details v-if="selected.messageContext.previous.length">
-                    <summary>查看同一会话此前的 {{ selected.messageContext.previous.length }} 条消息</summary>
-                    <ol class="review-context-list">
-                      <li v-for="message in selected.messageContext.previous" :key="message.id">
-                        <div class="console-record-meta">{{ message.sender ? message.sender + ' · ' : '' }}{{ formatTime(message.occurredAt) }}</div>
-                        <p class="console-payload">{{ message.content }}</p>
-                      </li>
-                    </ol>
-                  </details>
-                </template>
-                <p v-else class="console-record-meta">当前无法读取原消息。</p>
-              </section>
-              <h4>拟回复内容</h4>
-              <p class="console-payload">{{ selected.content }}</p>
-              <UiAlert v-if="selected.followUp" tone="info">
-                <strong>{{ selected.followUp.kind === 'PLAN' ? 'AI 拟定计划' : 'AI 拟登记承诺' }} · {{ selected.followUp.title }}</strong>
-                <p>{{ selected.followUp.task }}</p>
-                <p v-if="selected.followUp.dailyAt">每日 {{ selected.followUp.dailyAt }} · {{ selected.followUp.zone }}</p>
-                <p v-else-if="selected.followUp.dueAt">截止 {{ new Date(selected.followUp.dueAt).toLocaleString() }}</p>
-                <ul v-if="selected.followUp.participants?.length" class="follow-up-participants">
-                  <li v-for="participant in selected.followUp.participants" :key="participant.accountId">
-                    <strong>{{ participant.identity }} · {{ participant.platform }} / {{ participant.account }}</strong>
-                    <span v-if="participant.task">{{ participant.task }}</span>
-                  </li>
-                </ul>
-                <p>批准后，模拟回执确认且参与账号仍有效时自动登记。</p>
-              </UiAlert>
-            </template>
-            <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
-            <UiAlert v-if="selected.content && selected.autoReviewHandoff && selected.state === 'WAITING_APPROVAL'" tone="warning">
-              <strong>{{ autoReviewHandoffLabels[selected.autoReviewHandoff.status] }}</strong>
-              <p>{{ selected.autoReviewHandoff.reason }}</p>
-              <small v-if="selected.autoReviewHandoff.model">审核模型 {{ selected.autoReviewHandoff.model }}</small>
-            </UiAlert>
-            <form v-if="selected.state === 'WAITING_APPROVAL' && selected.content && !selected.autoReviewPending"
-              @submit.prevent="decide('APPROVE')">
-              <UiField label="审批理由（选填）" for="review-reason">
-                <textarea class="ui-control" v-model="reason" :rows="3" :maxlength="240"
-                  id="review-reason" :disabled="busy" placeholder="例如：已核对目标和拟发送内容"></textarea>
-              </UiField>
-              <div class="decision-buttons">
-                <UiButton tone="primary" type="submit" :disabled="busy">
-                  {{ selected.followUp ? '批准回复及后续事项' : '批准模拟回复' }}
-                </UiButton>
-                <UiButton tone="error" :disabled="busy" @click="decide('REJECT')">拒绝</UiButton>
-              </div>
-            </form>
-          </template>
-        </section>
-      </div>
+      <SimulationReview v-else-if="tab === 'review' && characterId"
+        v-model:reason="reason" :actions="actions" :next-cursor="nextCursor" :selected="selected"
+        :detail-id="detailId" :review-status="reviewStatus" :review-history="reviewHistory"
+        :routing="routing" :busy="busy" :error="error" @open="openAction" @refresh="loadQueue"
+        @filter="navigate({ characterId, page: 'review', reviewStatus: $event })" @run="openRun" @decide="decide" />
 
       </div>
       </div>
@@ -826,7 +599,7 @@ async function decide(decision: Decision) {
 .login-card :deep(.ui-field + .ui-field) { margin-block-start: .625rem; }
 .login-actions { display: grid; gap: .625rem; margin-block-start: .625rem; }
 .login-alert { margin-block: .5rem; }
-.workspace-header, .account-actions, .decision-buttons { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
+.workspace-header, .account-actions { display: flex; gap: .625rem; align-items: center; flex-wrap: wrap; }
 .workspace-header { justify-content: space-between; }
 .account-menu { z-index: 20; box-sizing: border-box; width: min(12rem, var(--reka-popper-available-width, calc(100vw - 1.5rem)));
   display: grid; gap: .125rem; padding: .25rem; background: var(--console-surface); color: var(--console-text);
@@ -863,22 +636,11 @@ async function decide(decision: Decision) {
 .role-picker { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .role-picker > label { flex: none; color: var(--console-muted); }
 .role-picker :deep(.ui-combobox) { width: clamp(7rem, 15vw, 13rem); }
-.proposal-actions { margin-bottom: .75rem; }
-.review-context-list { display: grid; gap: .75rem; margin-block: .75rem; padding-inline-start: 1.5rem; }
-.review-context-list .console-payload { margin-block: .25rem 0; }
-.metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
-.metadata dt { color: var(--console-muted); font-size: .8125rem; }
-.metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }
-.proposal h4 { margin: 0 0 .375rem; font-size: .875rem; }
-.follow-up-participants { margin-block: .5rem; padding-inline-start: 1rem; overflow-wrap: anywhere; }
-.follow-up-participants span { display: block; }
-.decision-buttons { margin-block-start: .75rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 46rem) {
   .workspace-shell--with-nav { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 30rem) {
   .account-name { max-width: 7rem; }
-  .metadata { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

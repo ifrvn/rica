@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { UiAlert, UiButton, UiField } from '@ricajs/console-shared/ui'
-import type { ReconciliationView } from '@ricajs/simulation/contracts/review'
+import type { ReconciliationView } from '../contracts/review.js'
 import { request, RequestError } from '@ricajs/console-shared/request'
 
 const props = defineProps<{ characterId: string; actionId: string }>()
