@@ -181,7 +181,7 @@ export const acmeConfiguration = {
 | `GET /v1/characters/{characterId}/plugins` | 角色 ADMIN | 无查询参数或请求体。 | 200，进程状态、部署信息和已注册的状态贡献。 |
 | `PUT /v1/deployment-plugins` | 本地部署管理员 | 版本。请求体为 `{ action, id }`，或者已注册的插件配置动作及其字段。 | 200，最新部署视图。 |
 
-通用动作 `action` 为 `INSTALL`、`ENABLE` 或 `DISABLE`，`id` 取当前部署目录中的插件 ID。状态依次为 `NOT_INSTALLED → INSTALLED → ENABLED`，停用回到 `INSTALLED`。非法状态转换返回 409，版本过期返回 412。
+通用动作 `action` 为 `INSTALL`、`ENABLE`、`DISABLE` 或 `UNINSTALL`，`id` 取当前部署目录中的插件 ID。状态依次为 `NOT_INSTALLED → INSTALLED → ENABLED`，停用回到 `INSTALLED`。卸载从 `INSTALLED` 或 `ENABLED` 回到 `NOT_INSTALLED`，保留配置和业务记录。非法状态转换返回 409，版本过期返回 412。
 
 插件在核验连接、读取或发送前应检查当前启用状态、设置和账号绑定。历史查询与执行入口各自校验权限。
 

@@ -52,13 +52,14 @@ export function createDeploymentPluginStore(directory: string) {
       const current = view(record, provider)
       if ('id' in change) {
         const transition = {
-          INSTALL: ['NOT_INSTALLED', 'INSTALLED'],
-          ENABLE: ['INSTALLED', 'ENABLED'],
-          DISABLE: ['ENABLED', 'INSTALLED'],
+          INSTALL: { from: ['NOT_INSTALLED'], to: 'INSTALLED' },
+          ENABLE: { from: ['INSTALLED'], to: 'ENABLED' },
+          DISABLE: { from: ['ENABLED'], to: 'INSTALLED' },
+          UNINSTALL: { from: ['INSTALLED', 'ENABLED'], to: 'NOT_INSTALLED' },
         } as const
-        const [before, after] = transition[change.action]
-        if (current.plugins[change.id] !== before) throw new DeploymentPluginError('PLUGIN_STATE_CONFLICT')
-        record.plugins[change.id] = after
+        const { from, to } = transition[change.action]
+        if (!from.some((stage) => current.plugins[change.id] === stage)) throw new DeploymentPluginError('PLUGIN_STATE_CONFLICT')
+        record.plugins[change.id] = to
       } else {
         const configuration = deploymentConfigurations.find(({ change: schema }) => schema.shape.action.value === change.action)
         if (!configuration || current.plugins[configuration.id] !== 'ENABLED') throw new DeploymentPluginError('PLUGIN_STATE_CONFLICT')

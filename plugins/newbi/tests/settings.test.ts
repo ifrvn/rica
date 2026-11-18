@@ -18,7 +18,7 @@ async function fixture(t: TestContext) {
   return directory
 }
 
-test('Newbi settings accept only the endpoint and disabling fences existing clients', async (t) => {
+test('Newbi settings accept only the endpoint and uninstalling fences clients while preserving settings', async (t) => {
   const plugins = createDeploymentPluginStore(await fixture(t))
   const origin = 'http://localhost:5173'
   const app = createManagementApp({
@@ -50,6 +50,21 @@ test('Newbi settings accept only the endpoint and disabling fences existing clie
   assert.equal((await pluginChange({ action: 'DISABLE', id: 'newbi' }, 3)).status, 200)
   assert.equal(await newbi.readNewbi(), undefined)
   await assert.rejects(oldExecutor.verify(), /Newbi configuration changed/)
+
+  assert.equal((await pluginChange({ action: 'ENABLE', id: 'newbi' }, 4)).status, 200)
+  assert.equal((await pluginChange({ action: 'UNINSTALL', id: 'newbi' }, 4)).status, 412)
+  assert.equal(await newbi.isInstalled(), true)
+  const uninstalled = await pluginChange({ action: 'UNINSTALL', id: 'newbi' }, 5)
+  assert.equal(uninstalled.status, 200)
+  assert.equal((await uninstalled.json()).plugins.newbi, 'NOT_INSTALLED')
+  assert.equal(await newbi.isInstalled(), false)
+  assert.equal(await newbi.readNewbi(), undefined)
+  await assert.rejects(oldExecutor.verify(), /Newbi configuration changed/)
+  assert.equal((await pluginChange({ action: 'UNINSTALL', id: 'newbi' }, 6)).status, 409)
+  assert.equal((await pluginChange({ action: 'INSTALL', id: 'newbi' }, 6)).status, 200)
+  assert.equal(await newbi.readNewbi(), undefined)
+  assert.equal((await pluginChange({ action: 'ENABLE', id: 'newbi' }, 7)).status, 200)
+  assert.deepEqual(await newbi.readNewbi(), { endpoint })
 })
 
 test('release previews detect both Newbi components and reject incompatible upgrades', async (t) => {

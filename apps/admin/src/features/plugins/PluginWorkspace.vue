@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiSpinner, UiBadge } from '@rica/console-shared/ui'
+import { UiAlert, UiButton, UiDialog, UiEmpty, UiSpinner, UiBadge } from '@rica/console-shared/ui'
 import { deploymentPluginChange, deploymentPluginIds, type DeploymentPluginId, type DeploymentPluginsView } from '../../../../deployment-plugin-contracts.js'
 import { useConsoleTask } from '@rica/console-shared/console-data'
 import { request } from '@rica/console-shared/request'
@@ -19,6 +19,7 @@ const { busy, error, active, run } = useConsoleTask(expired)
 const deployment = computed(() => status.value?.deployment)
 const editing = ref<DeploymentPluginId>()
 const changedPlugin = ref<DeploymentPluginId>()
+const uninstalling = ref<DeploymentPluginId>()
 const releasePreview = ref<DeploymentPluginId>()
 const stages = { NOT_INSTALLED: '未安装', INSTALLED: '已安装 · 未启用', ENABLED: '已启用' } as const
 const operations = { NOT_INSTALLED: 'INSTALL', INSTALLED: 'ENABLE', ENABLED: 'DISABLE' } as const
@@ -85,6 +86,11 @@ function update(id: DeploymentPluginId, data: unknown) {
     status.value = { ...status.value, deployment: updated,
       ...registrationAvailable(updated) }
     emit('deploymentChanged', updated)
+    if (parsed.data.action === 'UNINSTALL') {
+      uninstalling.value = undefined
+      if (releasePreview.value === id) releasePreview.value = undefined
+      void nextTick(() => document.getElementById('plugin-heading-' + id)?.focus())
+    }
     if (editing.value === id) {
       editing.value = undefined
       void nextTick(() => document.getElementById('plugin-heading-' + id)?.focus())
@@ -152,11 +158,13 @@ function changeStage(id: DeploymentPluginId) {
               :aria-expanded="releasePreview === id" :aria-controls="'plugin-release-' + id" @click="toggleRelease(id)">
               {{ releasePreview === id ? '收起版本检查' : upgrades.has(id) ? '检查升级' : '核对运行版本' }}
             </UiButton>
+            <UiButton v-if="canConfigureModel && deployment.plugins[id] !== 'NOT_INSTALLED'" size="small" variant="quiet"
+              tone="error" :disabled="busy || loading" @click="uninstalling = id; error = ''">卸载</UiButton>
             <UiButton v-if="canConfigureModel" size="small" :tone="deployment.plugins[id] === 'ENABLED' ? 'warning' : 'primary'"
               :variant="deployment.plugins[id] === 'ENABLED' ? 'quiet' : 'solid'" :disabled="busy || loading"
               :loading="busy && changedPlugin === id && editing !== id" @click="changeStage(id)">
-              {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装 ' + labels[id]
-                : deployment.plugins[id] === 'INSTALLED' ? '启用 ' + labels[id] : '停用 ' + labels[id] }}
+              {{ deployment.plugins[id] === 'NOT_INSTALLED' ? '安装'
+                : deployment.plugins[id] === 'INSTALLED' ? '启用' : '停用' }}
             </UiButton>
           </div>
         </div>
@@ -215,7 +223,7 @@ function changeStage(id: DeploymentPluginId) {
           </div>
         </section>
 
-        <UiAlert v-if="error && changedPlugin === id" tone="error" role="alert">{{ error }}</UiAlert>
+        <UiAlert v-if="error && changedPlugin === id && !uninstalling" tone="error" role="alert">{{ error }}</UiAlert>
         <component v-if="canConfigureModel && editing === id && deployment.plugins[id] === 'ENABLED'"
           :is="cards[id].editor" :id="'plugin-config-' + id" class="plugin-config"
           v-bind="cards[id].editorProps(deployment, canStartSimulation)" :busy="busy"
@@ -223,6 +231,20 @@ function changeStage(id: DeploymentPluginId) {
           @saved="refresh" @simulate="emit('simulate')" />
       </article>
     </template>
+    <UiDialog :open="!!uninstalling" title="卸载插件" :busy="busy"
+      @update:open="open => { if (!open) uninstalling = undefined }">
+      <template v-if="uninstalling">
+        <p class="plugin-uninstall-description">
+          卸载「{{ labels[uninstalling] }}」会停用插件并将其标记为未安装。已保存的配置和业务记录会保留。
+        </p>
+        <UiAlert v-if="error && changedPlugin === uninstalling" tone="error">{{ error }}</UiAlert>
+        <div class="console-actions plugin-uninstall-actions">
+          <UiButton variant="quiet" :disabled="busy" @click="uninstalling = undefined">取消</UiButton>
+          <UiButton tone="error" :loading="busy" :disabled="loading"
+            @click="update(uninstalling, { action: 'UNINSTALL', id: uninstalling })">卸载</UiButton>
+        </div>
+      </template>
+    </UiDialog>
   </div>
 </template>
 
@@ -236,8 +258,11 @@ function changeStage(id: DeploymentPluginId) {
 .plugin-components { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .625rem; margin: 0; padding: 0; }
 .plugin-components li, .plugin-component { display: grid; gap: .25rem; padding: .25rem .75rem; border-inline-start: 2px solid var(--console-line); }
 .plugin-components code, .plugin-component small, .plugin-integration > span { color: var(--console-muted); overflow-wrap: anywhere; }
-.plugin-integration { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .625rem; }
+.plugin-integration { display: flex; flex-wrap: wrap; align-items: center; gap: .625rem; }
+.plugin-integration > .console-actions { margin-inline-start: auto; justify-content: flex-end; }
 .plugin-config { border-top: 1px solid var(--console-line); padding-block-start: 1rem; }
 .plugin-release-steps { display: grid; gap: .5rem; padding-inline-start: 1.25rem; }
 .plugin-release-actions { margin-block-start: .75rem; }
+.plugin-uninstall-description { overflow-wrap: anywhere; }
+.plugin-uninstall-actions { margin-block-start: .875rem; justify-content: flex-end; }
 </style>

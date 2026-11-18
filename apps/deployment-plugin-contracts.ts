@@ -14,7 +14,7 @@ export const deploymentPluginId = z.enum(deploymentPluginIds)
 export type DeploymentPluginId = z.infer<typeof deploymentPluginId>
 export const deploymentConfigurations = [newbiConfiguration] as const
 export const deploymentPluginChange = z.discriminatedUnion('action', [
-  z.strictObject({ action: z.enum(['INSTALL', 'ENABLE', 'DISABLE']), id: deploymentPluginId }),
+  z.strictObject({ action: z.enum(['INSTALL', 'ENABLE', 'DISABLE', 'UNINSTALL']), id: deploymentPluginId }),
   ...deploymentConfigurations.map(({ change }) => change),
 ])
 export const deploymentPluginsView = z.object({
