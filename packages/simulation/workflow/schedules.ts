@@ -1,7 +1,6 @@
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 import { dailyScheduleSlot, lockEventContext, lockSimulatedBinding, runQueuedEvent } from '@ricajs/persistence/run-context'
 
-const catchUpMs = 2 * 60 * 60 * 1000
 const batchSize = 16
 export const scheduleSourcePrefix = 'schedule:'
 
@@ -25,25 +24,27 @@ export async function dispatchSimulationSchedule(db: PrismaClient, scheduleId: s
     if (!schedule.nextAt) return
     const context = await lockEventContext(tx, binding, schedule)
     if (!context) return
-    const { timezone } = await tx.character.findUniqueOrThrow({
-      where: { id: binding.characterId }, select: { timezone: true },
+    const { timezone, simulationQuietEnabled, simulationQuietFrom, simulationQuietUntil, simulationCatchUpMinutes } = await tx.character.findUniqueOrThrow({
+      where: { id: binding.characterId }, select: { timezone: true, simulationQuietEnabled: true,
+        simulationQuietFrom: true, simulationQuietUntil: true, simulationCatchUpMinutes: true },
     })
     const slot = schedule.kind === 'DAILY'
       ? await dailyScheduleSlot(tx, schedule.zone, schedule.localTime!, now, true)
       : schedule.dueAt!
-    const [window] = await tx.$queryRaw<{ currentHour: number; slotHour: number }[]>`
-      SELECT extract(hour FROM ${now}::timestamptz AT TIME ZONE ${timezone})::int AS "currentHour",
-        extract(hour FROM ${slot}::timestamptz AT TIME ZONE ${timezone})::int AS "slotHour"
-    `
-    const open = window.currentHour >= 8 && window.currentHour < 22
-    let nextAt: Date | null
-    if (schedule.kind === 'DAILY') nextAt = await dailyScheduleSlot(tx, schedule.zone, schedule.localTime!, now)
-    else nextAt = open ? null : await dailyScheduleSlot(tx, timezone, '08:00', now)
+    const [window] = simulationQuietEnabled ? await tx.$queryRaw<{ openAt: Date; slotOpen: boolean }[]>`
+      SELECT public.rica_simulation_next_open(
+        ${now}::timestamptz, ${timezone}, ${simulationQuietFrom}::time, ${simulationQuietUntil}::time) AS "openAt",
+        public.rica_simulation_next_open(${slot}::timestamptz, ${timezone},
+          ${simulationQuietFrom}::time, ${simulationQuietUntil}::time) = ${slot}::timestamptz AS "slotOpen"
+    ` : []
+    const deferredUntil = window && window.openAt > now ? window.openAt : null
+    const nextAt = schedule.kind === 'DAILY'
+      ? await dailyScheduleSlot(tx, schedule.zone, schedule.localTime!, now) : deferredUntil
     await tx.simulationSchedule.update({ where: { id: schedule.id }, data: { nextAt } })
 
-    if (!open || (schedule.kind === 'DAILY'
-      && (slot < schedule.nextAt || now.getTime() - slot.getTime() > catchUpMs
-        || window.slotHour < 8 || window.slotHour >= 22))) return
+    if (deferredUntil || (schedule.kind === 'DAILY'
+      && (slot < schedule.nextAt || now.getTime() - slot.getTime() > simulationCatchUpMinutes * 60_000
+        || window?.slotOpen === false))) return
 
     const key = { scheduleId: schedule.id, scheduledAt: slot }
     if (await tx.scheduleOccurrence.findUnique({ where: { scheduleId_scheduledAt: key }, select: { runId: true } })) return

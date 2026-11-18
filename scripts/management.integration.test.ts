@@ -24,6 +24,7 @@ import { createManagementApp } from '../apps/api/management.js'
 import { createAutoReviewer } from '../apps/auto-review.js'
 import { deriveMemory, revokeMemoryAccess } from '@ricajs/persistence/memory'
 import { reviewTarget } from '@ricajs/simulation/contracts/review'
+import { defaultSimulationSettings } from '@ricajs/simulation/contracts/settings'
 import { autoReviewSimulation, decideReviewAction, listReviewActions } from '@ricajs/simulation/review'
 import { autoReviewerId, defaultAutoReviewPrompt, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { sweepSimulationRetention } from '@ricajs/simulation/retention'
@@ -1148,6 +1149,60 @@ test('simulation rate limits the same contact across conversations for a rolling
   }
 })
 
+test('role simulation settings authorize and version edits and release a waiting simulation', async () => {
+  const path = characterPath(a) + '/simulation-settings'
+  const executor = simulationDatabase()
+  const previousRole = await owner.character.findUniqueOrThrow({ where: { id: a }, select: { status: true, timezone: true } })
+  const previousIdentity = await owner.identity.findUniqueOrThrow({ where: { id: identityA }, select: { status: true } })
+  try {
+    await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+    await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+    const original = await request('GET', path)
+    assert.equal(original.status, 200, JSON.stringify(original.body))
+    assert.deepEqual(original.body.settings, defaultSimulationSettings)
+    assert.equal((await request('GET', path, { actor: null })).status, 401)
+    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+    const data = { ...original.body.settings, simulationDailyLimit: 1, simulationCooldownMinutes: 90,
+      simulationProposalHours: 6, simulationQuietFrom: '11:00', simulationQuietUntil: '13:00' }
+    assert.equal((await request('PUT', path, { actor: 'nonmember', ifMatch: '"0"', data })).status, 404)
+    assert.equal((await request('PUT', path, { data })).status, 428)
+    assert.equal((await request('PUT', path, { ifMatch: '"0"', data: { ...data, simulationDailyLimit: -1 } })).status, 422)
+    const changed = await request('PUT', path, { ifMatch: '"0"', data })
+    assert.equal(changed.status, 200, JSON.stringify(changed.body))
+    assert.equal(changed.body.version, 1)
+    assert.deepEqual((await request('GET', path)).body.settings, data)
+    assert.equal((await request('PUT', path, { ifMatch: '"0"', data: defaultSimulationSettings })).status, 412)
+    assert.deepEqual((await request('GET', characterPath(b) + '/simulation-settings', { actor: 'admin-b' })).body.settings,
+      defaultSimulationSettings)
+
+    const accountId = await newSimulationAccount()
+    const contact = await owner.contact.create({ data: { characterId: a, identityId: identityA, accountId, remoteKey: randomUUID() } })
+    const first = (await approveSimulation(accountId, contact.id)).action
+    const second = (await approveSimulation(accountId, contact.id)).action
+    assert.ok(Math.abs(first.expiresAt.getTime() - first.createdAt.getTime() - 6 * 3_600_000) < 2_000)
+    const replay = async () => (await request('GET', characterPath(a) + '/runs/' + second.runId + '/replay')).body.executionWait
+    assert.equal((await replay()).reason, 'QUIET_HOURS')
+    const relaxed = { ...data, simulationQuietEnabled: false }
+    assert.equal((await request('PUT', path, { ifMatch: '"1"', data: relaxed })).status, 200)
+    await executeSimulation(executor, first.id, simulationPlatforms.resolveAdapter)
+    assert.equal((await replay()).reason, 'DAILY_LIMIT')
+    assert.equal(await reserveSimulation(executor, second.id, simulationPlatforms.resolveAdapter), false)
+    assert.equal((await request('PUT', path, { ifMatch: '"2"', data: { ...relaxed, simulationDailyLimit: 0 } })).status, 200)
+    assert.equal((await replay()).reason, 'CONTACT_COOLDOWN')
+    assert.equal((await request('PUT', path, { ifMatch: '"3"', data: {
+      ...relaxed, simulationDailyLimit: 0, simulationCooldownMinutes: 0,
+    } })).status, 200)
+    assert.equal(await replay(), null)
+    await executeSimulation(executor, second.id, simulationPlatforms.resolveAdapter)
+    assert.equal(await owner.simulationReceipt.count({ where: { actionId: { in: [first.id, second.id] } } }), 2)
+    assert.equal(await owner.managementAudit.count({ where: { characterId: a, operation: 'simulation.settings' } }), 4)
+  } finally {
+    await owner.character.update({ where: { id: a }, data: { ...previousRole, ...defaultSimulationSettings, simulationLimitsVersion: 0 } })
+    await owner.identity.update({ where: { id: identityA }, data: previousIdentity })
+    await executor.$disconnect()
+  }
+})
+
 async function crashSimulationProcess(actionId: string, checkpoint: 'permit' | 'receipt') {
   const program = `
     import { createDatabase } from '@ricajs/persistence/client'
@@ -1347,6 +1402,45 @@ test('parallel schedule scans catch up only the latest eligible slot and edits c
     })).status, 412)
     await owner.simulationSchedule.update({ where: { id: stale.body.id }, data: { enabled: false, nextAt: null } })
   } finally {
+    await runtime.$disconnect()
+  }
+})
+
+test('changing simulation quiet hours wakes a deferred reminder and applies the catch-up window', async () => {
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const settingsPath = characterPath(a) + '/simulation-settings'
+  const previousRole = await owner.character.findUniqueOrThrow({ where: { id: a }, select: { status: true, timezone: true } })
+  const previousIdentity = await owner.identity.findUniqueOrThrow({ where: { id: identityA }, select: { status: true } })
+  const previousAccount = await owner.platformAccount.findUniqueOrThrow({ where: { id: accountA }, select: { status: true } })
+  try {
+    await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: 'UTC' } })
+    await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+    await owner.platformAccount.update({ where: { id: accountA }, data: { status: 'ACTIVE' } })
+    const now = new Date(await databaseNow())
+    const next = new Date(now.getTime() + 120 * 60_000)
+    const reminder = await owner.simulationSchedule.create({
+      data: { characterId: a, identityId: identityA, accountId: accountA, conversationId: (await scheduleConversation()).id,
+        scheduleKey: 'settings-reminder', zone: 'UTC', kind: 'REMINDER', dueAt: new Date(now.getTime() - 60_000), nextAt: next },
+    })
+    const dailyAt = new Date('2026-03-12T09:00:00Z')
+    const daily = await owner.simulationSchedule.create({
+      data: { characterId: a, identityId: identityA, accountId: accountA, conversationId: reminder.conversationId,
+        scheduleKey: 'settings-daily', zone: 'UTC', kind: 'DAILY', localTime: '09:00', nextAt: dailyAt },
+    })
+    assert.equal((await request('PUT', settingsPath, { ifMatch: '"0"', data: {
+      ...defaultSimulationSettings, simulationQuietEnabled: false, simulationCatchUpMinutes: 30,
+    } })).status, 200)
+    const woken = await owner.simulationSchedule.findUniqueOrThrow({ where: { id: reminder.id } })
+    assert.ok(woken.nextAt!.getTime() < next.getTime())
+    await dispatchSimulationSchedule(runtime, reminder.id, new Date(await databaseNow()))
+    assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId: reminder.id } }), 1)
+    await dispatchSimulationSchedule(runtime, daily.id, new Date('2026-03-12T10:00:00Z'))
+    assert.equal(await owner.scheduleOccurrence.count({ where: { scheduleId: daily.id } }), 0)
+    await owner.simulationSchedule.update({ where: { id: daily.id }, data: { enabled: false, nextAt: null } })
+  } finally {
+    await owner.character.update({ where: { id: a }, data: { ...previousRole, ...defaultSimulationSettings, simulationLimitsVersion: 0 } })
+    await owner.identity.update({ where: { id: identityA }, data: previousIdentity })
+    await owner.platformAccount.update({ where: { id: accountA }, data: previousAccount })
     await runtime.$disconnect()
   }
 })
@@ -3085,6 +3179,17 @@ test('concurrent model calls share one enforced character budget and report the 
     assert.equal(report.body.days[0].modelCalls, 3)
     assert.equal(report.body.days[0].budgetDenials, 1)
     assert.ok(report.body.days[0].reservedUnits <= budget)
+
+    const path = characterPath(characterId) + '/simulation-settings'
+    const original = await request('GET', path)
+    assert.equal(original.body.inheritedModelBudget, budget)
+    assert.equal((await request('PUT', path, { ifMatch: '"0"', data: {
+      ...original.body.settings, simulationModelBudget: 50_000,
+    } })).status, 200)
+    const resumed = await prepareTopic(runtime, target, 'third budget input after increasing the simulation budget')
+    await processSimulatedDraft(runtime, resumed.eventId, simulationPlatforms.resolveAdapter, model)
+    assert.equal(writes, 2)
+    assert.equal(await owner.actionProposal.count({ where: { characterId } }), 2)
   } finally {
     await runtime.$disconnect()
   }

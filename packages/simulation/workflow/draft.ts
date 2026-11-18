@@ -277,11 +277,13 @@ export async function processSimulatedDraft(
         && content.length <= maxSimulatedTextLength
       if (proposed) {
         const followUp = await resolveFollowUp(tx, run.id, candidate)
-        const expiresAt = new Date(Date.now() + 86_400_000)
+        const settings = await tx.character.findUniqueOrThrow({
+          where: { id: run.characterId }, select: { autoReviewEnabled: true, simulationProposalHours: true },
+        })
+        const expiresAt = new Date(Date.now() + settings.simulationProposalHours * 3_600_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
         const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
-        const autoReview = review && target.audience === 'PUBLIC' && !crossPlatformDuplicate && !followUp
-          && await tx.character.findUnique({ where: { id: run.characterId }, select: { autoReviewEnabled: true } })
+        const autoReview = review && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate && !followUp
         const reviewDigest = createHash('sha256').update(JSON.stringify({
           payloadHash, target, ...adapter, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
@@ -309,7 +311,7 @@ export async function processSimulatedDraft(
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
             policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
-            followUp, autoReviewUntil: autoReview && autoReview.autoReviewEnabled ? new Date(Date.now() + 12_000) : undefined,
+            followUp, autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
           }, select: { id: true },
         })
         actionId = action.id

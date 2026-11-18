@@ -29,6 +29,7 @@ const MembershipWorkspace = defineAsyncComponent(() => import('../features/acces
 const CreateAccount = defineAsyncComponent(() => import('../features/access/CreateAccount.vue'))
 const SecuritySettings = defineAsyncComponent(() => import('../features/access/SecuritySettings.vue'))
 const MetricsWorkspace = defineAsyncComponent(() => import('@ricajs/simulation/console/metrics'))
+const SimulationSettings = defineAsyncComponent(() => import('@ricajs/simulation/console/settings'))
 const PlanningWorkspace = defineAsyncComponent(() => import('../features/planning/PlanningWorkspace.vue'))
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
 const ModelUsage = defineAsyncComponent(() => import('@ricajs/plugin-hosted-models/console').then(({ ModelUsage }) => ModelUsage))
@@ -54,8 +55,8 @@ const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && wi
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
-const runPages: ConsolePage[] = ['runs', 'outbox', 'metrics']
-const inRuns = computed(() => runPages.includes(tab.value))
+const runPages = { runs: '模拟运行', outbox: '失败任务', metrics: '模拟指标', 'simulation-settings': '模拟设置' } as const
+const inRuns = computed(() => Object.hasOwn(runPages, tab.value))
 const knowledgePages = ['knowledge', 'growth'] as const
 const accessPages = ['members', 'audit'] as const
 const inKnowledge = computed(() => tab.value === 'knowledge' || tab.value === 'growth')
@@ -70,6 +71,7 @@ const pageTitle: Record<ConsolePage, string> = {
   character: '角色与身份', review: '审批', runs: '模拟运行', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
   health: '系统运行状况', accounts: '平台账号池', connector: '审批',
   'model-usage': '外部模型统计',
+  'simulation-settings': '模拟设置',
 }
 const detailId = ref<string>()
 const runQuery = ref('')
@@ -477,10 +479,10 @@ function openRunAudit(id: string) {
       <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
       <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
       <nav v-if="inRuns && characterId" class="run-navigation" aria-label="运行页面">
-        <UiButton v-for="page in runPages" :key="page"
+        <UiButton v-for="(label, page) in runPages" :key="page"
           variant="text" :tone="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
           :disabled="busy || routing" @click="changeTab(page)">
-          {{ page === 'runs' ? '模拟运行' : page === 'metrics' ? '模拟指标' : '失败任务' }}
+          {{ label }}
         </UiButton>
       </nav>
       <nav v-if="inKnowledge && characterId" class="run-navigation access-navigation" aria-label="记忆与身份成长分区">
@@ -524,6 +526,7 @@ function openRunAudit(id: string) {
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
           @review="(id, historical) => navigate({ characterId, page: 'review', detail: id, reviewStatus: historical ? 'HISTORY' : undefined })"
           @executor-health="navigate({ characterId, page: 'health', healthNode: 'simulation-executor' })"
+          @settings="changeTab('simulation-settings')"
           @identities="changeTab('character')"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
           @filter="navigate({ characterId, page: 'runs', runQuery: $event })" />
@@ -565,6 +568,8 @@ function openRunAudit(id: string) {
       <PlanningWorkspace v-else-if="tab === 'planning' && characterId" :key="characterId + '/' + (detailId ?? '')"
         :character-id="characterId" :run-id="detailId" @expired="resetSession" @clear="closePlanning" @run="openRun" />
       <MetricsWorkspace v-else-if="tab === 'metrics' && characterId" :key="characterId"
+        :character-id="characterId" @expired="resetSession" />
+      <SimulationSettings v-else-if="tab === 'simulation-settings' && characterId" :key="characterId"
         :character-id="characterId" @expired="resetSession" />
       <template v-else-if="tab === 'connector' && characterId">
         <component v-if="activePlatformReview" :is="activePlatformReview.component" :key="characterId + '/' + activePlatformReview.id"

@@ -21,10 +21,12 @@
     "./console/accounts": "./console/simulation-accounts.ts",
     "./console/metrics": "./console/MetricsWorkspace.vue",
     "./console/run-filters": "./console/run-filters.ts",
+    "./console/settings": "./console/SimulationSettings.vue",
     "./contracts/follow-up": "./contracts/follow-up.ts",
     "./contracts/observability": "./contracts/observability.ts",
     "./contracts/platforms": "./contracts/platforms.ts",
     "./contracts/review": "./contracts/review.ts",
+    "./contracts/settings": "./contracts/settings.ts",
     "./draft": "./workflow/draft.ts",
     "./execution": "./workflow/execution.ts",
     "./inbound": "./workflow/inbound.ts",
@@ -34,7 +36,8 @@
     "./reconciliation": "./workflow/reconciliation.ts",
     "./retention": "./operations/retention.ts",
     "./review": "./workflow/review.ts",
-    "./schedules": "./workflow/schedules.ts"
+    "./schedules": "./workflow/schedules.ts",
+    "./settings": "./operations/settings.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.6.3",

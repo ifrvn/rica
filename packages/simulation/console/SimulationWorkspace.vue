@@ -22,7 +22,7 @@ type Page<T> = { items: T[]; nextCursor: string | null }
 
 const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string; showForm: boolean }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string, historical: boolean]; audit: [id: string]; commitment: [id: string];
-  filter: [query: string]; executorHealth: []; identities: [] }>()
+  filter: [query: string]; executorHealth: []; identities: []; settings: [] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -400,7 +400,11 @@ onMounted(() => {
               <p v-else-if="timedWaitReasons.has(selected.executionWait.reason)">等待结束前，提案将过期。</p>
             </template>
             <p v-else>等待执行器领取许可并写入模拟回执。</p>
-            <UiButton size="small" variant="soft" @click="emit('executorHealth')">查看模拟执行器</UiButton>
+            <div class="console-actions">
+              <UiButton v-if="selected.executionWait && timedWaitReasons.has(selected.executionWait.reason)"
+                size="small" variant="soft" @click="emit('settings')">调整模拟限制</UiButton>
+              <UiButton size="small" variant="soft" @click="emit('executorHealth')">查看模拟执行器</UiButton>
+            </div>
           </UiAlert>
           <UiAlert v-else-if="selected.state === 'EXECUTING'" tone="info" title="已领取许可，正在等待模拟回执">
             回执写入后，这条运行会显示「模拟完成」。

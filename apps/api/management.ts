@@ -15,6 +15,8 @@ import { actionDecision, actionReviewQuery, actionView, reconciliationInput, rec
 import { decideReviewAction, listReviewActions } from '@ricajs/simulation/review'
 import { autoReviewInput, autoReviewView, type AutoReviewView } from '@ricajs/contracts/auto-review'
 import { readAutoReviewSettings } from '@ricajs/persistence/auto-review'
+import { simulationSettingsInput, simulationSettingsView } from '@ricajs/simulation/contracts/settings'
+import { readSimulationSettings, saveSimulationSettings } from '@ricajs/simulation/settings'
 import * as management from '@ricajs/persistence/management'
 import { readSimulationReconciliation, resolveSimulationReconciliation } from '@ricajs/simulation/reconciliation'
 import type { PrismaClient } from '@ricajs/persistence/prisma'
@@ -106,6 +108,32 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     }
     console.error(JSON.stringify({ service: 'api', event: 'management_error', requestId }))
     return c.json(error(requestId, 'INTERNAL_ERROR', 'Request could not be completed'), 500)
+  })
+
+  const simulationSettingsPath = `${character}/simulation-settings` as const
+  app.openapi(createRoute({
+    method: 'get', path: simulationSettingsPath, security, request: { params: characterParams },
+    responses: { ...errors, 200: success(simulationSettingsView) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    return c.json(await readSimulationSettings(db, scope), 200)
+  })
+  app.openapi(createRoute({
+    method: 'put', path: simulationSettingsPath, security,
+    request: { params: characterParams, headers: schema.versionHeader, body: body(simulationSettingsInput) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    const requestId = c.get('requestId')
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const result = await management.executeManagementCommand(db, {
+      ...scope, requestId, input, operation: 'simulation.settings', targetScope: scope.characterId,
+    }, async (tx) => {
+      const saved = await saveSimulationSettings(tx, scope.characterId, expected, input)
+      return { id: saved.id, version: saved.simulationLimitsVersion }
+    })
+    return c.json({ ...result, requestId }, 200)
   })
 
   const autoReviewPath = `${character}/auto-review` as const

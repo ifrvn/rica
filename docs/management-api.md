@@ -90,6 +90,7 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。用幂等键提交 `accountId`、`message`，并携带 `chatId`（UUID）和 `speaker`（群员昵称）时，在指定模拟群聊中排队。首次发言时创建群聊和群员。仅提交账号和消息时发起单条模拟。 |
 | `GET /c/simulation-chats?accountId=…`、`GET /c/simulation-chats/{chatId}` | ADMIN 按接收账号查看最近会话，读取会话群员、最近 40 次发言和保留期内已确认的模拟回复。 |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 查询脱敏运行轨迹和当前角色的积压。 |
+| `GET /c/simulation-settings`、`PUT /c/simulation-settings` | ADMIN 读取角色时区、继承的模型预算及当前模拟限制，或提交完整的限制设置。写入使用 `If-Match` 版本并记录审计。 |
 | `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
 | `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
 | `GET /c/audit` | ADMIN 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
