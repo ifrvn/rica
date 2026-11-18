@@ -25,7 +25,8 @@ async function main() {
     await reportPluginResult(config.redisUrl, 'worker', observationError(error, 'START_FAILED'))
     throw error
   })
-  const platforms = await startSimulationPlatforms(process.env, 'worker').catch(async (error: unknown) => {
+  const platforms = await plugins.readSimulationPlatforms()
+    .then(selection => startSimulationPlatforms(process.env, 'worker', selection)).catch(async (error: unknown) => {
     await Promise.all([selected.stop(), usageDb.$disconnect()])
     await reportPluginResult(config.redisUrl, 'worker', observationError(error, 'START_FAILED'))
     throw error
@@ -62,7 +63,7 @@ async function main() {
     return
   }
 
-  observation = startPluginHeartbeat(config.redisUrl, 'worker', [...platforms.plugins, selected.metadata])
+  observation = startPluginHeartbeat(config.redisUrl, 'worker', [...platforms.plugins, selected.metadata], platforms.source)
   async function shutdown() {
     observation?.stop()
     try {

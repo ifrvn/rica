@@ -48,12 +48,15 @@ export const pluginDiagnostic = z.enum([
   'INCOMPATIBLE_CONTRACT', 'DUPLICATE_PLUGIN', 'INVALID_MANIFEST', 'DEPENDENCY_UNAVAILABLE', 'OPERATION_FAILED',
 ])
 export type PluginDiagnostic = z.infer<typeof pluginDiagnostic>
+export const simulationPlatformSource = z.enum(['BUILT_IN_DEFAULT', 'ENVIRONMENT', 'DEPLOYMENT_SETTINGS'])
+export type SimulationPlatformSource = z.infer<typeof simulationPlatformSource>
 
 export const pluginReport = z.strictObject({
   status: z.enum(['READY', 'COMPLETED', 'FAILED']),
   observedAt: z.iso.datetime(),
   plugins: z.array(pluginIdentity).max(20),
   diagnostic: pluginDiagnostic.optional(),
+  simulationPlatformSource: simulationPlatformSource.optional(),
 })
 export type PluginReport = z.infer<typeof pluginReport>
 

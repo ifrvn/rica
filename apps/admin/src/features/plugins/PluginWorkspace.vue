@@ -7,6 +7,7 @@ import { request } from '@ricajs/console-shared/request'
 import { pluginCards as cards, pluginServiceNames, registrationAvailable } from '../../app/plugin-integrations.js'
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
 import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
+import BuiltInPlugins from './BuiltInPlugins.vue'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean; canReview: boolean }>()
 const emit = defineEmits<{
@@ -17,6 +18,10 @@ const expired = () => emit('expired')
 const { status, busy: loading, error: loadError, refresh } = usePluginStatus(props.characterId, expired, false)
 const { busy, error, active, run } = useConsoleTask(expired)
 const deployment = computed(() => status.value?.deployment)
+function updateBuiltIn(updated: DeploymentPluginsView) {
+  if (status.value) status.value = { ...status.value, deployment: updated }
+  emit('deploymentChanged', updated)
+}
 const editing = ref<DeploymentPluginId>()
 const changedPlugin = ref<DeploymentPluginId>()
 const uninstalling = ref<DeploymentPluginId>()
@@ -123,6 +128,8 @@ function changeStage(id: DeploymentPluginId) {
     <UiEmpty v-else-if="!deployment" description="暂无部署插件目录。" />
     <template v-else>
       <UiAlert v-if="release?.status === 'UNAVAILABLE'" tone="warning" role="status">发布清单暂不可用。部署维护者可核对清单文件，再刷新插件。</UiAlert>
+      <BuiltInPlugins v-if="status" :status="status" :deployment="deployment" :can-configure="canConfigureModel"
+        @expired="expired" @changed="updateBuiltIn" @refresh="refresh" />
       <article v-for="id in deploymentPluginIds" :key="id" class="console-record-workspace plugin-card"
         :aria-labelledby="'plugin-heading-' + id">
         <div class="console-section-heading plugin-title">

@@ -11,6 +11,7 @@ import { writeSettings } from '@ricajs/runtime/write-settings'
 const recordSchema = z.strictObject({
   version: z.number().int().nonnegative(),
   plugins: z.partialRecord(deploymentPluginId, pluginStage),
+  simulationPlatforms: deploymentPluginsView.shape.simulationPlatforms,
   ...Object.fromEntries(deploymentConfigurations.map(({ id, stored }) => [id, stored.optional()])),
 })
 type StoredDeployment = z.infer<typeof recordSchema> & { [pluginId: string]: unknown }
@@ -40,7 +41,7 @@ export function createDeploymentPluginStore(directory: string) {
     }
     const configuration = Object.fromEntries(deploymentConfigurations.map(({ id, stored, view }) =>
       [id, view(stored.optional().parse(record[id]))]))
-    return deploymentPluginsView.parse({ version: record.version, plugins, ...configuration,
+    return deploymentPluginsView.parse({ version: record.version, plugins, ...configuration, simulationPlatforms: record.simulationPlatforms,
       configuredModel: provider === 'simulated' ? null : provider })
   }
 
@@ -50,7 +51,9 @@ export function createDeploymentPluginStore(directory: string) {
       if (record.version !== expected) throw new DeploymentPluginError('VERSION_CONFLICT')
       const provider = await getProvider()
       const current = view(record, provider)
-      if ('id' in change) {
+      if (change.action === 'CONFIGURE_SIMULATED_PLATFORMS') {
+        record.simulationPlatforms = change.platforms ?? undefined
+      } else if ('id' in change) {
         const transition = {
           INSTALL: { from: ['NOT_INSTALLED'], to: 'INSTALLED' },
           ENABLE: { from: ['INSTALLED'], to: 'ENABLED' },
@@ -74,6 +77,7 @@ export function createDeploymentPluginStore(directory: string) {
   }
 
   return { async status(provider: string) { return view(await read(), provider) }, save,
+    async readSimulationPlatforms() { return (await read()).simulationPlatforms },
     async readConfiguration(id: string) {
       const record = await read()
       const plugin = deploymentPluginId.parse(id)

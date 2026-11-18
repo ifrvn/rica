@@ -7,7 +7,7 @@ import { hostedModelDefinition, observedHostedModelDefinition, type createModelS
 import type { RecordHostedUsage, UsagePurpose } from '@ricajs/plugin-hosted-models/providers/usage'
 import { simulatedPlatformDefinitions } from '@ricajs/plugin-simulated-platforms'
 
-import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
+import type { PluginMetadata, SimulationPlatformSource } from '@ricajs/contracts/plugin-status'
 
 function metadata(kind: PluginMetadata['kind'], { id, version, contractVersion }: Omit<PluginMetadata, 'kind'>): PluginMetadata {
   return { kind, id, version, contractVersion }
@@ -30,16 +30,18 @@ async function startHost<T>(kind: string, definitions: readonly PluginDefinition
   }
 }
 
-export async function startSimulationPlatforms(env = process.env, service?: string) {
+export async function startSimulationPlatforms(env = process.env, service?: string, selection?: readonly string[]) {
   const configured = env.RICA_SIMULATED_PLATFORMS?.trim()
-  const ids = configured === undefined ? simulatedPlatformDefinitions.map(({ id }) => id)
-    : configured === '' ? [] : configured.split(',').map((id) => id.trim())
+  const source: SimulationPlatformSource = selection !== undefined ? 'DEPLOYMENT_SETTINGS'
+    : configured === undefined ? 'BUILT_IN_DEFAULT' : 'ENVIRONMENT'
+  const ids = selection ?? (configured === undefined ? simulatedPlatformDefinitions.map(({ id }) => id)
+    : configured === '' ? [] : configured.split(',').map((id) => id.trim()))
   const host = await startHost<PlatformAdapter>('platform', simulatedPlatformDefinitions, ids.map((id) => ({ id })), service)
   const resolveAdapter: ResolveSimulationAdapter = (id) => {
     const plugin = host.find(id)
     return plugin && { adapterId: plugin.id, adapterVersion: plugin.version, adapterContractVersion: plugin.contractVersion }
   }
-  return { ...host, resolveAdapter, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
+  return { ...host, resolveAdapter, source, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
 }
 
 export async function startModelPlugin(configuration: ModelSettingsInput, service?: string,

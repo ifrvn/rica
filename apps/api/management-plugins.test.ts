@@ -4,6 +4,12 @@ import { z } from '@hono/zod-openapi'
 import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { createManagementApp } from './management.js'
+import { createDeploymentPluginStore } from '../deployment-plugins.js'
+import { startSimulationPlatforms } from '../runtime-plugins.js'
+import { localIssuer } from './admin-auth.js'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const origin = 'http://localhost:5173'
 const characterId = '10000000-0000-4000-8000-000000000001'
@@ -64,4 +70,34 @@ test('auto-review settings only expose the model label and stay readable when mo
   const fallback = await app.request(path, { headers })
   assert.equal(fallback.status, 200)
   assert.equal((await fallback.json()).model, null)
+})
+
+test('only deployment admins can override simulated platform startup selection', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-sim-platforms-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = createDeploymentPluginStore(directory)
+  const app = createManagementApp({
+    db: {} as PrismaClient, origin, cookie: 'session', resolveAdapter: () => undefined, deploymentPlugins: store,
+    authenticate: async (request) => ({ id: 'fixture', issuer: localIssuer, subject: 'fixture',
+      canCreate: request.headers.get('Cookie') === 'session=deployment-admin' }),
+  })
+  const change = (actor: string, version: number, platforms: string[] | null) => app.request('/deployment-plugins', {
+    method: 'PUT',
+    headers: { Cookie: 'session=' + actor, Origin: origin, 'If-Match': '"' + version + '"', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'CONFIGURE_SIMULATED_PLATFORMS', platforms }),
+  })
+  assert.equal((await change('role-admin', 0, [])).status, 403)
+  assert.equal((await change('deployment-admin', 0, ['mock-a', 'mock-a'])).status, 422)
+  assert.equal((await change('deployment-admin', 0, [])).status, 200)
+  assert.equal((await change('deployment-admin', 0, ['mock-a'])).status, 412)
+  const host = await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-b' }, undefined,
+    await createDeploymentPluginStore(directory).readSimulationPlatforms())
+  assert.equal(host.source, 'DEPLOYMENT_SETTINGS')
+  assert.deepEqual(host.plugins, [])
+  await host.stop()
+  assert.equal((await change('deployment-admin', 1, null)).status, 200)
+  const inherited = await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-b' }, undefined, await store.readSimulationPlatforms())
+  assert.equal(inherited.source, 'ENVIRONMENT')
+  assert.deepEqual(inherited.plugins.map(({ id }) => id), ['mock-b'])
+  await inherited.stop()
 })

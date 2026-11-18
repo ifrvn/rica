@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis'
 import { newbiCatalog } from '@ricajs/plugin-newbi/shared'
 import { pluginDiagnostic, pluginReport, type PluginDiagnostic, type PluginMetadata,
-  type PluginReport, type PluginService } from '@ricajs/contracts/plugin-status'
+  type PluginReport, type PluginService, type SimulationPlatformSource } from '@ricajs/contracts/plugin-status'
 import { PluginHostError } from '@ricajs/plugin-host'
 import { cognitionCatalog, simulationPlatformCatalog } from './runtime-plugins.js'
 
@@ -39,9 +39,9 @@ export function observationError(error: unknown, fallback: PluginDiagnostic): Pl
   return code && code.success ? code.data : fallback
 }
 
-export function startPluginHeartbeat(url: string, service: PluginService, plugins: PluginMetadata[]) {
+export function startPluginHeartbeat(url: string, service: PluginService, plugins: PluginMetadata[], simulationPlatformSource?: SimulationPlatformSource) {
   const redis = connect(url)
-  let status: Status = { status: 'READY', plugins }
+  let status: Status = { status: 'READY', plugins, simulationPlatformSource }
   async function beat() {
     try {
       if (redis.status === 'wait' || redis.status === 'end') await redis.connect()
@@ -52,8 +52,8 @@ export function startPluginHeartbeat(url: string, service: PluginService, plugin
   const timer = setInterval(() => { void beat() }, 5000)
   timer.unref()
   return {
-    failed(diagnostic: PluginDiagnostic) { status = { status: 'FAILED', plugins: status.plugins, diagnostic } },
-    ready(nextPlugins = plugins) { status = { status: 'READY', plugins: nextPlugins } },
+    failed(diagnostic: PluginDiagnostic) { status = { status: 'FAILED', plugins: status.plugins, diagnostic, simulationPlatformSource } },
+    ready(nextPlugins = plugins) { status = { status: 'READY', plugins: nextPlugins, simulationPlatformSource } },
     stop() { clearInterval(timer); redis.disconnect() },
   }
 }

@@ -5,6 +5,8 @@ import { runtimeDatabaseUrl } from '@ricajs/runtime/config'
 import { runSimulationBatch } from '@ricajs/persistence/simulation-execution'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
+import { createDeploymentPluginStore } from '../deployment-plugins.js'
+import { modelSettingsDirectory } from '@ricajs/runtime/settings-directory'
 
 const redisUrl = process.env.REDIS_URL
 let url: string
@@ -14,7 +16,9 @@ try {
   await reportPluginResult(redisUrl, 'simulation-executor', 'INVALID_CONFIG')
   throw error
 }
-const platforms = await startSimulationPlatforms(process.env, 'simulation-executor').catch(async (error: unknown) => {
+const settings = createDeploymentPluginStore(modelSettingsDirectory(url))
+const platforms = await settings.readSimulationPlatforms()
+  .then(selection => startSimulationPlatforms(process.env, 'simulation-executor', selection)).catch(async (error: unknown) => {
   await reportPluginResult(redisUrl, 'simulation-executor', observationError(error, 'START_FAILED'))
   throw error
 })
@@ -31,7 +35,7 @@ try {
     try {
       cursor = await runSimulationBatch(db, cursor, platforms.resolveAdapter)
       if (redisUrl && URL.canParse(redisUrl) && ['redis:', 'rediss:'].includes(new URL(redisUrl).protocol)) {
-        observation ??= startPluginHeartbeat(redisUrl, 'simulation-executor', platforms.plugins)
+        observation ??= startPluginHeartbeat(redisUrl, 'simulation-executor', platforms.plugins, platforms.source)
         observation.ready()
       }
     } catch {

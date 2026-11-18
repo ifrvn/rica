@@ -20,7 +20,10 @@ import { createAutoReviewer } from '../auto-review.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
-const platforms = managementConfig ? await startSimulationPlatforms(process.env, 'api').catch(async (error: unknown) => {
+const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
+const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
+const platforms = managementConfig ? await deploymentPlugins.readSimulationPlatforms()
+  .then(selection => startSimulationPlatforms(process.env, 'api', selection)).catch(async (error: unknown) => {
   await reportPluginResult(config.redisUrl, 'api', observationError(error, 'START_FAILED'))
   throw error
 }) : undefined
@@ -37,8 +40,6 @@ redis.on('error', () => {})
 void redis.connect().catch(() => {})
 
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
-const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
-const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsContracts)
 const recordUsage = hostedUsageRecorder(db)
@@ -89,7 +90,7 @@ const app = createApp({
   redis: () => redis.ping(),
 }, management, auth?.app)
 const server = serve({ fetch: app.fetch, port: config.port, hostname: '127.0.0.1' })
-const observation = platforms && startPluginHeartbeat(config.redisUrl, 'api', platforms.plugins)
+const observation = platforms && startPluginHeartbeat(config.redisUrl, 'api', platforms.plugins, platforms.source)
 console.info(JSON.stringify({ service: 'api', event: 'started', port: config.port }))
 
 function shutdown() {
