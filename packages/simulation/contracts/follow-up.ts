@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import { planningTask } from './plans.js'
+import { planningTask } from '@ricajs/contracts/plans'
 
 const fields = {
   kind: z.enum(['PLAN', 'COMMITMENT']),

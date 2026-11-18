@@ -3,6 +3,16 @@ import { Prisma, type ConversationChannel, type PrismaClient, type RunStateReaso
 export const runQueuedEvent = 'RunQueued.v1'
 export const draftQueuedEvent = 'SimulatedDraftQueued.v1'
 
+export async function dailyScheduleSlot(
+  tx: Prisma.TransactionClient, zone: string, wallTime: string, reference: Date, backwards = false,
+) {
+  const [result] = await tx.$queryRaw<{ slot: Date | null }[]>`
+    SELECT public.rica_daily_schedule_slot(${zone}, ${wallTime}::time, ${reference}, ${backwards}) AS slot
+  `
+  if (!result?.slot) throw new Error('Daily schedule slot is unavailable')
+  return result.slot
+}
+
 export type OutboxAttempt = Readonly<{ generation: number; ticket: number }>
 
 export function outboxAttemptFence(attempt?: OutboxAttempt) {

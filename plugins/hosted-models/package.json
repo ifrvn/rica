@@ -18,7 +18,7 @@
     "@ricajs/console-shared": "workspace:*",
     "@ricajs/contracts": "workspace:*",
     "@ricajs/plugin-host": "workspace:*",
-    "@ricajs/plugin-simulated-model": "workspace:*",
+    "@ricajs/simulation": "workspace:*",
     "vue": "^3.5.45",
     "zod": "^4.6.7",
     "@ricajs/persistence": "workspace:*",

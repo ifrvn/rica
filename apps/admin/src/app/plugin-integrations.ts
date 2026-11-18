@@ -70,4 +70,4 @@ export const platformReviews: readonly {
 
 export const pluginNames: Record<DeploymentPluginId, string> = { [newbiConsole.id]: newbiConsole.name, [hostedModelsPluginId]: '外部模型' }
 export { modelHealth as hostedModelHealth }
-export { isSimulationPlatform } from '@ricajs/contracts/simulation-platform'
+export { isSimulationPlatform } from '@ricajs/contracts/management'

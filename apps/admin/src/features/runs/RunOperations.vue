@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '@ricajs/contracts/simulation-observability'
+import type { outboxQuarantineView, quarantinedOutboxEvent, simulationBacklogView } from '@ricajs/simulation/contracts/observability'
 import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Backlog = z.infer<typeof simulationBacklogView>

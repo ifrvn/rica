@@ -1,8 +1,7 @@
-import { simulationPlatformId } from './simulation-platform.js'
 import { z } from '@hono/zod-openapi'
-import { listQuery, reasonInput } from './management.js'
-import { simulationFollowUp } from './simulation-follow-up.js'
-import { autoReviewHandoff } from './auto-review.js'
+import { listQuery, optionalDecisionReason, reasonInput, simulationPlatformId } from '@ricajs/contracts/management'
+import { simulationFollowUp } from './follow-up.js'
+import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
 
 export const reviewTarget = z.object({
   platform: simulationPlatformId,
@@ -42,7 +41,6 @@ export const actionView = z.object({
   autoReviewHandoff: autoReviewHandoff.nullable(),
   followUp: simulationFollowUp.nullable(),
 })
-export const optionalDecisionReason = z.string().trim().max(240).regex(/^[^\p{Cc}]*$/u).optional()
 export const actionDecision = reasonInput.extend({
   reason: optionalDecisionReason,
   decision: z.enum(['APPROVE', 'REJECT']),

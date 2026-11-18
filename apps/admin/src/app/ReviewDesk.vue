@@ -18,7 +18,7 @@ import { request, RequestError } from '@ricajs/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
 import type { characterView } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
-import type { ActionView } from '@ricajs/contracts/action-review'
+import type { ActionView } from '@ricajs/simulation/contracts/review'
 import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
 import type { Readiness } from '@ricajs/contracts/health'
 

@@ -1,4 +1,4 @@
-import { isSimulationPlatform } from '@ricajs/contracts/simulation-platform'
+import { isSimulationPlatform } from '@ricajs/contracts/management'
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import type { planInput, planView } from '@ricajs/contracts/plans'

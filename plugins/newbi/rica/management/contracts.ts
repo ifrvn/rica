@@ -1,8 +1,6 @@
-import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
 import { z } from '@hono/zod-openapi'
-import { accountRegistrationView, accountView, characterWorkspaceView, listQuery, resourceId } from '@ricajs/contracts/management'
+import { accountRegistrationView, accountView, characterWorkspaceView, listQuery, optionalDecisionReason, resourceId, simulationPlatformId } from '@ricajs/contracts/management'
 import { newbiCredential, newbiEndpoint } from '../../agent-api/connection.js'
-import { optionalDecisionReason } from '@ricajs/contracts/action-review'
 import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
 
 export const newbiAccountTest = z.strictObject({ credential: newbiCredential })

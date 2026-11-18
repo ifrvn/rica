@@ -14,7 +14,7 @@
 | 本机试点已有独立的只读事件接收、单次发送及结果恢复。 | 先把只读协议接入平台能力，随后单独装配写入与对账，保留已有账本和进程权限。 |
 | 已有授权候选排序和长期评测。 | 排序保留原算法，评测保留原输入和指标。出现第二种实现时，再抽取对应扩展点。 |
 
-当前代码入口见[注册表](../packages/plugin-host/plugin-registry.ts)、[模型契约](../packages/contracts/model-provider.ts)、[模拟适配器](../plugins/simulated-platforms/index.ts)、[审批](../packages/persistence/action-review.ts)和[模拟执行](../packages/persistence/simulation-execution.ts)。
+当前代码入口见[注册表](../packages/plugin-host/plugin-registry.ts)、[模型契约](../packages/contracts/model-provider.ts)、[模拟适配器](../packages/simulation/adapters/platforms.ts)、[模拟审批](../packages/simulation/workflow/review.ts)和[模拟执行](../packages/simulation/workflow/execution.ts)。
 
 ## 2. 目标架构
 
@@ -24,8 +24,7 @@
 | --- | --- |
 | [`@ricajs/plugin-newbi`](../plugins/newbi/README.md) | Newbi 专用契约、协议、管理路由、账号资料、事件游标、发送账本、清理任务、命令和控制台组件。读取与发送分别注册和报告。 |
 | [`@ricajs/plugin-hosted-models`](../plugins/hosted-models/README.md) | OpenAI、Anthropic Claude、Gemini 和 OpenAI 兼容服务的协议适配、模型配置契约与存储、测试路由、控制台设置和健康节点。 |
-| `@ricajs/plugin-simulated-model` | 模拟决策与本地模板回复。外部模型复用这里的本地决策。 |
-| `@ricajs/plugin-simulated-platforms` | mock-a 与 mock-b 的模拟事件适配器。 |
+| [`@ricajs/simulation`](../packages/simulation/README.md) | 内置模拟能力，包括本地模型、mock-a 和 mock-b 适配器、模拟入站、草稿、审批、调度、执行、对账、保留清理和运行观测。外部模型复用本地决策。 |
 | `@ricajs/contracts`、`@ricajs/plugin-host` | 共用输入输出、插件定义、注册校验和生命周期。 |
 | `@ricajs/console-shared` | 宿主页面和插件组件共用的浏览器请求、错误处理和任务状态。 |
 

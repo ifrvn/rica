@@ -1,8 +1,6 @@
-import { z } from '@hono/zod-openapi'
 import type { Plugin } from '@ricajs/plugin-host'
 
-export const simulationPlatformId = z.enum(['mock-a', 'mock-b'])
-export const isSimulationPlatform = (platform: string) => simulationPlatformId.safeParse(platform).success
+export const maxSimulatedTextLength = 4_000
 
 export type NormalizedPlatformEvent = Readonly<{
   remoteAccountId: string

@@ -7,13 +7,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { simulatedModelPlugin } from '@ricajs/plugin-simulated-model'
+import { localSimulationModel } from '@ricajs/simulation/model'
 import { createHostedModelManagement, createModelSettingsStore } from '@ricajs/plugin-hosted-models'
 import { hostedUsageRecorder, readHostedUsage } from '@ricajs/plugin-hosted-models/persistence/usage'
 import { denyPermission } from '@ricajs/persistence/management'
 import { modelSettingsContracts } from '@ricajs/plugin-hosted-models/shared'
 import { startOutboxWorker } from '../apps/worker/outbox.js'
-import { dailyScheduleSlot, dispatchSimulationSchedule, scanSimulationSchedules } from '@ricajs/persistence/simulation-schedules'
+import { dailyScheduleSlot } from '@ricajs/persistence/run-context'
+import { dispatchSimulationSchedule, scanSimulationSchedules } from '@ricajs/simulation/schedules'
 import { after, before, test } from 'node:test'
 import { actorId, hashPassword, loadManagementConfig, localIssuer } from '../apps/api/admin-auth.js'
 import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
@@ -22,17 +23,17 @@ import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { createAutoReviewer } from '../apps/auto-review.js'
 import { deriveMemory, revokeMemoryAccess } from '@ricajs/persistence/memory'
-import { reviewTarget } from '@ricajs/contracts/action-review'
-import { autoReviewSimulation, decideReviewAction, listReviewActions } from '@ricajs/persistence/action-review'
+import { reviewTarget } from '@ricajs/simulation/contracts/review'
+import { autoReviewSimulation, decideReviewAction, listReviewActions } from '@ricajs/simulation/review'
 import { autoReviewerId, defaultAutoReviewPrompt, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
-import { sweepSimulationRetention } from '@ricajs/persistence/simulation-retention'
+import { sweepSimulationRetention } from '@ricajs/simulation/retention'
 import { loadRunContinuity } from '@ricajs/persistence/run-continuity'
 import { createDatabase } from '@ricajs/persistence/client'
 import { scanIdentityReflections } from '@ricajs/persistence/identity-reflection'
-import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '@ricajs/persistence/inbound'
+import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '@ricajs/simulation/inbound'
 import { draftQueuedEvent, prepareSimulatedRun, runQueuedEvent } from '@ricajs/persistence/run-context'
-import { processSimulatedDraft } from '@ricajs/persistence/simulated-draft'
-import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '@ricajs/persistence/simulation-execution'
+import { processSimulatedDraft } from '@ricajs/simulation/draft'
+import { executeSimulation, recordSimulationReceipt, reserveSimulation, runSimulationBatch } from '@ricajs/simulation/execution'
 import { loadConfig } from '@ricajs/runtime/config'
 
 const config = loadConfig()
@@ -573,7 +574,7 @@ async function databaseNow() {
   return clock.now.getTime()
 }
 
-async function proposeReview(accountId = accountA, contactId?: string, model = simulatedModelPlugin, identityId = identityA, review?: ReviewPublicReply) {
+async function proposeReview(accountId = accountA, contactId?: string, model = localSimulationModel, identityId = identityA, review?: ReviewPublicReply) {
   const runtimeUrl = new URL(config.databaseUrl)
   runtimeUrl.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(runtimeUrl.toString())
@@ -684,16 +685,16 @@ test('role administrators can see the draft and concurrent approval has one effe
     key: 'enable-review', data: { subject: 'reviewer', action: 'GRANT', reason: 'Review fixture' },
   })
   assert.equal(role.status, 200)
-  const implementation = simulatedModelPlugin.implementation
+  const implementation = localSimulationModel.implementation
   const { action, proposalText } = await proposeReview(accountA, undefined, {
-    ...simulatedModelPlugin,
+    ...localSimulationModel,
     implementation: { ...implementation, async write(input, signal) {
       assert.equal(input.corePrompt, updatedDisclosure)
       return implementation.write(input, signal)
     } },
   })
   await assert.rejects(proposeReview(accountA, undefined, {
-    ...simulatedModelPlugin,
+    ...localSimulationModel,
     implementation: { ...implementation, async write() {
       return { text: updatedDisclosure.split('\n')[0], evidenceIds: [] }
     } },
@@ -783,7 +784,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
   let duringReview: (() => Promise<void>) | undefined
   let observedPrompt: string | undefined
   const review = createAutoReviewer(async (check) => check({
-    ...simulatedModelPlugin.implementation, hostedProvider: 'fixture', hostedModel: 'default-review-model',
+    ...localSimulationModel.implementation, hostedProvider: 'fixture', hostedModel: 'default-review-model',
     async review(prompt) {
       observedPrompt = prompt
       await duringReview?.()
@@ -813,7 +814,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
 
     assert.equal((await save(2, true)).status, 200)
     duringReview = undefined
-    const second = await proposeReview(accountA, undefined, simulatedModelPlugin, identityA, review)
+    const second = await proposeReview(accountA, undefined, localSimulationModel, identityA, review)
     const approved = await inspect(second.action.id)
     assert.equal(approved.body.state, 'READY')
     assert.equal(approved.body.autoApproved, true)
@@ -890,7 +891,7 @@ function simulationDatabase() {
 }
 
 async function approveSimulation(accountId = accountA, contactId?: string, identityId = identityA) {
-  const proposal = await proposeReview(accountId, contactId, simulatedModelPlugin, identityId)
+  const proposal = await proposeReview(accountId, contactId, localSimulationModel, identityId)
   const response = await request('POST', actionPath(proposal.action.id) + '/decisions', {
     actor: 'reviewer', key: 'approve-' + proposal.action.id, ifMatch: '"run-v3"',
     data: { reviewDigest: proposal.action.reviewDigest, decision: 'APPROVE', reason: 'Approved simulation fixture' },
@@ -985,7 +986,7 @@ test('disabled platform prevents drafting, review preview and execution permissi
     await prepareSimulatedRun(runtime, job.eventId)
     const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: incoming.runId, type: draftQueuedEvent } })
     await processSimulatedDraft(runtime, draft.eventId, disabled.resolveAdapter, {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: {
         async decide() { assert.fail('Disabled platform called the model') },
         async write() { assert.fail('Disabled platform called the model') },
@@ -1150,7 +1151,7 @@ test('simulation rate limits the same contact across conversations for a rolling
 async function crashSimulationProcess(actionId: string, checkpoint: 'permit' | 'receipt') {
   const program = `
     import { createDatabase } from './packages/persistence/client.ts'
-    import { reserveSimulation, recordSimulationReceipt } from './packages/persistence/simulation-execution.ts'
+    import { reserveSimulation, recordSimulationReceipt } from '@ricajs/simulation/execution'
     import { startSimulationPlatforms } from './apps/runtime-plugins.ts'
     const simulationPlatforms = await startSimulationPlatforms({})
     const [id, phase] = process.argv.slice(1)
@@ -1373,7 +1374,7 @@ test('an overdue reminder survives quiet hours and reaches the normal Worker onc
     assert.equal(occurrences.length, 1)
     assert.equal(occurrences[0].scheduledAt.toISOString(), dueAt)
     assert.equal((await owner.simulationSchedule.findUniqueOrThrow({ where: { id } })).nextAt, null)
-    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl, () => simulatedModelPlugin, simulationPlatforms.resolveAdapter)
+    const worker = await startOutboxWorker(scheduleRuntimeUrl(), config.redisUrl, () => localSimulationModel, simulationPlatforms.resolveAdapter)
     try {
       const runId = occurrences[0].runId
       const deadline = Date.now() + 10_000
@@ -1458,7 +1459,7 @@ for (const kind of ['PLAN', 'COMMITMENT'] as const) {
         : { dueAt, collaboratorPlatforms: [platform] }),
     }
     const model = {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: {
         hostedModel: 'fixture',
         decide: async () => 'REPLY',
@@ -1522,7 +1523,7 @@ test('AI follow-up ignores promises missing from the reply and respects rejectio
     dueAt: new Date(await databaseNow() + 86_400_000).toISOString(),
   }
   const model = (text: string) => ({
-    ...simulatedModelPlugin,
+    ...localSimulationModel,
     implementation: {
       hostedModel: 'fixture',
       decide: async () => 'REPLY',
@@ -1952,7 +1953,7 @@ test('explicit contact opt-out blocks an in-flight send and old approval stays b
     const stopEvent = await owner.outboxEvent.findFirstOrThrow({ where: { runId: stopRunId, type: runQueuedEvent } })
     await prepareSimulatedRun(runtime, stopEvent.eventId)
     const stopDraft = await owner.outboxEvent.findFirstOrThrow({ where: { runId: stopRunId, type: draftQueuedEvent } })
-    await processSimulatedDraft(runtime, stopDraft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)
+    await processSimulatedDraft(runtime, stopDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)
     assert.equal(await owner.actionProposal.count({ where: { runId: stopRunId } }), 0)
     assert.equal(await owner.simulationReceipt.count({ where: { actionId: inFlight.id } }), 0)
     assert.equal((await owner.simulationAttempt.findUniqueOrThrow({ where: { actionId: inFlight.id } })).status, 'NOT_SENT')
@@ -2226,7 +2227,7 @@ test('daily reflection plans a bounded autonomous goal only with identity permis
   assert.deepEqual((await request('GET', characterPath(a) + '/identities/' + disabled + '/goals')).body, [])
   assert.equal((await request('POST', goals, { key: 'fourth-goal', data: manual })).body.error.code, 'GOAL_LIMIT')
 
-  const { action } = await proposeReview(account, undefined, simulatedModelPlugin, identityId)
+  const { action } = await proposeReview(account, undefined, localSimulationModel, identityId)
   const replay = await request('GET', characterPath(a) + '/runs/' + action.runId + '/replay')
   assert.ok(replay.body.goalRefs.some(({ id, version }: { id: string; version: number }) => id === self.id && version === 1))
   const path = goals + '/' + self.id
@@ -2277,19 +2278,19 @@ test('subjective belief projection stays inside decisions and expired references
   })
   assert.equal(created.body.status, 'ACTIVE')
   const reference = { id: created.body.id, version: 1 }
-  const model: typeof simulatedModelPlugin = {
-    ...simulatedModelPlugin,
+  const model: typeof localSimulationModel = {
+    ...localSimulationModel,
     implementation: {
       async decide(input, signal) {
         assert.deepEqual(input.context.beliefs.find(({ id }) => id === reference.id), {
           ...reference, kind: 'PREFERENCE', statement, confidence: 0.7, subjective: true,
         })
-        return simulatedModelPlugin.implementation.decide(input, signal)
+        return localSimulationModel.implementation.decide(input, signal)
       },
       async write(input, signal) {
         assert.equal('context' in input, false)
         assert.equal(JSON.stringify(input).includes(statement), false)
-        return simulatedModelPlugin.implementation.write(input, signal)
+        return localSimulationModel.implementation.write(input, signal)
       },
     },
   }
@@ -2335,10 +2336,10 @@ test('subjective belief supersession during decision prevents the in-flight prop
   })
   assert.equal(created.body.status, 'ACTIVE')
   let runId: string | undefined
-  const model: typeof simulatedModelPlugin = {
-    ...simulatedModelPlugin,
+  const model: typeof localSimulationModel = {
+    ...localSimulationModel,
     implementation: {
-      ...simulatedModelPlugin.implementation,
+      ...localSimulationModel.implementation,
       async decide({ context }) {
         runId = context.runId
         assert.ok(context.beliefs.some(({ id, version }) => id === created.body.id && version === 1))
@@ -2559,7 +2560,7 @@ async function prepareTopic(runtime: ReturnType<typeof createDatabase>, target: 
 }
 
 async function topicProposal(runtime: ReturnType<typeof createDatabase>, target: Awaited<ReturnType<typeof topicAccount>>,
-  text: string, model = simulatedModelPlugin,
+  text: string, model = localSimulationModel,
 ) {
   const { runId, eventId } = await prepareTopic(runtime, target, text)
   await processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, model)
@@ -2674,12 +2675,12 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
       assert.fail('Outbox did not reach the expected state')
     }
     let failures = 0
-    const failing: typeof simulatedModelPlugin = {
-      ...simulatedModelPlugin,
+    const failing: typeof localSimulationModel = {
+      ...localSimulationModel,
       implementation: {
-        ...simulatedModelPlugin.implementation,
+        ...localSimulationModel.implementation,
         async decide(input, signal) {
-          if (input.context.runId !== runId) return simulatedModelPlugin.implementation.decide(input, signal)
+          if (input.context.runId !== runId) return localSimulationModel.implementation.decide(input, signal)
           failures++
           throw new Error('synthetic model failure')
         },
@@ -2724,7 +2725,7 @@ test('outbox retry cap survives Worker restart and ADMIN can reopen it once', { 
       SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${draftQueuedEvent}, 0) AS ticket
     `
     assert.equal(stale.ticket, null)
-    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl, () => simulatedModelPlugin, simulationPlatforms.resolveAdapter)
+    const healthy = await startOutboxWorker(runtimeUrl, config.redisUrl, () => localSimulationModel, simulationPlatforms.resolveAdapter)
     try {
       const processed = await wait(({ processedAt }) => processedAt !== null)
       assert.equal(processed.generation, 1)
@@ -2759,7 +2760,7 @@ test('a crashed outbox attempt consumes its ticket and a late failure cannot rel
     assert.equal(await claim(), 2)
     await runtime.$queryRaw`SELECT public.rica_fail_outbox_attempt(${eventId}::uuid, 0, 1)::text`
     assert.equal(await claim(), null)
-    await processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin, { generation: 0, ticket: 1 })
+    await processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, localSimulationModel, { generation: 0, ticket: 1 })
     assert.equal((await owner.outboxEvent.findUniqueOrThrow({ where: { eventId } })).processedAt, null)
     for (const ticket of [3, 4]) {
       await expireLease()
@@ -2873,9 +2874,9 @@ test('retention preserves unknown-delivery reconciliation and stops an expired r
     assert.equal(resolved.status, 200, JSON.stringify(resolved.body))
     assert.equal(resolved.body.status, 'BLOCKED')
     await processSimulatedDraft(runtime, pending.eventId, simulationPlatforms.resolveAdapter, {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: {
-        ...simulatedModelPlugin.implementation,
+        ...localSimulationModel.implementation,
         async decide() { return assert.fail('Expired run reached the model') },
       },
     })
@@ -2962,18 +2963,18 @@ test('M4 evaluates fourteen simulated days of scope, duplicate reviews, frequenc
   await owner.memorySource.create({ data: { characterId, memoryId: memory.id, sourceId: source.id } })
 
   let modelInputs = 0
-  const model: typeof simulatedModelPlugin = {
-    ...simulatedModelPlugin,
+  const model: typeof localSimulationModel = {
+    ...localSimulationModel,
     implementation: {
       async decide(input, signal) {
         modelInputs++
         assert.equal(JSON.stringify(input).includes(marker), false)
-        return simulatedModelPlugin.implementation.decide(input, signal)
+        return localSimulationModel.implementation.decide(input, signal)
       },
       async write(input, signal) {
         modelInputs++
         assert.equal(JSON.stringify(input).includes(marker), false)
-        return simulatedModelPlugin.implementation.write(input, signal)
+        return localSimulationModel.implementation.write(input, signal)
       },
     },
   }
@@ -3058,16 +3059,16 @@ test('concurrent model calls share one enforced character budget and report the 
   const runtime = createDatabase(scheduleRuntimeUrl())
   let decisions = 0
   let writes = 0
-  const model: typeof simulatedModelPlugin = {
-    ...simulatedModelPlugin,
+  const model: typeof localSimulationModel = {
+    ...localSimulationModel,
     implementation: {
       async decide(input, signal) {
         decisions++
-        return simulatedModelPlugin.implementation.decide(input, signal)
+        return localSimulationModel.implementation.decide(input, signal)
       },
       async write(input, signal) {
         writes++
-        return simulatedModelPlugin.implementation.write(input, signal)
+        return localSimulationModel.implementation.write(input, signal)
       },
     },
   }
@@ -3156,9 +3157,9 @@ test('three identities on two platforms reach separate approved simulation recei
 
     const ids = runs.map(({ id }) => id)
     const observedPrompts = new Map<string, string | undefined>()
-    const provider = simulatedModelPlugin.implementation
+    const provider = localSimulationModel.implementation
     const recordingModel = {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: {
         async decide(input: Parameters<typeof provider.decide>[0], signal: AbortSignal) {
           assert.ok(!JSON.stringify(input).includes('writingPrompt'))
@@ -3441,7 +3442,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     const firstDraft = await prepareTurn(firstTurn.body.id)
     const firstReplay = path + '/' + firstTurn.body.id + '/replay'
     let reviewObserved = false
-    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin, undefined, async () => {
+    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel, undefined, async () => {
       const duringReview = await request('GET', firstReplay)
       assert.equal(duringReview.body.autoReviewPending, true)
       const proposalPath = character + '/actions/' + duringReview.body.proposal.id
@@ -3469,9 +3470,9 @@ test('console simulation runs use an isolated conversation, one approval and one
     const secondDraft = await prepareTurn(secondTurn.body.id)
     let seenContext: unknown
     await processSimulatedDraft(runtime, secondDraft.eventId, simulationPlatforms.resolveAdapter, {
-      ...simulatedModelPlugin, implementation: { ...simulatedModelPlugin.implementation, async write(input, signal) {
+      ...localSimulationModel, implementation: { ...localSimulationModel.implementation, async write(input, signal) {
         seenContext = input.conversation
-        return simulatedModelPlugin.implementation.write(input, signal)
+        return localSimulationModel.implementation.write(input, signal)
       } },
     })
     const chat = await request('GET', chatPath, { actor: 'reviewer' })
@@ -3504,7 +3505,7 @@ test('console simulation runs use an isolated conversation, one approval and one
 
     const thirdTurn = await send('小林', '我补充一下预算。')
     const thirdDraft = await prepareTurn(thirdTurn.body.id)
-    await processSimulatedDraft(runtime, thirdDraft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)
+    await processSimulatedDraft(runtime, thirdDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)
     const thirdAction = await owner.actionProposal.findUniqueOrThrow({ where: { runId: thirdTurn.body.id } })
     const thirdProposal = character + '/actions/' + thirdAction.id
     const thirdPreview = await request('GET', thirdProposal)

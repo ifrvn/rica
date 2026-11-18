@@ -1,6 +1,5 @@
-import { maxSimulatedTextLength } from '@ricajs/contracts/model-provider'
-import type { NormalizedPlatformEvent, PlatformAdapter } from '@ricajs/contracts/simulation-platform'
-import type { PluginDefinition } from '@ricajs/plugin-host'
+import { maxSimulatedTextLength, type NormalizedPlatformEvent, type PlatformAdapter } from '../contracts/platforms.js'
+import type { Plugin } from '@ricajs/plugin-host'
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -64,7 +63,7 @@ function mockB(payload: unknown): NormalizedPlatformEvent {
   }
 }
 
-export const simulatedPlatformDefinitions: readonly PluginDefinition<PlatformAdapter>[] = [
-  { id: 'mock-a', version: '1.0.0', contractVersion: 1, create: () => ({ implementation: { normalize: mockA } }) },
-  { id: 'mock-b', version: '1.0.0', contractVersion: 1, create: () => ({ implementation: { normalize: mockB } }) },
+export const simulationPlatforms: readonly Plugin<PlatformAdapter>[] = [
+  { id: 'mock-a', version: '1.0.0', contractVersion: 1, implementation: { normalize: mockA } },
+  { id: 'mock-b', version: '1.0.0', contractVersion: 1, implementation: { normalize: mockB } },
 ]

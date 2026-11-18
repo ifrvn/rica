@@ -2,7 +2,7 @@ import { z } from '@hono/zod-openapi'
 import { newbiConfiguration, newbiDeployment } from '@ricajs/plugin-newbi/shared'
 import { hostedModelsPluginId } from '@ricajs/plugin-hosted-models/shared'
 import { pluginStage } from '@ricajs/contracts/deployment-plugins'
-import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
+import { simulationPlatformId } from '@ricajs/contracts/management'
 
 const simulatedPlatforms = z.array(simulationPlatformId).max(2).refine(ids => new Set(ids).size === ids.length)
 export const simulationPlatformsChange = z.strictObject({

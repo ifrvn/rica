@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { UiAlert, UiBadge, UiButton, UiDialog } from '@ricajs/console-shared/ui'
 import { formatTime, useConsoleTask } from '@ricajs/console-shared/console-data'
 import { request } from '@ricajs/console-shared/request'
-import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
+import { simulationPlatformId } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
 import type { DeploymentPluginsView } from '../../../../deployment-plugin-contracts.js'
 import type { PluginStatus } from './plugin-status.js'
@@ -72,9 +72,9 @@ function useLocal() {
     <div class="console-section-heading">
       <div>
         <h3 id="built-in-model-heading">本地模拟模型</h3>
-        <p>simulated-model<template v-if="fallback"> · v{{ fallback.version }}</template></p>
+        <p v-if="fallback">{{ fallback.id }} · v{{ fallback.version }}</p>
       </div>
-      <UiBadge>内置依赖</UiBadge>
+      <UiBadge>内置组件</UiBadge>
     </div>
     <p>用于本地决策、私聊写作，以及外部模型未配置或停用时的公开写作。宿主依赖此组件。</p>
     <p>部署默认写作模型 {{ localDefault ? '本地模拟模型' : deployment.configuredModel }}</p>
@@ -86,8 +86,8 @@ function useLocal() {
   </article>
   <article class="console-record-workspace console-stack" aria-labelledby="built-in-platform-heading">
     <div class="console-section-heading">
-      <div><h3 id="built-in-platform-heading">模拟平台</h3><p>simulated-platforms</p></div>
-      <UiBadge>随部署内置</UiBadge>
+      <h3 id="built-in-platform-heading">模拟平台</h3>
+      <UiBadge>内置组件</UiBadge>
     </div>
     <p>配置来源 {{ deployment.simulationPlatforms ? '插件中心' : '各进程的环境变量或内置默认' }}
       <template v-if="deployment.simulationPlatforms"> · 启用 {{ deployment.simulationPlatforms.join('、') || '无' }}</template></p>

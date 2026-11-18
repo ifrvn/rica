@@ -90,7 +90,7 @@ try {
 
 ## 模拟平台适配器
 
-`@ricajs/contracts/simulation-platform` 提供以下类型。
+`@ricajs/simulation/contracts/platforms` 提供以下类型。
 
 ```ts
 type PlatformAdapter = { normalize(payload: unknown): NormalizedPlatformEvent }
@@ -120,8 +120,7 @@ type NormalizedPlatformEvent = {
 例如在 `plugins/acme-simulation/index.ts` 提供一个读取简化消息的适配器。
 
 ```ts
-import { maxSimulatedTextLength } from '@ricajs/contracts/model-provider'
-import type { PlatformAdapter } from '@ricajs/contracts/simulation-platform'
+import { maxSimulatedTextLength, type PlatformAdapter } from '@ricajs/simulation/contracts/platforms'
 import type { PluginDefinition } from '@ricajs/plugin-host'
 import { z } from 'zod'
 
@@ -155,9 +154,9 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 }
 ```
 
-包清单导出 `./index.ts`，声明 `@ricajs/contracts`、`@ricajs/plugin-host` 与 `zod` 依赖。宿主将适配器加入 [模拟运行时的定义列表](../../apps/runtime-plugins.ts)之后，可用 `startPluginHost` 和内存夹具验收 `normalize`，覆盖非法时间、非法载荷和最大长度。
+包清单导出 `./index.ts`，声明 `@ricajs/simulation`、`@ricajs/plugin-host` 与 `zod` 依赖。宿主将适配器加入 [模拟运行时的定义列表](../../apps/runtime-plugins.ts)之后，可用 `startPluginHost` 和内存夹具验收 `normalize`，覆盖非法时间、非法载荷和最大长度。
 
-运行时注册完成后，完整的模拟账号、审批和执行接入还需要扩展 [simulationPlatformId](../../packages/contracts/simulation-platform.ts) 及数据库中的模拟平台约束。检查 [模拟执行规则](../simulation-execution.md)，用同一允许列表配置 API、Worker 和模拟执行器。宿主复核已绑定的远端账号、身份、会话和适配器版本，适配器负责校验并返回稳定的来源键和远端标识。
+运行时注册完成后，完整的模拟账号、审批和执行接入还需要扩展 [simulationPlatformId](../../packages/contracts/management.ts) 及数据库中的模拟平台约束。检查 [模拟执行规则](../simulation-execution.md)，用同一允许列表配置 API、Worker 和模拟执行器。宿主复核已绑定的远端账号、身份、会话和适配器版本，适配器负责校验并返回稳定的来源键和远端标识。
 
 ## ModelProvider
 
@@ -169,7 +168,7 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 
 供应商请求使用本次写作所需的消息、写作指令和获准公开引用的摘录。外部回复应通过响应结构校验，错误用 [ModelProviderError](../../packages/contracts/model-provider.ts) 的脱敏错误码表示。连接测试使用固定输入，与角色运行、记忆检索和真实发言分开。
 
-`@ricajs/contracts/model-provider` 提供 `ModelProvider`、`ModelEvidence`、`WritingStyle`、`ModelProviderError` 和 `maxSimulatedTextLength`。两个方法都返回 `Promise<unknown>`，宿主按下表校验结果。
+`@ricajs/contracts/model-provider` 提供 `ModelProvider`、`ModelEvidence`、`WritingStyle` 和 `ModelProviderError`。两个方法都返回 `Promise<unknown>`，宿主按下表校验结果。
 
 | 方法 | 输入 | 接受的输出 |
 | --- | --- | --- |
@@ -245,4 +244,4 @@ export const model: ModelProvider = {
 }
 ```
 
-建议的 schema 位于 [simulation-follow-up.ts](../../packages/contracts/simulation-follow-up.ts)。输入结构对应[模型契约](../../packages/contracts/model-provider.ts)及[上下文契约](../../packages/contracts/run-continuity.ts)。
+建议的 schema 位于 [模拟后续行动契约](../../packages/simulation/contracts/follow-up.ts)。输入结构对应[模型契约](../../packages/contracts/model-provider.ts)及[上下文契约](../../packages/contracts/run-continuity.ts)。

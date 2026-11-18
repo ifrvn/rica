@@ -1,8 +1,5 @@
 import type { RunContinuity, RunTime } from './run-continuity.js'
 import type { PublicReplyReview } from './auto-review.js'
-import type { SimulationWritingContext } from './simulation-observability.js'
-
-export const maxSimulatedTextLength = 4_000
 
 export class ModelProviderError extends Error {
   constructor(readonly code: 'HTTP_ERROR' | 'REQUEST_FAILED' | 'INVALID_OUTPUT', readonly status?: number) {
@@ -20,11 +17,13 @@ type ModelInput = Readonly<{
 export type WritingStyle = 'neutral' | 'formal' | 'casual' | 'concise'
 export type ModelAttribution = Readonly<{ characterId: string; identityId: string; platform: string }>
 
+type ModelConversation = { speaker: string; history: { speaker: string; message: string }[] }
+
 export type ModelProvider = Readonly<{
   hostedProvider?: string
   hostedModel?: string
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
-    suggestFollowUp?: boolean; attribution?: ModelAttribution; conversation?: SimulationWritingContext }>, signal: AbortSignal): Promise<unknown>
+    suggestFollowUp?: boolean; attribution?: ModelAttribution; conversation?: ModelConversation }>, signal: AbortSignal): Promise<unknown>
 }>

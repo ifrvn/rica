@@ -6,14 +6,14 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue } from 'bullmq'
 import { Redis } from 'ioredis'
 import { outboxQueueName, startOutboxWorker } from '../apps/worker/outbox.js'
-import { reviewTarget } from '@ricajs/contracts/action-review'
+import { reviewTarget } from '@ricajs/simulation/contracts/review'
 import { createDatabase } from '@ricajs/persistence/client'
 import { Prisma, type MemoryPurpose, type MemoryScope, type MemoryVisibility } from '@ricajs/persistence/prisma'
 import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '@ricajs/persistence/memory'
-import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '@ricajs/persistence/inbound'
+import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '@ricajs/simulation/inbound'
 import { loadConfig } from '@ricajs/runtime/config'
-import { simulatedModel, simulatedModelPlugin } from '@ricajs/plugin-simulated-model'
-import { generateSimulatedDraft, processSimulatedDraft } from '@ricajs/persistence/simulated-draft'
+import { simulatedModel, localSimulationModel } from '@ricajs/simulation/model'
+import { generateSimulatedDraft, processSimulatedDraft } from '@ricajs/simulation/draft'
 
 import { captureMemorySnapshot, replayMemorySnapshot } from '@ricajs/persistence/memory-snapshot'
 import { loadRunContinuity } from '@ricajs/persistence/run-continuity'
@@ -127,7 +127,7 @@ after(async () => {
   }
 })
 
-async function consumeRuns(runIds: string[], type = runQueuedEvent, model = simulatedModelPlugin) {
+async function consumeRuns(runIds: string[], type = runQueuedEvent, model = localSimulationModel) {
   const worker = await startOutboxWorker(testDatabaseRoleUrl('rica_runtime'), config.redisUrl, () => model, simulationPlatforms.resolveAdapter)
   try {
     const deadline = Date.now() + 15_000
@@ -885,7 +885,7 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   const decisionInputs: string[][] = []
   const writingInputs: string[][] = []
   const jobs = await consumeRuns(runIds, draftQueuedEvent, {
-    ...simulatedModelPlugin,
+    ...localSimulationModel,
     implementation: {
       async decide(input, signal) {
         decisionInputs.push(input.evidence.map(({ content }) => content))
@@ -913,7 +913,7 @@ test('platform-to-draft processing keeps decision and confidential evidence out 
   assert.ok(!JSON.stringify(snapshots).includes(secretText))
   const runtime = testDatabaseRole('rica_runtime')
   try {
-    await Promise.all(jobs.map(({ eventId }) => processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)))
+    await Promise.all(jobs.map(({ eventId }) => processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, localSimulationModel)))
     await assert.rejects(runtime.simulatedDraft.count())
   } finally {
     await runtime.$disconnect()
@@ -970,8 +970,8 @@ test('private writing stays local when the worker is configured with a hosted mo
       },
     })
     const draft = await db.simulatedDraft.findFirstOrThrow({ where: { runId: event.runId } })
-    assert.equal(draft.modelId, simulatedModelPlugin.id)
-    assert.equal(draft.modelVersion, simulatedModelPlugin.version)
+    assert.equal(draft.modelId, localSimulationModel.id)
+    assert.equal(draft.modelVersion, localSimulationModel.version)
   } finally {
     await runtime.$disconnect()
   }
@@ -1000,7 +1000,7 @@ test('revocation during private writing prevents the draft from committing', asy
     await prepareSimulatedRun(runtime, prepare.eventId)
     const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
     await processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: {
         ...simulatedModel,
         async write(input, signal) {
@@ -1037,13 +1037,13 @@ test('a failed drafting job stays pending and concurrent retries commit it once'
     await prepareSimulatedRun(runtime, queued.eventId)
     const job = await db.outboxEvent.findFirstOrThrow({ where: { runId: result.runId, type: draftQueuedEvent } })
     await assert.rejects(processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: { ...simulatedModel, async write() { throw new Error('transient provider failure') } },
     }), /transient provider failure/)
     assert.equal((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt, null)
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 0)
 
-    await Promise.all([processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin), processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)])
+    await Promise.all([processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, localSimulationModel), processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)])
     assert.equal(await db.simulatedDraft.count({ where: { runId: result.runId } }), 1)
     assert.equal((await db.agentRun.findUniqueOrThrow({ where: { id: result.runId } })).stateVersion, 3)
     assert.ok((await db.outboxEvent.findUniqueOrThrow({ where: { eventId: job.eventId } })).processedAt)
@@ -1249,7 +1249,7 @@ test('private and public prompt injection cannot switch account or leak evidence
     let recordedFailure: { reason: string; stack: string[] } | undefined
     const inputs: { message: string; ids: string[]; serialized: string }[] = []
     await consumeRuns(runs.map(({ id }) => id), draftQueuedEvent, {
-      ...simulatedModelPlugin,
+      ...localSimulationModel,
       implementation: {
         async decide(input, signal) {
           inputs.push({ message: input.text, ids: input.evidence.map(({ id }) => id), serialized: JSON.stringify(input) })

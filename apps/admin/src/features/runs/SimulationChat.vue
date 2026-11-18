@@ -4,7 +4,7 @@ import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-
 import { formatTime } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import type { z } from '@hono/zod-openapi'
-import type { simulationChatSummary, simulationChatView } from '@ricajs/contracts/simulation-observability'
+import type { simulationChatSummary, simulationChatView } from '@ricajs/simulation/contracts/observability'
 
 type Chat = z.infer<typeof simulationChatView>
 type Room = z.infer<typeof simulationChatSummary>

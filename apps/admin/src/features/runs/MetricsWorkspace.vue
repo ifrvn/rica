@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import type { simulationDailyMetricsView } from '@ricajs/contracts/simulation-observability'
+import type { simulationDailyMetricsView } from '@ricajs/simulation/contracts/observability'
 import { characterPath, queryPath, useConsoleTask } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
 

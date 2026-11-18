@@ -1,7 +1,7 @@
-import { reviewTarget } from '@ricajs/contracts/action-review'
-import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
-import { simulationReviewPolicyVersion } from './action-review.js'
-import type { Prisma, PrismaClient, RunStateReason } from './generated/client.js'
+import { reviewTarget } from '../contracts/review.js'
+import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
+import { simulationReviewPolicyVersion } from './review.js'
+import type { Prisma, PrismaClient, RunStateReason } from '@ricajs/persistence/prisma'
 
 const permitDurationMs = 30_000
 const batchSize = 16

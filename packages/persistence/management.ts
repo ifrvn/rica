@@ -1,12 +1,11 @@
-import { isSimulationPlatform, simulationPlatformId } from '@ricajs/contracts/simulation-platform'
 import { createHash, randomUUID } from 'node:crypto'
 import type { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentReceiptView, commitmentUpdate } from '@ricajs/contracts/commitments'
 import type { z } from '@hono/zod-openapi'
-import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, memoryProvenanceView } from '@ricajs/contracts/management'
+import { contactBoundaryView, coreProfile, dailyEnergyView, identityProfile, isSimulationPlatform, memoryProvenanceView, simulationPlatformId } from '@ricajs/contracts/management'
 import { localIssuer } from '@ricajs/contracts/local-users'
 import type * as contracts from '@ricajs/contracts/management'
 import type { scheduleInput, scheduleUpdate } from '@ricajs/contracts/schedules'
-import { dailyScheduleSlot } from './simulation-schedules.js'
+import { dailyScheduleSlot } from './run-context.js'
 import type { Prisma, PrismaClient } from './generated/client.js'
 
 type Subject = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>

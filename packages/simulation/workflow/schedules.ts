@@ -1,19 +1,9 @@
-import type { Prisma, PrismaClient } from './generated/client.js'
-import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
+import { dailyScheduleSlot, lockEventContext, lockSimulatedBinding, runQueuedEvent } from '@ricajs/persistence/run-context'
 
 const catchUpMs = 2 * 60 * 60 * 1000
 const batchSize = 16
 export const scheduleSourcePrefix = 'schedule:'
-
-export async function dailyScheduleSlot(
-  tx: Prisma.TransactionClient, zone: string, wallTime: string, reference: Date, backwards = false,
-) {
-  const [result] = await tx.$queryRaw<{ slot: Date | null }[]>`
-    SELECT public.rica_daily_schedule_slot(${zone}, ${wallTime}::time, ${reference}, ${backwards}) AS slot
-  `
-  if (!result?.slot) throw new Error('Daily schedule slot is unavailable')
-  return result.slot
-}
 
 export async function dispatchSimulationSchedule(db: PrismaClient, scheduleId: string, now: Date) {
   return db.$transaction(async (tx) => {

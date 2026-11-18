@@ -1,8 +1,8 @@
 import { z } from '@hono/zod-openapi'
 
-import { listQuery, resourceId } from './management.js'
-import { maxSimulatedTextLength } from './model-provider.js'
-import { autoReviewHandoff } from './auto-review.js'
+import { listQuery, resourceId } from '@ricajs/contracts/management'
+import { maxSimulatedTextLength } from './platforms.js'
+import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
 
 const timestamp = z.iso.datetime({ offset: true })
 const consoleMessage = {
@@ -24,7 +24,6 @@ export const simulationChatView = z.object({
 export const simulationWritingContext = z.object({
   speaker: z.string(), history: z.array(z.object({ speaker: z.string(), message: z.string() })),
 })
-export type SimulationWritingContext = z.infer<typeof simulationWritingContext>
 export const simulationRunQuery = listQuery.extend({
   state: z.enum(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'CANCELED', 'WAITING_APPROVAL', 'READY', 'REJECTED',
     'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']).optional(),

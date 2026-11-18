@@ -1,4 +1,3 @@
-import { simulationPlatformId } from './simulation-platform.js'
 import { z } from '@hono/zod-openapi'
 
 export const resourceId = z.uuid().transform((value) => value.toLowerCase())
@@ -6,6 +5,7 @@ const slug = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
 const text = z.string().trim().min(1).max(240).regex(/^[^\p{Cc}]+$/u)
 const shortText = text.max(120)
 export const reasonInput = z.strictObject({ reason: text })
+export const optionalDecisionReason = z.string().trim().max(240).regex(/^[^\p{Cc}]*$/u).optional()
 const optionalReasonInput = reasonInput.partial()
 export const maxAiDisclosureLength = 3000
 export const coreProfile = z.strictObject({
@@ -66,6 +66,8 @@ export const characterInput = z.strictObject({
 export const coreInput = optionalReasonInput.extend({ coreProfile })
 export const identityInput = z.strictObject({ slug, roleProfile: identityProfile })
 export const identityUpdate = optionalReasonInput.extend({ roleProfile: identityProfile })
+export const simulationPlatformId = z.enum(['mock-a', 'mock-b'])
+export const isSimulationPlatform = (platform: string) => simulationPlatformId.safeParse(platform).success
 export const simulationAccountRegistration = z.strictObject({
   platform: simulationPlatformId,
   instanceKey: shortText,

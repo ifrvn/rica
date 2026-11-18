@@ -1,11 +1,11 @@
-import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
+import { simulationPlatformId } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
 import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationChatSummary, simulationChatView,
-  simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '@ricajs/contracts/simulation-observability'
+  simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '../contracts/observability.js'
 import { autoReviewerId } from '@ricajs/contracts/auto-review'
-import type { ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
-import type { Prisma, PrismaClient } from './generated/client.js'
-import { authorize, ManagementError, type Scope } from './management.js'
+import type { ResolveSimulationAdapter } from '../contracts/platforms.js'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
+import { authorize, ManagementError, type Scope } from '@ricajs/persistence/management'
 
 export async function startConsoleSimulation(
   tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof consoleSimulationInput>, resolveAdapter: ResolveSimulationAdapter,

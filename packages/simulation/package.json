@@ -1,0 +1,42 @@
+{
+  "name": "@ricajs/simulation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ifrvn/rica.git",
+    "directory": "packages/simulation"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "exports": {
+    "./contracts/follow-up": "./contracts/follow-up.ts",
+    "./contracts/observability": "./contracts/observability.ts",
+    "./contracts/platforms": "./contracts/platforms.ts",
+    "./contracts/review": "./contracts/review.ts",
+    "./draft": "./workflow/draft.ts",
+    "./execution": "./workflow/execution.ts",
+    "./inbound": "./workflow/inbound.ts",
+    "./model": "./adapters/model.ts",
+    "./observability": "./operations/observability.ts",
+    "./platforms": "./adapters/platforms.ts",
+    "./reconciliation": "./workflow/reconciliation.ts",
+    "./retention": "./operations/retention.ts",
+    "./review": "./workflow/review.ts",
+    "./schedules": "./workflow/schedules.ts"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "^1.6.3",
+    "@ricajs/contracts": "workspace:*",
+    "@ricajs/persistence": "workspace:*",
+    "@ricajs/plugin-host": "workspace:*",
+    "@ricajs/runtime": "workspace:*"
+  }
+}

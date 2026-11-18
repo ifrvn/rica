@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { ModelProviderError, type ModelProvider } from '@ricajs/contracts/model-provider'
 import type { PluginDefinition } from '@ricajs/plugin-host'
-import { simulatedModel } from '@ricajs/plugin-simulated-model'
+import { simulatedModel } from '@ricajs/simulation/model'
 import { hostedModelCatalog, type HostedModel } from '../providers/catalog.js'
 import { parseHostedModelConfig, type HostedModelConfig } from '../providers/config.js'
 import { HostedApiError, requestHostedReply } from '../providers/client.js'

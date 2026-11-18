@@ -196,15 +196,12 @@ importers:
       '@ricajs/plugin-newbi':
         specifier: workspace:*
         version: link:plugins/newbi
-      '@ricajs/plugin-simulated-model':
-        specifier: workspace:*
-        version: link:plugins/simulated-model
-      '@ricajs/plugin-simulated-platforms':
-        specifier: workspace:*
-        version: link:plugins/simulated-platforms
       '@ricajs/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@ricajs/simulation':
+        specifier: workspace:*
+        version: link:packages/simulation
       '@simplewebauthn/browser':
         specifier: ^14.0.0
         version: 14.0.0
@@ -294,9 +291,6 @@ importers:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
-      '@ricajs/plugin-host':
-        specifier: workspace:*
-        version: link:../plugin-host
 
   packages/persistence:
     dependencies:
@@ -315,9 +309,6 @@ importers:
       '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
-      '@ricajs/plugin-simulated-model':
-        specifier: workspace:*
-        version: link:../../plugins/simulated-model
       '@ricajs/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -332,6 +323,24 @@ importers:
       dotenv:
         specifier: ^18.0.9
         version: 18.0.9
+
+  packages/simulation:
+    dependencies:
+      '@hono/zod-openapi':
+        specifier: ^1.6.3
+        version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@ricajs/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@ricajs/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@ricajs/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+      '@ricajs/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   plugins/hosted-models:
     dependencies:
@@ -350,12 +359,12 @@ importers:
       '@ricajs/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
-      '@ricajs/plugin-simulated-model':
-        specifier: workspace:*
-        version: link:../simulated-model
       '@ricajs/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@ricajs/simulation':
+        specifier: workspace:*
+        version: link:../../packages/simulation
       '@vue/runtime-core':
         specifier: ^3.5.45
         version: 3.5.45
@@ -403,24 +412,6 @@ importers:
       typescript:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
-
-  plugins/simulated-model:
-    dependencies:
-      '@ricajs/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@ricajs/plugin-host':
-        specifier: workspace:*
-        version: link:../../packages/plugin-host
-
-  plugins/simulated-platforms:
-    dependencies:
-      '@ricajs/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@ricajs/plugin-host':
-        specifier: workspace:*
-        version: link:../../packages/plugin-host
 
 packages:
 

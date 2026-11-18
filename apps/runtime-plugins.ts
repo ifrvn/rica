@@ -1,11 +1,11 @@
-import type { PlatformAdapter, ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
+import type { PlatformAdapter, ResolveSimulationAdapter } from '@ricajs/simulation/contracts/platforms'
 import { hostedModelsPluginId, type ModelSettingsInput } from '@ricajs/plugin-hosted-models/shared'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
-import { PluginHostError, startPluginHost, type PluginDefinition } from '@ricajs/plugin-host'
-import { simulatedModelDefinition } from '@ricajs/plugin-simulated-model'
+import { PluginHostError, startPluginHost, type Plugin, type PluginDefinition } from '@ricajs/plugin-host'
+import { localSimulationModel } from '@ricajs/simulation/model'
 import { hostedModelDefinition, observedHostedModelDefinition, type createModelSettingsStore } from '@ricajs/plugin-hosted-models'
 import type { RecordHostedUsage, UsagePurpose } from '@ricajs/plugin-hosted-models/providers/usage'
-import { simulatedPlatformDefinitions } from '@ricajs/plugin-simulated-platforms'
+import { simulationPlatforms } from '@ricajs/simulation/platforms'
 
 import type { PluginMetadata, SimulationPlatformSource } from '@ricajs/contracts/plugin-status'
 
@@ -13,8 +13,14 @@ function metadata(kind: PluginMetadata['kind'], { id, version, contractVersion }
   return { kind, id, version, contractVersion }
 }
 
-export const simulationPlatformCatalog = simulatedPlatformDefinitions.map((item) => metadata('platform', item))
-const modelDefinitions = [simulatedModelDefinition, hostedModelDefinition]
+function registerBuiltIn<T>({ implementation, ...identity }: Plugin<T>): PluginDefinition<T> {
+  return { ...identity, create: () => ({ implementation }) }
+}
+
+const simulationPlatformDefinitions = simulationPlatforms.map(registerBuiltIn)
+const localModelDefinition = registerBuiltIn(localSimulationModel)
+export const simulationPlatformCatalog = simulationPlatforms.map((item) => metadata('platform', item))
+const modelDefinitions = [localModelDefinition, hostedModelDefinition]
 export const cognitionCatalog = [...simulationPlatformCatalog, ...modelDefinitions.map((item) => metadata('model', item))]
 
 async function startHost<T>(kind: string, definitions: readonly PluginDefinition<T>[],
@@ -34,9 +40,9 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
   const configured = env.RICA_SIMULATED_PLATFORMS?.trim()
   const source: SimulationPlatformSource = selection !== undefined ? 'DEPLOYMENT_SETTINGS'
     : configured === undefined ? 'BUILT_IN_DEFAULT' : 'ENVIRONMENT'
-  const ids = selection ?? (configured === undefined ? simulatedPlatformDefinitions.map(({ id }) => id)
+  const ids = selection ?? (configured === undefined ? simulationPlatforms.map(({ id }) => id)
     : configured === '' ? [] : configured.split(',').map((id) => id.trim()))
-  const host = await startHost<PlatformAdapter>('platform', simulatedPlatformDefinitions, ids.map((id) => ({ id })), service)
+  const host = await startHost<PlatformAdapter>('platform', simulationPlatformDefinitions, ids.map((id) => ({ id })), service)
   const resolveAdapter: ResolveSimulationAdapter = (id) => {
     const plugin = host.find(id)
     return plugin && { adapterId: plugin.id, adapterVersion: plugin.version, adapterContractVersion: plugin.contractVersion }
@@ -57,7 +63,7 @@ export async function startModelPlugin(configuration: ModelSettingsInput, servic
 export function startObservedModelPlugin(configuration: ModelSettingsInput, record: RecordHostedUsage, service?: string,
   purpose?: UsagePurpose,
 ) {
-  return startModelPlugin(configuration, service, [simulatedModelDefinition, observedHostedModelDefinition(record, purpose)])
+  return startModelPlugin(configuration, service, [localModelDefinition, observedHostedModelDefinition(record, purpose)])
 }
 
 export async function startConfiguredModel(

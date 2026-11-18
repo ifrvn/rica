@@ -1,4 +1,4 @@
-import { Prisma, type PrismaClient } from './generated/client.js'
+import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 
 export async function sweepSimulationRetention(db: PrismaClient, additionalSweep = Prisma.sql`0`) {
   const [row] = await db.$queryRaw<{ changed: number }[]>`

@@ -1,7 +1,7 @@
 import type { z } from '@hono/zod-openapi'
-import type { reconciliationInput, ReconciliationView } from '@ricajs/contracts/action-review'
-import { authorize, ManagementError, type Scope } from './management.js'
-import type { Prisma, PrismaClient } from './generated/client.js'
+import type { reconciliationInput, ReconciliationView } from '../contracts/review.js'
+import { authorize, ManagementError, type Scope } from '@ricajs/persistence/management'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 
 async function evidence(tx: Prisma.TransactionClient, characterId: string, actionId: string) {
   const [view] = await tx.$queryRaw<ReconciliationView[]>`

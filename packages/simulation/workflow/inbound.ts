@@ -1,8 +1,7 @@
-import { maxSimulatedTextLength } from '@ricajs/contracts/model-provider'
-import type { NormalizedPlatformEvent, ResolveSimulationPlatform } from '@ricajs/contracts/simulation-platform'
-import type { InboundKind, PrismaClient } from './generated/client.js'
-import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from './run-context.js'
-import { scheduleSourcePrefix } from './simulation-schedules.js'
+import { maxSimulatedTextLength, type NormalizedPlatformEvent, type ResolveSimulationPlatform } from '../contracts/platforms.js'
+import type { InboundKind, PrismaClient } from '@ricajs/persistence/prisma'
+import { lockEventContext, lockSimulatedBinding, runQueuedEvent } from '@ricajs/persistence/run-context'
+import { scheduleSourcePrefix } from './schedules.js'
 
 type SimulatedEvent = Readonly<{
   accountId: string

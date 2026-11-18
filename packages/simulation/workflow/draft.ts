@@ -1,21 +1,20 @@
 import { createHash } from 'node:crypto'
-import { reviewTarget } from '@ricajs/contracts/action-review'
-import { modelFollowUp, simulationFollowUp } from '@ricajs/contracts/simulation-follow-up'
-import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
-import { autoReviewSimulation, simulationReviewPolicyVersion } from './action-review.js'
+import { reviewTarget } from '../contracts/review.js'
+import { modelFollowUp, simulationFollowUp } from '../contracts/follow-up.js'
+import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
+import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
 import type { ModelEvidence, ModelProvider, WritingStyle } from '@ricajs/contracts/model-provider'
-import { simulatedModelPlugin } from '@ricajs/plugin-simulated-model'
-import { maxSimulatedTextLength } from '@ricajs/contracts/model-provider'
+import { localSimulationModel } from '../adapters/model.js'
 import type { Plugin } from '@ricajs/plugin-host'
-import type { Prisma, PrismaClient } from './generated/client.js'
-import { captureMemorySnapshot, captureSelfModelSnapshot, replayMemorySnapshotInTransaction } from './memory-snapshot.js'
-import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
-import { loadRunContinuity } from './run-continuity.js'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
+import { captureMemorySnapshot, captureSelfModelSnapshot, replayMemorySnapshotInTransaction } from '@ricajs/persistence/memory-snapshot'
+import { loadMemoryReadScope, type MemoryRequest } from '@ricajs/persistence/memory'
+import { loadRunContinuity } from '@ricajs/persistence/run-continuity'
 import type { RunContinuity } from '@ricajs/contracts/run-continuity'
-import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from './run-context.js'
-import { simulationWritingContext } from '@ricajs/contracts/simulation-observability'
+import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from '@ricajs/persistence/run-context'
+import { simulationWritingContext } from '../contracts/observability.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
   | { purpose: 'PRIVATE_REPLY' }
@@ -231,7 +230,7 @@ export async function processSimulatedDraft(
       : null
 
   // Private simulation stays local. Hosted plugins receive only the public writing input.
-  let selected = simulatedModelPlugin
+  let selected = localSimulationModel
   if (typeof configuredModel === 'function') {
     if (request?.purpose === 'PRIVATE_REPLY') {
       selected = await configuredModel('simulated')
@@ -242,7 +241,7 @@ export async function processSimulatedDraft(
       if (profile) selected = await configuredModel(profile.model_profile ?? undefined)
     }
   } else selected = configuredModel
-  const model = request?.purpose === 'PRIVATE_REPLY' && selected.implementation.hostedModel ? simulatedModelPlugin : selected
+  const model = request?.purpose === 'PRIVATE_REPLY' && selected.implementation.hostedModel ? localSimulationModel : selected
   const modelId = model.implementation.hostedProvider ?? model.id
   const modelVersion = model.implementation.hostedModel ?? model.version
   // Stay within the 30-second outbox lease. Model calls run outside the write transaction.

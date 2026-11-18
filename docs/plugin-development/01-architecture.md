@@ -20,7 +20,7 @@
 | PostgreSQL 连接、迁移入口、角色授权、运行队列和模拟执行规则 | 接收宿主依赖的查询实现、平台事件游标、执行账本和专用清理逻辑 |
 | API、Worker 和控制台的装配，以及启停、发布版本匹配和状态展示 | 运行组件定义、业务路由、账号表单、设置、审批视图和状态投影 |
 
-模拟流程本身由宿主协调。比如 [simulated-draft.ts](../../packages/persistence/simulated-draft.ts) 按身份和用途读取获准证据，调用模型并保存提案。[simulation-execution.ts](../../packages/persistence/simulation-execution.ts) 复核审批和配额，写本地回执。模拟适配器提供消息解析，本地模型提供决策和回复。
+宿主通过内置的 [`@ricajs/simulation`](../../packages/simulation/README.md) 运行模拟流程。[draft.ts](../../packages/simulation/workflow/draft.ts) 按身份和用途读取获准证据，调用模型并保存提案。[execution.ts](../../packages/simulation/workflow/execution.ts) 复核审批和配额，并写入本地回执。模拟适配器和本地模型也由这个包提供。
 
 ## 建包和装配
 

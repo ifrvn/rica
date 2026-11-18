@@ -1,5 +1,5 @@
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
-import type { Plugin, PluginDefinition } from '@ricajs/plugin-host'
+import type { Plugin } from '@ricajs/plugin-host'
 
 const replies = {
   neutral: { noEvidence: '收到，我会考虑这条消息。', prefix: '' },
@@ -23,16 +23,9 @@ export const simulatedModel: ModelProvider = {
   },
 }
 
-export const simulatedModelPlugin: Plugin<ModelProvider> = {
+export const localSimulationModel: Plugin<ModelProvider> = {
   id: 'simulated',
   version: '1.1.0',
   contractVersion: 1,
   implementation: simulatedModel,
-}
-
-export const simulatedModelDefinition: PluginDefinition<ModelProvider> = {
-  id: simulatedModelPlugin.id,
-  version: simulatedModelPlugin.version,
-  contractVersion: simulatedModelPlugin.contractVersion,
-  create: () => ({ implementation: simulatedModel }),
 }
