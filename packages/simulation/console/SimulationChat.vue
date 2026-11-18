@@ -228,18 +228,17 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
       </ol>
     </div>
     <form v-if="canStart && activeAccount" class="chat-composer" @submit.prevent="send">
-      <div class="chat-controls">
-        <UiField v-if="!addingSpeaker" label="发言群员" for="chat-speaker">
-          <select id="chat-speaker" v-model="speaker" class="ui-control" :disabled="sending || loading">
+      <UiField :label="addingSpeaker ? '新群员昵称' : '发言群员'" :for="addingSpeaker ? 'chat-new-speaker' : 'chat-speaker'">
+        <div class="chat-controls chat-speaker-controls">
+          <select v-if="!addingSpeaker" id="chat-speaker" v-model="speaker" class="ui-control" :disabled="sending || loading">
             <option v-for="name in chat?.speakers" :key="name">{{ name }}</option>
           </select>
-        </UiField>
-        <UiField v-else label="新群员昵称" for="chat-new-speaker">
-          <input id="chat-new-speaker" v-model="newSpeaker" class="ui-control" maxlength="40" placeholder="例如：小林" :disabled="sending || loading" />
-        </UiField>
-        <UiButton v-if="chat?.speakers.length" size="small" variant="soft" :disabled="sending || loading"
-          @click="addingSpeaker = !addingSpeaker">{{ addingSpeaker ? '选择已有群员' : '新建群员' }}</UiButton>
-      </div>
+          <input v-else id="chat-new-speaker" v-model="newSpeaker" class="ui-control" maxlength="40"
+            placeholder="例如：小林" :disabled="sending || loading" />
+          <UiButton v-if="chat?.speakers.length" size="small" variant="soft" :disabled="sending || loading"
+            @click="addingSpeaker = !addingSpeaker">{{ addingSpeaker ? '选择已有群员' : '新建群员' }}</UiButton>
+        </div>
+      </UiField>
       <UiField label="消息" for="chat-message">
         <textarea id="chat-message" ref="composer" v-model="message" class="ui-control" rows="2" maxlength="4000"
           placeholder="输入这位群员要说的话" :disabled="sending" @keydown.ctrl.enter.prevent="send" />
@@ -254,7 +253,8 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
 .simulation-chat { display: grid; gap: .75rem; min-width: 0; }
 .chat-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .5rem .75rem; align-items: end; }
 .chat-controls select { width: 100%; padding-inline: .5rem; text-overflow: ellipsis; }
-.chat-controls :deep(.ui-button) { justify-self: start; }
+.chat-speaker-controls { align-items: center; }
+.chat-speaker-controls :deep(.ui-button) { justify-self: start; }
 .chat-transcript { block-size: clamp(16rem, 45vh, 33rem); overflow: auto; border-radius: .5rem; border: 1px solid var(--console-line); background: var(--console-hover); }
 .chat-empty { display: grid; place-content: center; justify-items: center; gap: .5rem; min-height: 100%; padding: 1rem; }
 .chat-messages { list-style: none; margin: 0; padding: .875rem; display: grid; gap: .875rem; }

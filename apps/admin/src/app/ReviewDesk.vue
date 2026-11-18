@@ -478,9 +478,10 @@ function openRunAudit(id: string) {
       </div>
       <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
       <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
-      <nav v-if="inRuns && characterId" class="run-navigation" aria-label="运行页面">
+      <nav v-if="inRuns && characterId" class="simulation-navigation" aria-label="模拟运行分区">
         <UiButton v-for="(label, page) in runPages" :key="page"
-          variant="text" :tone="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
+          class="simulation-navigation-button" :variant="tab === page ? 'solid' : 'quiet'"
+          :tone="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
           :disabled="busy || routing" @click="changeTab(page)">
           {{ label }}
         </UiButton>
@@ -628,6 +629,13 @@ function openRunAudit(id: string) {
 .navigation-drawer-heading h2 { margin: 0; font-size: 1rem; font-weight: 650; }
 .navigation-drawer :deep(.console-navigation) { border: 0; padding-block: .625rem; }
 .navigation-drawer :deep(.console-navigation button) { min-height: 2.75rem; }
+.simulation-navigation {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem;
+  inline-size: fit-content; max-inline-size: 100%; box-sizing: border-box; padding: .25rem;
+  background: var(--console-hover); border: 1px solid var(--console-line); border-radius: 8px;
+}
+.simulation-navigation-button { min-inline-size: 0; padding-inline: .75rem; white-space: nowrap; }
+.simulation-navigation-button[aria-current] { font-weight: 650; }
 .run-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1.125rem; }
 .run-navigation [aria-current] { font-weight: 650; }
 .access-navigation { gap: .5rem; }
@@ -647,5 +655,6 @@ function openRunAudit(id: string) {
 }
 @media (max-width: 30rem) {
   .account-name { max-width: 7rem; }
+  .simulation-navigation { grid-template-columns: repeat(2, minmax(0, 1fr)); inline-size: 100%; }
 }
 </style>
