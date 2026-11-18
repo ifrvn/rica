@@ -3448,6 +3448,8 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(automatic.body.chatId, chatId)
     assert.equal(automatic.body.autoReviewPending, false)
     assert.equal(automatic.body.autoApproved, true)
+    // Keep the remaining group turns in quiet hours to exercise interactive receipt issuance.
+    await owner.character.update({ where: { id: characterId }, data: { timezone: simulationZone(1) } })
     await executeSimulation(executor, automatic.body.proposal.id, simulationPlatforms.resolveAdapter)
 
     const secondTurn = await send('小周', '刚才那套方案包含运费吗？')

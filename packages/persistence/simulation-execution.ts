@@ -92,7 +92,12 @@ export async function reserveSimulation(db: PrismaClient, actionId: string, reso
       return false
     }
 
-    if (clock.localHour < 8 || clock.localHour >= 22) return false
+    if (clock.localHour < 8 || clock.localHour >= 22) {
+      const [chat] = await tx.$queryRaw<{ id: string | null }[]>`
+        SELECT public.rica_console_chat_for_run(${action.characterId}::uuid, ${action.runId}::uuid) AS id
+      `
+      if (!chat?.id) return false
+    }
     const occupied = await tx.simulationAttempt.count({
       where: { accountId: action.accountId, status: { in: ['PERMITTED', 'UNKNOWN'] } },
     })
