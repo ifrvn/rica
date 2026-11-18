@@ -1,6 +1,6 @@
 import { simulationPlatformId } from './simulation-platform.js'
 import { z } from '@hono/zod-openapi'
-import { reasonInput } from './management.js'
+import { listQuery, reasonInput } from './management.js'
 import { simulationFollowUp } from './simulation-follow-up.js'
 import { autoReviewHandoff } from './auto-review.js'
 
@@ -26,6 +26,9 @@ export const simulationReviewContext = z.object({
   trigger: inboundReviewMessage.extend({ content: z.string().nullable() }),
   previous: z.array(inboundReviewMessage),
 })
+export const actionReviewQuery = listQuery.extend({
+  status: z.enum(['WAITING', 'HISTORY', 'APPROVE', 'REJECT']).optional(),
+})
 export const actionView = z.object({
   id: z.uuid(), runId: z.uuid(), mode: z.literal('SIMULATION'), kind: z.literal('REPLY'),
   state: z.enum(['WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']),
@@ -34,6 +37,8 @@ export const actionView = z.object({
   riskCodes: z.array(z.string()), content: z.string().nullable(),
   messageContext: simulationReviewContext.nullable(),
   autoApproved: z.boolean(),
+  autoReviewPending: z.boolean(),
+  review: z.object({ decision: z.enum(['APPROVE', 'REJECT']), at: z.iso.datetime(), reason: z.string().nullable() }).nullable(),
   autoReviewHandoff: autoReviewHandoff.nullable(),
   followUp: simulationFollowUp.nullable(),
 })

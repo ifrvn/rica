@@ -4,10 +4,26 @@ import { listQuery, resourceId } from './management.js'
 import { maxSimulatedTextLength } from './model-provider.js'
 
 const timestamp = z.iso.datetime({ offset: true })
-export const consoleSimulationInput = z.strictObject({
+const consoleMessage = {
   accountId: resourceId,
   message: z.string().trim().min(1).max(maxSimulatedTextLength).refine((value) => !value.includes('\0')),
+}
+export const consoleSimulationInput = z.union([z.strictObject(consoleMessage), z.strictObject({
+  ...consoleMessage, chatId: resourceId, speaker: z.string().trim().min(1).max(40).regex(/^[^\p{Cc}]+$/u),
+})])
+export const simulationChatsQuery = z.object({ accountId: resourceId })
+export const simulationChatSummary = z.object({ id: resourceId, createdAt: timestamp })
+export const simulationChatView = z.object({
+  id: resourceId, accountId: resourceId, speakers: z.array(z.string()),
+  turns: z.array(z.object({
+    id: resourceId, state: z.string(), speaker: z.string(), message: z.string().nullable(), sentAt: timestamp,
+    reply: z.string().nullable(), repliedAt: timestamp.nullable(),
+  })),
 })
+export const simulationWritingContext = z.object({
+  speaker: z.string(), history: z.array(z.object({ speaker: z.string(), message: z.string() })),
+})
+export type SimulationWritingContext = z.infer<typeof simulationWritingContext>
 export const simulationRunQuery = listQuery.extend({
   state: z.enum(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'CANCELED', 'WAITING_APPROVAL', 'READY', 'REJECTED',
     'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']).optional(),
@@ -33,6 +49,9 @@ export const runReplayView = z.object({
   coreVersion: z.number().int(), identityVersion: z.number().int(),
   bindingVersion: z.number().int(), authEpoch: z.number().int(),
   occurredAt: timestamp, createdAt: timestamp, contextTimezone: z.string().nullable(),
+  chatId: resourceId.nullable(),
+  autoReviewPending: z.boolean(),
+  autoApproved: z.boolean(),
   inbound: z.object({ kind: z.enum(['POST', 'REPLY', 'MENTION']), receivedAt: timestamp }),
   draft: z.object({ createdAt: timestamp, modelId: z.string().nullable(), modelVersion: z.string().nullable() }).nullable(),
   systemPrompts: z.object({ core: z.string().nullable(), identity: z.string().nullable() }).nullable(),

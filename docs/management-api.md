@@ -87,12 +87,13 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitment-receipts` | ADMIN 查询当前角色尚未登记承诺的已确认模拟回执，可用 `runId` 筛选。响应包含负责身份、平台、对象和回执时间。 |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记和编辑承诺事项、截止时间和协作身份，也可延期或关闭。负责人和提醒范围由已确认模拟回执确定。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
-| `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。ADMIN 用幂等键提交 `accountId` 和 `message`，在独立公开模拟会话中排队。角色、身份与账号须启用，账号须匹配已启用的模拟适配器。 |
+| `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。用幂等键提交 `accountId`、`message`，并携带 `chatId`（UUID）和 `speaker`（群员昵称）时，在指定模拟群聊中排队。首次发言时创建群聊和群员。仅提交账号和消息时发起单条模拟。 |
+| `GET /c/simulation-chats?accountId=…`、`GET /c/simulation-chats/{chatId}` | ADMIN 按接收账号查看最近会话，读取会话群员、最近 40 次发言和保留期内已确认的模拟回复。 |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 查询脱敏运行轨迹和当前角色的积压。 |
 | `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |
 | `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
 | `GET /c/audit` | ADMIN 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
-| `GET /c/actions`、`GET /c/actions/{actionId}` | ADMIN 读取模拟待办和经复核的提案预览。列表不含正文。 |
+| `GET /c/actions`、`GET /c/actions/{actionId}` | ADMIN 读取模拟待办和经复核的提案预览。列表支持 `status=HISTORY`、`APPROVE` 或 `REJECT`，并按决定时间分页。审批历史包含结果、时间、AI 或人工来源及详情中已填写的人工理由。列表不含正文。 |
 | `GET /c/auto-review`、`PUT /c/auto-review` | ADMIN 读取和修改当前角色的自动审批开关和提示词。读取时返回只读的默认外部模型信息，配置不可用时 `model` 为 `null`。保存时在 If-Match 带上当前版本。 |
 | `POST /c/actions/{actionId}/decisions` | ADMIN 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
@@ -148,6 +149,8 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 人工批准或拒绝时可省略 `reason`。发送结果对账和 Newbi 结案仍需说明理由。
 
 模拟提案详情的 `messageContext` 提供触发回复的原消息，以及触发时已收到的同会话最近 12 条入站消息。私聊历史限定同一联系人。列表、不可预览的提案和已过保留期的正文均不返回对应内容。
+
+模拟群聊以接收账号为边界。每条发言产生独立运行，写作和自动审核可参考此发言之前同一群聊的最近发言及已确认模拟回复。群员是会话内的虚拟发言者，可以重复参与。账号的模拟执行预算和静默时段仍生效。运行详情通过 `chatId` 关联会话。自动审核期间返回 `autoReviewPending`，审核完成或等待超时后再显示相应的审批状态。
 
 Newbi 首次向某帖子回复仍走人工审批。同一账号后续回复时，审核前须在当前公开讨论中查到该账号已确认的回复。自动批准后的 Newbi 提案进入待发送，由管理员触发发送。[Newbi 插件手册](../plugins/newbi/README.md)
 

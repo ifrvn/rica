@@ -1,6 +1,8 @@
 import { simulationPlatformId } from '@ricajs/contracts/simulation-platform'
 import type { z } from '@hono/zod-openapi'
-import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '@ricajs/contracts/simulation-observability'
+import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationChatSummary, simulationChatView,
+  simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '@ricajs/contracts/simulation-observability'
+import { autoReviewerId } from '@ricajs/contracts/auto-review'
 import type { ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
 import type { Prisma, PrismaClient } from './generated/client.js'
 import { authorize, ManagementError, type Scope } from './management.js'
@@ -15,12 +17,36 @@ export async function startConsoleSimulation(
   if (!account) throw new ManagementError(404, 'NOT_FOUND', 'Simulation account not found')
   const adapter = resolveAdapter(account.platform)
   if (!adapter) throw new ManagementError(409, 'SIMULATION_ADAPTER_UNAVAILABLE', 'Simulation adapter is unavailable')
-  const [row] = await tx.$queryRaw<{ id: string | null }[]>`
+  const [row] = 'chatId' in input ? await tx.$queryRaw<{ id: string | null }[]>`
+    SELECT public.rica_start_console_chat_message(${scope.characterId}::uuid, ${input.accountId}::uuid,
+      ${input.chatId}::uuid, ${adapter.adapterId}, ${adapter.adapterVersion}, ${input.speaker}, ${input.message}) AS id
+  ` : await tx.$queryRaw<{ id: string | null }[]>`
     SELECT public.rica_start_console_simulation(${scope.characterId}::uuid, ${input.accountId}::uuid,
       ${adapter.adapterId}, ${adapter.adapterVersion}, ${input.message}) AS id
   `
   if (!row?.id) throw new ManagementError(409, 'SIMULATION_BINDING_INACTIVE', 'Simulation binding is inactive')
   return { id: row.id, status: 'QUEUED' }
+}
+
+export async function listSimulationChats(db: PrismaClient, scope: Scope, accountId: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope)
+    const [row] = await tx.$queryRaw<{ chats: unknown }[]>`
+      SELECT public.rica_console_simulation_chats(${scope.characterId}::uuid, ${accountId}::uuid) AS chats
+    `
+    return { items: simulationChatSummary.array().parse(row.chats) }
+  })
+}
+
+export async function readSimulationChat(db: PrismaClient, scope: Scope, chatId: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope)
+    const [row] = await tx.$queryRaw<{ chat: unknown }[]>`
+      SELECT public.rica_console_simulation_chat(${scope.characterId}::uuid, ${chatId}::uuid) AS chat
+    `
+    if (!row.chat) throw new ManagementError(404, 'NOT_FOUND', 'Simulation chat not found')
+    return simulationChatView.parse(row.chat)
+  }, { isolationLevel: 'RepeatableRead' })
 }
 
 type RunListQuery = Omit<z.infer<typeof simulationRunQuery>, 'limit'> & { limit: number }
@@ -46,9 +72,19 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
     const [row] = await tx.$queryRaw<{ view: unknown }[]>`
       SELECT public.rica_replay_run_with_time(${scope.characterId}::uuid, ${runId}::uuid) ||
         jsonb_build_object(
+          'chatId', public.rica_console_chat_for_run(${scope.characterId}::uuid, ${runId}::uuid),
+          'autoReviewPending', COALESCE(a.auto_review_until > statement_timestamp()
+            AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL
+            AND r.state = 'WAITING_APPROVAL' AND c.auto_review_enabled, false),
+          'autoApproved', COALESCE(approval.reviewer_id = ${autoReviewerId}, false),
           'transcript', public.rica_console_simulation_transcript(${scope.characterId}::uuid, ${runId}::uuid),
           'systemPrompts', public.rica_run_system_prompts(${scope.characterId}::uuid, ${runId}::uuid)
         ) AS view
+      FROM (SELECT 1) base
+      LEFT JOIN public.action_proposals a ON (a.character_id, a.run_id) = (${scope.characterId}::uuid, ${runId}::uuid)
+      LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
+      LEFT JOIN public.agent_runs r ON (r.character_id,r.id) = (a.character_id,a.run_id)
+      LEFT JOIN public.characters c ON c.id = a.character_id
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
     return runReplayView.parse(row.view)

@@ -1,5 +1,6 @@
 import type { RunContinuity, RunTime } from './run-continuity.js'
 import type { PublicReplyReview } from './auto-review.js'
+import type { SimulationWritingContext } from './simulation-observability.js'
 
 export const maxSimulatedTextLength = 4_000
 
@@ -25,5 +26,5 @@ export type ModelProvider = Readonly<{
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
-    suggestFollowUp?: boolean; attribution?: ModelAttribution }>, signal: AbortSignal): Promise<unknown>
+    suggestFollowUp?: boolean; attribution?: ModelAttribution; conversation?: SimulationWritingContext }>, signal: AbortSignal): Promise<unknown>
 }>

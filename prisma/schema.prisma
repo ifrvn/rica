@@ -391,8 +391,10 @@ model InboundEvent {
   runs           AgentRun[]
   conversationId String?         @map("conversation_id") @db.Uuid
   contactId      String?         @map("contact_id") @db.Uuid
+  consoleSpeakerId String?       @map("console_speaker_id") @db.Uuid
   conversation   Conversation?   @relation(fields: [characterId, identityId, accountId, conversationId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
-  contact        Contact?        @relation(fields: [characterId, identityId, accountId, contactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
+  contact        Contact?        @relation("InboundContact", fields: [characterId, identityId, accountId, contactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
+  consoleSpeaker Contact?        @relation("ConsoleInboundSpeaker", fields: [characterId, identityId, accountId, consoleSpeakerId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction, map: "inbound_console_speaker_binding")
 
   @@unique([accountId, sourceKey])
   @@unique([characterId, identityId, accountId, id])
@@ -628,7 +630,8 @@ model Contact {
   boundaryVersion Int @default(0) @map("boundary_version")
   boundaryReason String? @map("boundary_reason")
   conversations Conversation[]
-  inboundEvents InboundEvent[]
+  inboundEvents InboundEvent[] @relation("InboundContact")
+  consoleTurns  InboundEvent[] @relation("ConsoleInboundSpeaker")
   schedules     SimulationSchedule[]
 
   @@unique([characterId, identityId, accountId, id])
@@ -795,6 +798,7 @@ model ActionProposal {
   proposerId        String?            @map("proposer_id")
   followUp          Json?              @map("follow_up")
   autoReviewHandoff Json?              @map("auto_review_handoff")
+  autoReviewUntil   DateTime?          @map("auto_review_until") @db.Timestamptz
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
   draft             SimulatedDraft     @relation(fields: [characterId, runId], references: [characterId, runId], onDelete: Restrict, onUpdate: NoAction)

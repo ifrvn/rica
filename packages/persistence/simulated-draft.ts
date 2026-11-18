@@ -15,6 +15,7 @@ import { loadMemoryReadScope, type MemoryRequest } from './memory.js'
 import { loadRunContinuity } from './run-continuity.js'
 import type { RunContinuity } from '@ricajs/contracts/run-continuity'
 import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from './run-context.js'
+import { simulationWritingContext } from '@ricajs/contracts/simulation-observability'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
   | { purpose: 'PRIVATE_REPLY' }
@@ -63,6 +64,13 @@ async function reserveModelBudget(tx: Prisma.TransactionClient, runId: string, i
   return row.allowed
 }
 
+async function readChatWritingContext(tx: Prisma.TransactionClient, runId: string) {
+  const [row] = await tx.$queryRaw<{ conversation: unknown }[]>`
+    SELECT public.rica_console_chat_writing(${runId}::uuid) AS conversation
+  `
+  return row?.conversation == null ? undefined : simulationWritingContext.parse(row.conversation)
+}
+
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
@@ -103,7 +111,8 @@ async function buildSimulatedDraft(
       FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
     if (!profile) return null
-    const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined,
+    const conversation = writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
+    const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined, conversation,
       corePrompt: profile.corePrompt ?? undefined,
       ...(suggestFollowUp ? { suggestFollowUp } : {}) }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
@@ -127,7 +136,8 @@ async function buildSimulatedDraft(
   const followUp = suggestion && (suggestion.dailyAt || (due > now && due <= now + 7 * 86_400_000))
     && (suggestion.kind === 'PLAN' || draft.text.includes(suggestion.task)) ? suggestion : undefined
 
-  return { draft, followUp, time, decisionRevisions, writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
+  return { draft, followUp, time, conversation: writing.conversation, decisionRevisions,
+    writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
@@ -160,6 +170,8 @@ async function recheckDraft(
   return !!context && evidenceMatches(context.self.facts, candidate.selfRevisions)
     && context.goals.map(({ id, version }) => id + ':' + version).join(',') === candidate.goalVersions
     && JSON.stringify(beliefRefs(context)) === JSON.stringify(candidate.beliefVersions)
+    && (request.purpose !== 'PUBLIC_REFERENCE'
+      || JSON.stringify(await readChatWritingContext(tx, runId)) === JSON.stringify(candidate.conversation))
 }
 
 export async function generateSimulatedDraft(
@@ -259,6 +271,8 @@ export async function processSimulatedDraft(
         const expiresAt = new Date(Date.now() + 86_400_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
         const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
+        const autoReview = review && target.audience === 'PUBLIC' && !crossPlatformDuplicate && !followUp
+          && await tx.character.findUnique({ where: { id: run.characterId }, select: { autoReviewEnabled: true } })
         const reviewDigest = createHash('sha256').update(JSON.stringify({
           payloadHash, target, ...adapter, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
@@ -286,7 +300,7 @@ export async function processSimulatedDraft(
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
             policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
-            followUp,
+            followUp, autoReviewUntil: autoReview && autoReview.autoReviewEnabled ? new Date(Date.now() + 12_000) : undefined,
           }, select: { id: true },
         })
         actionId = action.id
@@ -306,7 +320,8 @@ export async function processSimulatedDraft(
   }, { isolationLevel: 'ReadCommitted' })
 
   if (actionId && review && text !== null && request?.purpose === 'PUBLIC_REFERENCE') {
-    await autoReviewSimulation(db, run.characterId, actionId, text, resolveAdapter, review).catch(() => {
+    const discussion = candidate?.conversation ? JSON.stringify({ ...candidate.conversation, message: text }) : text
+    await autoReviewSimulation(db, run.characterId, actionId, discussion, resolveAdapter, review).catch(() => {
       console.warn(JSON.stringify({ service: 'worker', event: 'auto_review_failed', actionId }))
     })
   }

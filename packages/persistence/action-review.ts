@@ -32,6 +32,10 @@ type Proposal = {
   followUp: unknown
   reviewerId: string | null
   autoReviewHandoff: unknown
+  autoReviewPending: boolean
+  decision: 'APPROVE' | 'REJECT' | null
+  reviewedAt: Date | null
+  reviewReason: string | null
 }
 
 function skipSimulationReview(proposal: Proposal, target: ActionView['target']): AutoReviewHandoff | undefined {
@@ -46,6 +50,7 @@ function notFound(): never {
 
 async function proposalRows(
   tx: Prisma.TransactionClient, characterId: string, actionId: string | null, limit = 25, cursor: string | null = null,
+  status = 'WAITING',
 ) {
   return tx.$queryRaw<Proposal[]>`
     SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest", a.follow_up AS "followUp",
@@ -55,18 +60,26 @@ async function proposalRows(
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
       a.proposer_id AS "proposerId", a.expires_at AS "expiresAt",
       a.expires_at <= statement_timestamp() AS expired,
-      r.state, r.state_version AS version, approval.reviewer_id AS "reviewerId"
+      r.state, r.state_version AS version, approval.reviewer_id AS "reviewerId",
+      approval.decision, approval.created_at AS "reviewedAt", approval.reason AS "reviewReason",
+      COALESCE(r.state = 'WAITING_APPROVAL' AND a.auto_review_until > statement_timestamp()
+        AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL AND c.auto_review_enabled, false) AS "autoReviewPending"
     FROM public.action_proposals a
     JOIN public.agent_runs r ON (r.character_id, r.id) = (a.character_id, a.run_id)
+    JOIN public.characters c ON c.id = a.character_id
     LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
     WHERE a.character_id = ${characterId}::uuid
       AND (${actionId}::uuid IS NULL OR a.id = ${actionId}::uuid)
-      AND (${actionId}::uuid IS NOT NULL OR r.state = 'WAITING_APPROVAL')
-      AND (${cursor}::uuid IS NULL OR (a.created_at, a.id) < (
-        SELECT p.created_at, p.id FROM public.action_proposals p
+      AND (${actionId}::uuid IS NOT NULL OR CASE ${status}
+        WHEN 'WAITING' THEN r.state = 'WAITING_APPROVAL'
+        WHEN 'HISTORY' THEN approval.action_id IS NOT NULL
+        ELSE approval.decision::text = ${status} END)
+      AND (${cursor}::uuid IS NULL OR (coalesce(approval.created_at, a.created_at), a.id) < (
+        SELECT coalesce(ar.created_at,p.created_at), p.id FROM public.action_proposals p
+        LEFT JOIN public.action_approvals ar ON (ar.character_id,ar.action_id) = (p.character_id,p.id)
         WHERE (p.character_id, p.id) = (${characterId}::uuid, ${cursor}::uuid)
       ))
-    ORDER BY a.created_at DESC, a.id DESC
+    ORDER BY coalesce(approval.created_at,a.created_at) DESC, a.id DESC
     LIMIT ${limit}
   `
 }
@@ -94,11 +107,11 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
 }
 
 export async function listReviewActions(
-  db: PrismaClient, scope: Scope, resolveAdapter: ResolveSimulationAdapter, actionId?: string, limit = 25, cursor?: string,
+  db: PrismaClient, scope: Scope, resolveAdapter: ResolveSimulationAdapter, actionId?: string, limit = 25, cursor?: string, status?: string,
 ) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
-    const rows = await proposalRows(tx, scope.characterId, actionId ?? null, limit + 1, cursor ?? null)
+    const rows = await proposalRows(tx, scope.characterId, actionId ?? null, limit + 1, cursor ?? null, status)
     if (actionId && !rows.length) notFound()
     const actions: ActionView[] = []
     for (const row of rows.slice(0, limit)) {
@@ -112,7 +125,10 @@ export async function listReviewActions(
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
         reviewDigest: row.reviewDigest,
         autoApproved: row.reviewerId === autoReviewerId,
-        autoReviewHandoff: canSeeDraft && state === 'WAITING_APPROVAL'
+        autoReviewPending: row.autoReviewPending && state === 'WAITING_APPROVAL',
+        review: row.decision && row.reviewedAt ? { decision: row.decision, at: row.reviewedAt.toISOString(),
+          reason: actionId && row.reviewerId !== autoReviewerId ? row.reviewReason || null : null } : null,
+        autoReviewHandoff: canSeeDraft && state === 'WAITING_APPROVAL' && !row.autoReviewPending
           ? autoReviewHandoff.safeParse(row.autoReviewHandoff).data ?? skipSimulationReview(row, target) ?? missingAutoReviewHandoff
           : null,
         riskCodes: [
@@ -183,6 +199,7 @@ export async function decideReviewAction(
   if (proposal.state !== 'WAITING_APPROVAL' || proposal.reviewDigest !== input.reviewDigest) {
     throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
   }
+  if (proposal.autoReviewPending) throw new ManagementError(409, 'AUTO_REVIEW_PENDING', 'Automatic review is in progress')
   return finishReview(tx, scope.characterId, proposal, scope.actor.id, input.decision, input.reason ?? '', resolveAdapter)
 }
 

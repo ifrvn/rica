@@ -5,6 +5,7 @@ import type { z } from '@hono/zod-openapi'
 import type { accountView, characterWorkspaceView, identityView } from '@ricajs/contracts/management'
 import type { runReplayView, simulationRunQuery, simulationRunSummary } from '@ricajs/contracts/simulation-observability'
 import SimulationReconciliation from './SimulationReconciliation.vue'
+import SimulationChat from './SimulationChat.vue'
 import { simulationAccounts } from './simulation-accounts.js'
 import { readAll } from '@ricajs/console-shared/console-data'
 import type { ReconciliationView } from '@ricajs/contracts/action-review'
@@ -19,8 +20,8 @@ type Identity = z.infer<typeof identityView>
 type Page<T> = { items: T[]; nextCursor: string | null }
 
 const props = defineProps<{ characterId: string; canStart: boolean; canReview: boolean; detailId?: string; runQuery: string; showForm: boolean }>()
-const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string]; audit: [id: string]; commitment: [id: string];
-  filter: [query: string]; form: [open: boolean]; executorHealth: []; identities: [] }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; review: [id: string, historical: boolean]; audit: [id: string]; commitment: [id: string];
+  filter: [query: string]; executorHealth: []; identities: [] }>()
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const rows = ref<Run[]>([])
 const identities = ref<Identity[]>([])
@@ -29,7 +30,9 @@ const character = ref<Character>()
 const cursor = ref<string | null>(null)
 const splitLayout = window.matchMedia('(min-width: 66rem)')
 const wide = ref(splitLayout.matches)
-const previewId = computed(() => props.detailId ?? (wide.value && !props.showForm ? rows.value[0]?.id : undefined))
+const chatLatest = ref<string>()
+const followingRoom = ref(false)
+const previewId = computed(() => props.detailId ?? (followingRoom.value ? chatLatest.value : rows.value[0]?.id))
 const selected = ref<Replay>()
 const modelName = computed(() => [selected.value?.draft?.modelId, selected.value?.draft?.modelVersion].filter(Boolean).join(' · '))
 function accountName(id: string, platform?: string) {
@@ -40,16 +43,16 @@ const timeline = computed(() => {
   if (!selected.value) return []
   const { state, inbound, draft, proposal, transcript } = selected.value
   const inboundKind = { POST: '发帖', REPLY: '回复', MENTION: '提及' }
-  const review = proposal?.reviewDecision === 'APPROVE' ? '已批准'
+  const review = proposal?.reviewDecision === 'APPROVE' ? (selected.value.autoApproved ? 'AI 已批准' : '人工已批准')
     : proposal?.reviewDecision === 'REJECT' ? '已拒绝'
-      : state === 'WAITING_APPROVAL' ? '待审批' : '无决定'
+      : state === 'WAITING_APPROVAL' ? (selected.value.autoReviewPending ? 'AI 审核中' : '待人工审批') : '无决定'
   const result = proposal?.receiptAt ? '已写入'
     : proposal?.attemptStatus === 'UNKNOWN' || state === 'RECONCILING' ? '待核对'
       : proposal?.attemptStatus === 'NOT_SENT' ? '已确认未写入' : '无回执'
   return [
     { label: '收到消息', status: inboundKind[inbound.kind], at: inbound.receivedAt },
     { label: '生成草稿', status: draft ? '已生成' : '无记录', at: draft?.createdAt },
-    { label: '人工审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt, quote: transcript?.reviewReason },
+    { label: '审批', status: review, at: proposal?.reviewedAt ?? proposal?.createdAt, quote: transcript?.reviewReason },
     { label: '执行许可', status: proposal?.permittedAt ? '已发放' : state === 'READY' ? '等待发放' : '未发放', at: proposal?.permittedAt },
     { label: '模拟回执', status: result, at: proposal?.receiptAt },
   ]
@@ -58,14 +61,11 @@ const detailError = ref('')
 const loadingDetail = ref(false)
 const detailHeading = ref<HTMLElement>()
 const listHeading = ref<HTMLElement>()
-const editorHeading = ref<HTMLElement>()
 const resolutionNotice = ref('')
 let detailRevision = 0
 let detailTimer: ReturnType<typeof setTimeout> | undefined
 const progressingStates = new Set(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'WAITING_APPROVAL', 'READY', 'EXECUTING'])
 const trackingRun = computed(() => !!selected.value && !detailError.value && progressingStates.has(selected.value.state))
-const accountId = ref('')
-const message = ref('')
 const busy = ref(false)
 const error = ref('')
 const loadingError = ref('')
@@ -74,7 +74,6 @@ const loadingList = ref(false)
 let listRevision = 0
 const filters = ref({ state: '', identityId: '', accountId: '', from: '', through: '' })
 const invalidDates = computed(() => !!filters.value.from && !!filters.value.through && filters.value.from > filters.value.through)
-let pending: { body: string; key: string } | undefined
 let active = true
 function syncLayout(event: MediaQueryListEvent) { wide.value = event.matches }
 onBeforeUnmount(() => {
@@ -174,8 +173,9 @@ async function detail(id?: string, background = false) {
     if (!active || current !== detailRevision) return
     selected.value = view
     if (progressingStates.has(view.state)) {
-      detailTimer = setTimeout(() => { void detail(id, true) }, 4000)
+      detailTimer = setTimeout(() => { void detail(id, true) }, view.autoReviewPending ? 1500 : 3500)
     }
+    return view
   } catch (cause) {
     if (!active || current !== detailRevision) return
     const status = cause instanceof RequestError ? cause.status : 0
@@ -243,35 +243,23 @@ function refresh() {
   })
 }
 
-watch(() => props.showForm, (open, previous) => {
-  void nextTick(() => {
-    if (!active || props.detailId || open !== props.showForm) return
-    if (open) editorHeading.value?.focus()
-    else if (previous) document.getElementById('run-start-trigger')?.focus()
-  })
-}, { immediate: true })
-
 function reconciled(outcome: NonNullable<ReconciliationView['outcome']>) {
   resolutionNotice.value = outcome === 'CONFIRMED' ? '已确认模拟回执。' : '已按未写入回执结案。'
   void detail(previewId.value)
   void act(() => list())
 }
 
-function start() {
-  if (!props.canStart || !options.value.some(({ value }) => value === accountId.value) || !message.value.trim()) return
-  const body = JSON.stringify({ accountId: accountId.value, message: message.value.trim() })
-  if (pending?.body !== body) pending = { body, key: crypto.randomUUID() }
-  const key = pending.key
-  void act(async () => {
-    const result = await request<{ id: string }>(base.value + '/runs', {
-      method: 'POST', body, headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-    })
-    if (!active) return
-    message.value = ''
-    pending = undefined
-    emit('open', result.id)
-    await list()
-  })
+async function openReview() {
+  const id = previewId.value
+  const wasWaiting = selected.value?.state === 'WAITING_APPROVAL'
+  const view = await detail(id, true)
+  if (previewId.value === id && view?.proposal && !view.autoReviewPending
+    && (!wasWaiting || view.state === 'WAITING_APPROVAL')) emit('review', view.proposal.id, view.proposal.reviewDecision !== null)
+}
+
+function returnToChat() {
+  emit('open')
+  void nextTick(() => document.getElementById('simulation-chat-heading')?.focus())
 }
 
 onMounted(() => {
@@ -283,90 +271,75 @@ onMounted(() => {
 
 <template>
   <div class="simulation-workspace">
-    <div v-if="canStart && (!detailId || wide) && !showForm" class="run-actions">
-      <UiButton id="run-start-trigger" tone="primary" :disabled="busy || !options.length"
-        @click="emit('form', true)">发起模拟</UiButton>
-    </div>
     <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
     <UiAlert v-if="loadingError" tone="warning" role="status">{{ loadingError }}</UiAlert>
-    <div v-if="!detailId && canStart && !busy && !options.length && !loadingError" class="run-actions">
-      <span class="run-muted">发起模拟前，请启用角色、身份和已关联的模拟账号。</span>
-      <UiButton size="small" variant="soft" @click="emit('identities')">前往角色与身份</UiButton>
-    </div>
-    <section v-if="canStart && showForm && !detailId" class="run-editor console-card" aria-labelledby="run-editor-heading">
-      <h3 id="run-editor-heading" ref="editorHeading" tabindex="-1">发起模拟</h3>
-      <form @submit.prevent="start">
-        <UiField label="身份和模拟账号" for="run-account">
-          <UiCombobox placeholder="选择接收模拟消息的账号" v-model="accountId" :options="options" :input-attrs="{ id: 'run-account' }" :disabled="busy" />
-        </UiField>
-        <UiField label="模拟收到的消息" for="run-message">
-          <textarea class="ui-control" placeholder="例如：你好，能介绍一下你的工作吗？" v-model="message" :rows="3" v-bind="{ id: 'run-message' }"
-            :maxlength="4000" :disabled="busy"></textarea>
-        </UiField>
-        <div class="run-actions run-editor-actions">
-          <UiButton :disabled="busy" @click="emit('form', false)">取消</UiButton>
-          <UiButton tone="primary" type="submit" :loading="busy" :disabled="busy || !accountId || !message.trim()">开始模拟</UiButton>
-        </div>
-      </form>
-    </section>
-    <div v-else class="run-layout" :class="{ 'run-layout--split': wide && previewId }">
-      <section v-if="wide || !detailId" class="console-card run-list" aria-labelledby="run-list-heading">
-        <div class="console-section-heading">
-          <h3 id="run-list-heading" ref="listHeading" tabindex="-1">最近运行</h3>
-          <UiButton size="small" variant="quiet" :disabled="busy || loadingList" @click="refresh">刷新运行</UiButton>
-        </div>
-        <details class="run-filter-panel" :open="!!runQuery">
-          <summary>{{ runQuery ? '筛选 · 已应用' : '筛选运行' }}</summary>
-          <form class="run-filters" aria-label="筛选运行" @submit.prevent="applyFilters">
-            <UiField label="状态" for="filter-run-state">
-              <UiCombobox placeholder="全部状态" v-model="filters.state" :options="stateOptions" :input-attrs="{ id: 'filter-run-state' }" />
-            </UiField>
-            <UiField label="身份" for="filter-run-identity">
-              <UiCombobox placeholder="全部身份" v-model="filters.identityId" :options="identityOptions"
-                :input-attrs="{ id: 'filter-run-identity' }" @update:model-value="filters.accountId = ''" />
-            </UiField>
-            <UiField label="账号" for="filter-run-account">
-              <UiCombobox placeholder="全部账号" v-model="filters.accountId" :options="accountOptions" :input-attrs="{ id: 'filter-run-account' }" />
-            </UiField>
-            <UiField label="开始日期（UTC）" for="filter-run-from">
-              <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />
-            </UiField>
-            <UiField label="截止日期（UTC）" for="filter-run-through">
-              <input id="filter-run-through" v-model="filters.through" type="date" min="0001-01-01" max="9999-12-31" />
-            </UiField>
-            <div class="run-actions">
-              <UiButton type="submit" :disabled="invalidDates">筛选</UiButton>
-              <UiButton v-if="runQuery" variant="quiet" @click="emit('filter', '')">清除筛选</UiButton>
-            </div>
-          </form>
-          <UiAlert v-if="invalidDates" tone="warning" role="status">截止日期应等于或晚于开始日期。</UiAlert>
+    <div class="run-layout" :class="{ 'run-layout--split': wide && previewId }">
+      <div class="run-left">
+        <SimulationChat :base="base" :accounts="options" :can-start="canStart" :selected="previewId"
+          :requested-chat="detailId || !followingRoom ? selected?.chatId : undefined"
+          :requested-account="detailId || !followingRoom ? selected?.accountId : undefined"
+          :focus-composer="showForm" :state-name="stateName"
+          :identity="id => identityName(accounts.find(account => account.id === id)?.identityId ?? id)"
+          @expired="emit('expired')" @identities="emit('identities')" @open="emit('open', $event)"
+          @latest="chatLatest = $event" @browse="followingRoom = true" @sent="list()" />
+        <details class="console-card run-list" :open="!!runQuery">
+          <summary id="run-list-heading" ref="listHeading" tabindex="-1">运行历史</summary>
+          <div class="console-section-heading">
+            <UiButton size="small" variant="quiet" :disabled="busy || loadingList" @click="refresh">刷新运行</UiButton>
+          </div>
+          <details class="run-filter-panel" :open="!!runQuery">
+            <summary>{{ runQuery ? '筛选 · 已应用' : '筛选运行' }}</summary>
+            <form class="run-filters" aria-label="筛选运行" @submit.prevent="applyFilters">
+              <UiField label="状态" for="filter-run-state">
+                <UiCombobox placeholder="全部状态" v-model="filters.state" :options="stateOptions" :input-attrs="{ id: 'filter-run-state' }" />
+              </UiField>
+              <UiField label="身份" for="filter-run-identity">
+                <UiCombobox placeholder="全部身份" v-model="filters.identityId" :options="identityOptions"
+                  :input-attrs="{ id: 'filter-run-identity' }" @update:model-value="filters.accountId = ''" />
+              </UiField>
+              <UiField label="账号" for="filter-run-account">
+                <UiCombobox placeholder="全部账号" v-model="filters.accountId" :options="accountOptions" :input-attrs="{ id: 'filter-run-account' }" />
+              </UiField>
+              <UiField label="开始日期（UTC）" for="filter-run-from">
+                <input id="filter-run-from" v-model="filters.from" type="date" min="0001-01-01" max="9999-12-31" />
+              </UiField>
+              <UiField label="截止日期（UTC）" for="filter-run-through">
+                <input id="filter-run-through" v-model="filters.through" type="date" min="0001-01-01" max="9999-12-31" />
+              </UiField>
+              <div class="run-actions">
+                <UiButton type="submit" :disabled="invalidDates">筛选</UiButton>
+                <UiButton v-if="runQuery" variant="quiet" @click="emit('filter', '')">清除筛选</UiButton>
+              </div>
+            </form>
+            <UiAlert v-if="invalidDates" tone="warning" role="status">截止日期应等于或晚于开始日期。</UiAlert>
+          </details>
+          <UiAlert v-if="listError" tone="error" role="alert">{{ listError }}</UiAlert>
+          <p v-if="loadingList && !rows.length" role="status">正在加载运行…</p>
+          <UiEmpty v-if="!rows.length && !loadingList && !listError"
+            :description="runQuery ? '没有符合筛选条件的运行。' : '暂无模拟运行。'" />
+          <ul v-if="rows.length" class="console-select-list run-list-rows">
+            <li v-for="item in rows" :key="item.id">
+              <button :id="'run-row-' + item.id" type="button" class="console-record" :aria-current="previewId === item.id ? 'true' : undefined"
+                @click="emit('open', item.id)">
+                <span class="run-row-title">
+                  <strong>{{ identityName(item.identityId) }}</strong>
+                  <UiBadge :tone="stateTone(item.state)">{{ stateName(item.state) }}</UiBadge>
+                </span>
+                <span class="run-muted">{{ accountName(item.accountId, item.platform) }}</span>
+                <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time>
+              </button>
+            </li>
+          </ul>
+          <UiButton v-if="cursor" class="run-load-more" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</UiButton>
         </details>
-        <UiAlert v-if="listError" tone="error" role="alert">{{ listError }}</UiAlert>
-        <p v-if="loadingList && !rows.length" role="status">正在加载运行…</p>
-        <UiEmpty v-if="!rows.length && !loadingList && !listError"
-          :description="runQuery ? '没有符合筛选条件的运行。' : '暂无模拟运行。'" />
-        <ul v-if="rows.length" class="console-select-list run-list-rows">
-          <li v-for="item in rows" :key="item.id">
-            <button :id="'run-row-' + item.id" type="button" class="console-record" :aria-current="previewId === item.id ? 'true' : undefined"
-              @click="emit('open', item.id)">
-              <span class="run-row-title">
-                <strong>{{ identityName(item.identityId) }}</strong>
-                <UiBadge :tone="stateTone(item.state)">{{ stateName(item.state) }}</UiBadge>
-              </span>
-              <span class="run-muted">{{ accountName(item.accountId, item.platform) }}</span>
-              <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time>
-            </button>
-          </li>
-        </ul>
-        <UiButton v-if="cursor" class="run-load-more" size="small" :disabled="busy || loadingList" @click="list(true)">加载更多</UiButton>
-      </section>
+      </div>
       <section v-if="previewId" class="console-card run-detail" aria-labelledby="run-detail-heading">
         <div class="console-section-heading">
           <h3 id="run-detail-heading" ref="detailHeading" tabindex="-1">模拟运行详情</h3>
           <UiBadge v-if="selected" :tone="stateTone(selected.state)">{{ stateName(selected.state) }}</UiBadge>
           <div v-if="!wide" class="run-actions">
             <UiButton size="small" variant="quiet" :disabled="busy || loadingDetail" @click="refresh">刷新运行</UiButton>
-            <UiButton size="small" variant="quiet" @click="emit('open')">返回运行列表</UiButton>
+            <UiButton size="small" variant="quiet" @click="returnToChat">返回群聊</UiButton>
           </div>
         </div>
         <UiAlert v-if="resolutionNotice" tone="success" role="status">{{ resolutionNotice }}</UiAlert>
@@ -376,20 +349,24 @@ onMounted(() => {
         <template v-if="selected">
           <div class="run-actions">
             <span v-if="trackingRun" class="run-muted">自动更新中</span>
-            <UiButton v-if="canReview && selected.proposal" size="small"
+            <UiButton v-if="canReview && selected.proposal && !selected.autoReviewPending" size="small"
               :tone="selected.state === 'WAITING_APPROVAL' ? 'primary' : 'default'"
-              :variant="selected.state !== 'WAITING_APPROVAL' ? 'soft' : 'solid'" @click="emit('review', selected.proposal.id)">
-              {{ selected.state === 'WAITING_APPROVAL' ? '前往审批' : '查看模拟提案' }}
+              :variant="selected.state !== 'WAITING_APPROVAL' ? 'soft' : 'solid'" @click="openReview">
+              {{ selected.state === 'WAITING_APPROVAL' ? '前往审批' : selected.proposal.reviewDecision ? '查看审批记录' : '查看提案' }}
             </UiButton>
             <UiButton size="small" variant="quiet" @click="emit('audit', selected.id)">查看相关审计</UiButton>
             <UiButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
               size="small" variant="quiet" @click="emit('commitment', selected.id)">登记模拟承诺</UiButton>
           </div>
-          <UiAlert v-if="selected.state === 'WAITING_APPROVAL'" tone="info"
-            :title="canReview ? '草稿已生成，等待审批' : '此提案需要审批权限'">
+          <UiAlert v-if="selected.autoReviewPending && selected.state === 'WAITING_APPROVAL'" tone="info" title="AI 审核中">
+            审核完成后会自动更新；需要人工复审时可从这里进入审批。
+          </UiAlert>
+          <UiAlert v-else-if="selected.state === 'WAITING_APPROVAL'" tone="info"
+            :title="canReview ? '草稿已生成，等待人工审批' : '此提案需要审批权限'">
             {{ canReview ? '点击「前往审批」即可查看拟回复正文，并决定是否批准。' : '请联系当前角色的管理员处理这次模拟提案。' }}
           </UiAlert>
-          <UiAlert v-if="selected.state === 'READY'" tone="info" title="已批准，等待模拟执行器">
+          <UiAlert v-if="selected.state === 'READY'" tone="info"
+            :title="selected.autoApproved ? 'AI 已批准，等待模拟执行器' : '已批准，等待模拟执行器'">
             <p>执行器会自动领取许可并写入模拟回执。长时间等待时，先查看执行器状态。</p>
             <UiButton size="small" variant="soft" @click="emit('executorHealth')">查看模拟执行器</UiButton>
           </UiAlert>
@@ -444,14 +421,13 @@ onMounted(() => {
 <style scoped>
 .simulation-workspace { display: grid; gap: 1rem; min-width: 0; }
 .run-layout { display: grid; gap: 1rem; min-width: 0; align-items: start; }
-.run-layout--split { grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); }
+.run-layout--split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.run-left { display: grid; gap: .75rem; min-width: 0; }
+.run-list > summary { cursor: pointer; font-weight: 600; }
 .run-list, .run-detail { display: grid; gap: .875rem; }
 .console-card .console-section-heading { align-items: center; margin: 0; }
 .run-actions, .run-row-title { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
 .run-muted, time, dt { color: var(--console-muted); font-size: .875rem; }
-.run-editor { width: min(100%, 42rem); box-sizing: border-box; }
-.run-editor h3 { margin: 0 0 1rem; }
-.run-editor-actions { justify-content: flex-end; }
 .run-filter-panel summary { width: fit-content; cursor: pointer; font-size: .875rem; color: var(--console-muted); }
 .run-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.25rem), 1fr)); gap: 0 .75rem; margin-top: .75rem; }
 .run-filters input[type="date"] { box-sizing: border-box; width: 100%; font: inherit; height: 34px;

@@ -13,13 +13,13 @@ export const simulatedModel: ModelProvider = {
     signal.throwIfAborted()
     return text.trim() ? 'REPLY' : 'NO_OP'
   },
-  async write({ evidence, style }, signal) {
+  async write({ evidence, style, conversation }, signal) {
     signal.throwIfAborted()
     const [first] = evidence
     const reply = replies[style]
     return first
       ? { text: reply.prefix + first.content, evidenceIds: [first.id] }
-      : { text: reply.noEvidence, evidenceIds: [] }
+      : { text: conversation ? conversation.speaker + '，' + reply.noEvidence : reply.noEvidence, evidenceIds: [] }
   },
 }
 

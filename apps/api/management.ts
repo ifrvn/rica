@@ -6,12 +6,12 @@ import { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentRec
 import { scheduleInput, scheduleUpdate, scheduleView } from '@ricajs/contracts/schedules'
 import { planInput, planStateInput, planView } from '@ricajs/contracts/plans'
 import { listPlans, savePlan, setPlanEnabled } from '@ricajs/persistence/plans'
-import { consoleSimulationInput, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '@ricajs/contracts/simulation-observability'
-import { listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '@ricajs/persistence/simulation-observability'
+import { consoleSimulationInput, simulationChatSummary, simulationChatsQuery, simulationChatView, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '@ricajs/contracts/simulation-observability'
+import { listSimulationChats, readSimulationChat, listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '@ricajs/persistence/simulation-observability'
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '@ricajs/persistence/console-knowledge'
 import * as schema from '@ricajs/contracts/management'
 import type { ResolveSimulationAdapter } from '@ricajs/contracts/simulation-platform'
-import { actionDecision, actionView, reconciliationInput, reconciliationView } from '@ricajs/contracts/action-review'
+import { actionDecision, actionReviewQuery, actionView, reconciliationInput, reconciliationView } from '@ricajs/contracts/action-review'
 import { decideReviewAction, listReviewActions } from '@ricajs/persistence/action-review'
 import { autoReviewInput, autoReviewView, type AutoReviewView } from '@ricajs/contracts/auto-review'
 import { readAutoReviewSettings } from '@ricajs/persistence/auto-review'
@@ -751,12 +751,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/actions`, security,
-    request: { params: characterParams, query: schema.listQuery },
+    request: { params: characterParams, query: actionReviewQuery },
     responses: { ...errors, 200: success(schema.pageView(actionView)) },
   }), async (c) => {
-    const { limit, cursor } = management.parsePage(c.req.valid('query'))
+    const query = c.req.valid('query')
+    const { limit, cursor } = management.parsePage(query)
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    return c.json(await listReviewActions(db, scope, resolveAdapter, undefined, limit, cursor), 200)
+    return c.json(await listReviewActions(db, scope, resolveAdapter, undefined, limit, cursor, query.status), 200)
   })
 
   app.openapi(createRoute({
@@ -967,6 +968,22 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       input: { input, expected }, requestId,
     }, (tx) => management.updateCommitment(tx, scope, commitmentId, expected, input))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/simulation-chats`, security,
+    request: { params: characterParams, query: simulationChatsQuery },
+    responses: { ...errors, 200: success(z.object({ items: simulationChatSummary.array() })) },
+  }), async (c) => c.json(await listSimulationChats(db, { ...c.req.valid('param'), actor: c.get('actor') },
+    c.req.valid('query').accountId), 200))
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/simulation-chats/{chatId}`, security,
+    request: { params: characterParams.extend({ chatId: schema.resourceId }) },
+    responses: { ...errors, 200: success(simulationChatView) },
+  }), async (c) => {
+    const { characterId, chatId } = c.req.valid('param')
+    return c.json(await readSimulationChat(db, { characterId, actor: c.get('actor') }, chatId), 200)
   })
 
   app.openapi(createRoute({

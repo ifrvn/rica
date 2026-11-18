@@ -31,7 +31,7 @@ export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
     ...(page === 'runs' && !detail && query.get('start') === '1' ? { startSimulation: true } : {}),
     ...(page === 'connector' && connectorAccountId && id.test(connectorAccountId) ? { connectorAccountId } : {}),
     ...(page === 'connector' && reviewPlugin ? { reviewPlugin } : {}),
-    ...(page === 'connector' && reviewStatus !== null ? { reviewStatus } : {}),
+    ...((page === 'connector' || page === 'review') && reviewStatus !== null ? { reviewStatus } : {}),
     ...(page === 'audit' && !detail && auditTarget && id.test(auditTarget) ? { auditTarget: auditTarget.toLowerCase() } : {}),
     ...(page === 'health' && query.get('node') === 'simulation-executor' ? { healthNode: 'simulation-executor' as const } : {}) }
 }
@@ -42,9 +42,9 @@ export function consoleHash({ characterId, page, detail, runQuery, startSimulati
   if (page === 'runs' && !detail && startSimulation) filters.set('start', '1')
   if (page === 'connector' && connectorAccountId) filters.set('accountId', connectorAccountId)
   if (page === 'connector' && reviewPlugin) filters.set('plugin', reviewPlugin)
-  if (page === 'connector' && reviewStatus !== undefined) filters.set('status', reviewStatus)
+  if ((page === 'connector' || page === 'review') && reviewStatus !== undefined) filters.set('status', reviewStatus)
   return '#/characters/' + characterId + '/' + page + (detail ? '/' + detail : '')
-    + ((page === 'runs' || page === 'connector') && filters.size ? '?' + filters.toString() : '')
+    + ((page === 'runs' || page === 'connector' || page === 'review') && filters.size ? '?' + filters.toString() : '')
     + (page === 'audit' && !detail && auditTarget ? '?targetId=' + encodeURIComponent(auditTarget) : '')
     + (page === 'health' && healthNode ? '?node=' + healthNode : '')
 }

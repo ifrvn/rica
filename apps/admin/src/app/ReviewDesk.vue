@@ -95,6 +95,8 @@ const characterCursor = ref<string | null>(null)
 const installedReviews = ref<string[]>([])
 const reviewPlugin = ref<string>()
 const reviewStatus = ref<string>()
+const reviewHistory = computed(() => tab.value === 'review' && ['HISTORY', 'APPROVE', 'REJECT'].includes(reviewStatus.value ?? ''))
+let reviewTimer: ReturnType<typeof setTimeout> | undefined
 const auditTarget = ref<string>()
 const activePlatformReview = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)
   ?? (reviewPlugin.value ? undefined : platformReviews.find(({ id }) => installedReviews.value.includes(id)) ?? platformReviews[0]))
@@ -210,7 +212,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
   const target = location?.characterId ?? ''
   const changedCharacter = target !== characterId.value
   const changedPage = tab.value !== location?.page
-  if (changedCharacter || changedPage) {
+  if (changedCharacter || changedPage || (location?.page === 'review' && reviewStatus.value !== location.reviewStatus)) {
     actions.value = []
     nextCursor.value = null
     queueLoaded = false
@@ -243,7 +245,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
     startSimulation.value = tab.value === 'runs' && !!location.startSimulation
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
     reviewPlugin.value = tab.value === 'connector' ? location.reviewPlugin : undefined
-    reviewStatus.value = tab.value === 'connector' ? location.reviewStatus : undefined
+    reviewStatus.value = tab.value === 'connector' || tab.value === 'review' ? location.reviewStatus : undefined
     auditTarget.value = tab.value === 'audit' && !detailId.value ? location.auditTarget : undefined
     healthNode.value = tab.value === 'health' ? location.healthNode : undefined
     if (replace || (location.startSimulation && !startSimulation.value)) {
@@ -302,6 +304,7 @@ function syncNavigation(event: MediaQueryListEvent) {
 }
 
 onBeforeUnmount(() => {
+  clearTimeout(reviewTimer)
   navigationBreakpoint.removeEventListener('change', syncNavigation)
   ++revision
   window.removeEventListener('hashchange', restoreLocation)
@@ -333,6 +336,7 @@ async function passkeyLogin() {
 }
 
 function resetReview() {
+  clearTimeout(reviewTimer)
   selected.value = undefined
   reason.value = ''
   pending = undefined
@@ -399,8 +403,10 @@ function closeSecuritySettings() {
 }
 
 async function fetchQueue(current: number, append = false) {
-  const cursor = append && nextCursor.value ? '?cursor=' + encodeURIComponent(nextCursor.value) : ''
-  const result = await request<Page<ActionView>>(path.value + cursor)
+  const query = new URLSearchParams()
+  if (reviewHistory.value) query.set('status', reviewStatus.value!)
+  if (append && nextCursor.value) query.set('cursor', nextCursor.value)
+  const result = await request<Page<ActionView>>(path.value + (query.size ? '?' + query : ''))
   if (current !== revision) return
   actions.value = append ? [...actions.value, ...result.items] : result.items
   nextCursor.value = result.nextCursor
@@ -422,12 +428,20 @@ function changeCharacter(id: string) {
 }
 
 async function fetchAction(id: string, current: number) {
+  clearTimeout(reviewTimer)
   const action = await request<ActionView>(path.value + '/' + id)
-  if (current === revision) selected.value = action
+  if (current !== revision) return
+  selected.value = action
+  if (action.autoReviewPending) reviewTimer = setTimeout(() => {
+    if (current === revision) void run(async () => {
+      await fetchAction(id, current)
+      if (current === revision && selected.value?.state !== 'WAITING_APPROVAL') await fetchQueue(current)
+    }, current)
+  }, 1500)
 }
 
 function openAction(id?: string) {
-  if (!id || detailId.value !== id) navigate({ characterId: characterId.value, page: 'review', detail: id })
+  if (!id || detailId.value !== id) navigate({ characterId: characterId.value, page: 'review', detail: id, reviewStatus: reviewStatus.value })
   else {
     const current = revision
     void run(() => fetchAction(id, current), current)
@@ -445,7 +459,7 @@ function openRunAudit(id: string) {
 async function decide(decision: Decision) {
   const proposal = selected.value
   const note = reason.value.trim()
-  if (busy.value || !proposal?.content || proposal.state !== 'WAITING_APPROVAL') return
+  if (busy.value || !proposal?.content || proposal.state !== 'WAITING_APPROVAL' || proposal.autoReviewPending) return
   const data = { decision, reviewDigest: proposal.reviewDigest, reason: note || undefined }
   const signature = JSON.stringify([proposal.id, proposal.version, data])
   if (pending?.signature !== signature) pending = { signature, key: crypto.randomUUID() }
@@ -462,7 +476,8 @@ async function decide(decision: Decision) {
     )
     if (current !== revision) return
     actions.value = actions.value.filter(({ id }) => id !== proposal.id)
-    selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version }
+    selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version,
+      review: { decision, at: new Date().toISOString(), reason: note || null } }
     reason.value = ''
     pending = undefined
     notice.value = outcome.status === 'READY' ? '已批准，等待模拟执行。' : '已拒绝模拟提案。'
@@ -616,11 +631,10 @@ async function decide(decision: Decision) {
       <template v-else-if="tab === 'runs' && characterId">
         <SimulationWorkspace :key="characterId" :character-id="characterId" can-start can-review
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
-          @review="navigate({ characterId, page: 'review', detail: $event })"
+          @review="(id, historical) => navigate({ characterId, page: 'review', detail: id, reviewStatus: historical ? 'HISTORY' : undefined })"
           @executor-health="navigate({ characterId, page: 'health', healthNode: 'simulation-executor' })"
           @identities="changeTab('character')"
           @commitment="navigate({ characterId, page: 'planning', detail: $event })"
-          @form="navigate({ characterId, page: 'runs', runQuery, startSimulation: $event })"
           @filter="navigate({ characterId, page: 'runs', runQuery: $event })" />
         <RunOperations v-if="!detailId && !startSimulation" :key="characterId" :character-id="characterId" mode="backlog"
           @expired="resetSession" @open-outbox="changeTab('outbox')"
@@ -675,11 +689,20 @@ async function decide(decision: Decision) {
       <div v-else-if="tab === 'review' && characterId" class="console-split console-record-workspace" :class="{ 'console-split--detail': detailId }">
         <section class="console-split-list" aria-labelledby="review-list-heading">
           <div class="console-section-heading">
-            <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">待审批的模拟提案</h3>
-            <UiButton size="small" variant="quiet" :disabled="busy || routing" @click="loadQueue()">刷新待办</UiButton>
+            <h3 id="review-list-heading" ref="reviewListHeading" tabindex="-1">模拟提案</h3>
+            <UiButton size="small" variant="quiet" :disabled="busy || routing" @click="loadQueue()">刷新</UiButton>
           </div>
-          <UiSpinner v-if="routing && !actions.length" aria-label="正在加载待办" />
-          <UiEmpty v-else-if="!actions.length && !busy && !error" description="暂无待审批提案。" />
+          <UiField label="审批状态" for="simulation-review-status">
+            <select id="simulation-review-status" class="ui-control" :value="reviewHistory ? reviewStatus : 'WAITING'"
+              @change="navigate({ characterId, page: 'review', reviewStatus: ($event.target as HTMLSelectElement).value })">
+              <option value="WAITING">待审批</option>
+              <option value="HISTORY">审批历史</option>
+              <option value="APPROVE">已批准</option>
+              <option value="REJECT">已拒绝</option>
+            </select>
+          </UiField>
+          <UiSpinner v-if="routing && !actions.length" aria-label="正在加载提案" />
+          <UiEmpty v-else-if="!actions.length && !busy && !error" :description="reviewHistory ? '暂无符合条件的审批记录。' : '暂无待审批提案。'" />
           <ul v-if="actions.length" class="console-select-list">
             <li v-for="item in actions" :key="item.id">
               <button :id="'review-row-' + item.id" type="button" class="console-record" :disabled="busy"
@@ -688,8 +711,13 @@ async function decide(decision: Decision) {
                   <strong>{{ item.target.identity }}</strong>
                   <span>{{ item.target.platform }} · {{ item.target.account }}</span>
                   <span class="console-record-meta">{{ item.target.audience === 'PUBLIC' ? '公开' : '私聊' }} · {{ item.target.conversation }}</span>
+                  <time v-if="item.review" class="console-record-meta" :datetime="item.review.at">{{ formatTime(item.review.at) }}</time>
                 </span>
-                <UiBadge :tone="statusTone(item.state)">{{ statusText[item.state] }}</UiBadge>
+                <UiBadge v-if="item.autoReviewPending" tone="info">AI 审核中</UiBadge>
+                <UiBadge v-else-if="item.review" :tone="item.review.decision === 'APPROVE' ? 'success' : 'error'">
+                  {{ item.autoApproved ? 'AI 已批准' : item.review.decision === 'APPROVE' ? '人工已批准' : '已拒绝' }}
+                </UiBadge>
+                <UiBadge v-else :tone="statusTone(item.state)">{{ statusText[item.state] }}</UiBadge>
               </button>
             </li>
           </ul>
@@ -699,13 +727,12 @@ async function decide(decision: Decision) {
         <section v-if="detailId" class="console-split-detail proposal" aria-labelledby="review-detail-heading">
           <div class="console-section-heading">
             <h3 id="review-detail-heading" ref="reviewDetailHeading" tabindex="-1">模拟回复</h3>
-            <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction()">返回待办</UiButton>
+            <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction()">返回列表</UiButton>
           </div>
           <UiSpinner v-if="routing && !selected" aria-label="正在加载提案" />
           <div v-if="selected" class="console-actions proposal-actions">
             <UiBadge>模拟执行</UiBadge>
             <UiBadge :tone="statusTone(selected.state)">{{ statusText[selected.state] }}</UiBadge>
-            <UiBadge v-if="selected.autoApproved" tone="success">AI 自动批准</UiBadge>
             <UiButton size="small" variant="quiet" :disabled="busy" @click="openAction(selected.id)">重新核对</UiButton>
             <UiButton size="small" variant="quiet" :disabled="busy" @click="openRun(selected.runId)">查看模拟运行</UiButton>
           </div>
@@ -716,7 +743,10 @@ async function decide(decision: Decision) {
               <div><dt>身份与账号</dt><dd>{{ selected.target.identity }} / {{ selected.target.account }}</dd></div>
               <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
               <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
+              <div v-if="selected.review"><dt>审批决定</dt><dd>{{ selected.autoApproved ? 'AI 已批准' : selected.review.decision === 'APPROVE' ? '人工已批准' : '人工已拒绝' }} · {{ formatTime(selected.review.at) }}</dd></div>
+              <div v-if="selected.review?.reason"><dt>审批理由</dt><dd>{{ selected.review.reason }}</dd></div>
             </dl>
+            <UiAlert v-if="selected.autoReviewPending" tone="info">AI 审核中，结果会自动更新。</UiAlert>
             <UiAlert v-if="!selected.autoReviewHandoff && selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
               此回复与其他平台的内容相似，请核对后再审批。
             </UiAlert>
@@ -764,7 +794,7 @@ async function decide(decision: Decision) {
               <p>{{ selected.autoReviewHandoff.reason }}</p>
               <small v-if="selected.autoReviewHandoff.model">审核模型 {{ selected.autoReviewHandoff.model }}</small>
             </UiAlert>
-            <form v-if="selected.state === 'WAITING_APPROVAL' && selected.content"
+            <form v-if="selected.state === 'WAITING_APPROVAL' && selected.content && !selected.autoReviewPending"
               @submit.prevent="decide('APPROVE')">
               <UiField label="审批理由（选填）" for="review-reason">
                 <textarea class="ui-control" v-model="reason" :rows="3" :maxlength="240"

@@ -3411,6 +3411,97 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(olderAudit.body.nextCursor, null)
     const foreignCursor = await request('GET', character + '/audit?runId=' + second.body.id)
     assert.equal((await request('GET', audit + '&cursor=' + foreignCursor.body.items[0].id)).status, 422)
+
+    const chatId = randomUUID()
+    const chatPath = character + '/simulation-chats/' + chatId
+    const send = (speaker: string, message: string, key = randomUUID()) =>
+      request('POST', path, { key, data: { accountId: account.id, chatId, speaker, message } })
+    const prepareTurn = async (turn: string) => {
+      const inbound = await owner.outboxEvent.findFirstOrThrow({ where: { runId: turn, type: runQueuedEvent } })
+      await prepareSimulatedRun(runtime, inbound.eventId)
+      return owner.outboxEvent.findFirstOrThrow({ where: { runId: turn, type: draftQueuedEvent } })
+    }
+    await owner.character.update({ where: { id: characterId }, data: { autoReviewEnabled: true } })
+    const firstKey = randomUUID()
+    const firstTurn = await send('小林', '我们在比较两套方案。', firstKey)
+    assert.equal(firstTurn.status, 201, JSON.stringify(firstTurn.body))
+    assert.equal((await send('小林', '我们在比较两套方案。', firstKey)).body.id, firstTurn.body.id)
+    const firstDraft = await prepareTurn(firstTurn.body.id)
+    const firstReplay = path + '/' + firstTurn.body.id + '/replay'
+    let reviewObserved = false
+    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin, undefined, async () => {
+      const duringReview = await request('GET', firstReplay)
+      assert.equal(duringReview.body.autoReviewPending, true)
+      const proposalPath = character + '/actions/' + duringReview.body.proposal.id
+      const preview = await request('GET', proposalPath)
+      assert.equal(preview.body.autoReviewPending, true)
+      const race = await request('POST', proposalPath + '/decisions', {
+        key: randomUUID(), ifMatch: preview.headers.get('etag')!,
+        data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest },
+      })
+      assert.equal(race.body.error.code, 'AUTO_REVIEW_PENDING')
+      reviewObserved = true
+      return { status: 'APPROVE', model: 'fixture/review' }
+    })
+    assert.equal(reviewObserved, true)
+    const automatic = await request('GET', firstReplay)
+    assert.equal(automatic.body.chatId, chatId)
+    assert.equal(automatic.body.autoReviewPending, false)
+    assert.equal(automatic.body.autoApproved, true)
+    await executeSimulation(executor, automatic.body.proposal.id, simulationPlatforms.resolveAdapter)
+
+    const secondTurn = await send('小周', '刚才那套方案包含运费吗？')
+    assert.equal(secondTurn.status, 201, JSON.stringify(secondTurn.body))
+    const secondDraft = await prepareTurn(secondTurn.body.id)
+    let seenContext: unknown
+    await processSimulatedDraft(runtime, secondDraft.eventId, simulationPlatforms.resolveAdapter, {
+      ...simulatedModelPlugin, implementation: { ...simulatedModelPlugin.implementation, async write(input, signal) {
+        seenContext = input.conversation
+        return simulatedModelPlugin.implementation.write(input, signal)
+      } },
+    })
+    const chat = await request('GET', chatPath, { actor: 'reviewer' })
+    assert.equal(chat.status, 200, JSON.stringify(chat.body))
+    assert.deepEqual(chat.body.speakers, ['小林', '小周'])
+    assert.deepEqual(chat.body.turns.map(({ id }: { id: string }) => id), [firstTurn.body.id, secondTurn.body.id])
+    assert.equal(chat.body.turns[0].state, 'SIMULATED')
+    assert.equal(chat.body.turns[1].reply, null)
+    assert.ok(chat.body.turns[0].reply)
+    assert.deepEqual(seenContext, { speaker: '小周', history: [
+      { speaker: '小林', message: '我们在比较两套方案。' }, { speaker: '角色', message: chat.body.turns[0].reply },
+    ] })
+    assert.equal((await request('GET', chatPath, { actor: 'nonmember' })).status, 404)
+    assert.equal((await request('GET', characterPath(b) + '/simulation-chats/' + chatId, { actor: 'admin-b' })).status, 404)
+    await assert.rejects(runtime.$queryRaw`SELECT public.rica_console_simulation_chat(${characterId}::uuid,${chatId}::uuid)`, /permission denied/i)
+    const chats = await request('GET', character + '/simulation-chats?accountId=' + account.id)
+    assert.equal(chats.body.items[0].id, chatId)
+    const secondAction = await owner.actionProposal.findUniqueOrThrow({ where: { runId: secondTurn.body.id } })
+    const secondProposal = character + '/actions/' + secondAction.id
+    const approvalPreview = await request('GET', secondProposal)
+    assert.equal((await request('POST', secondProposal + '/decisions', {
+      key: randomUUID(), ifMatch: approvalPreview.headers.get('etag')!,
+      data: { decision: 'REJECT', reviewDigest: approvalPreview.body.reviewDigest, reason: 'Fixture rejection' },
+    })).status, 200)
+    const history = await request('GET', character + '/actions?status=HISTORY&limit=1')
+    assert.equal(history.body.items[0].id, secondAction.id)
+    const moreHistory = await request('GET', character + '/actions?status=HISTORY&cursor=' + history.body.nextCursor)
+    assert.equal(moreHistory.body.items[0].autoApproved, true)
+    assert.equal((await request('GET', secondProposal)).body.review.reason, 'Fixture rejection')
+
+    const thirdTurn = await send('小林', '我补充一下预算。')
+    const thirdDraft = await prepareTurn(thirdTurn.body.id)
+    await processSimulatedDraft(runtime, thirdDraft.eventId, simulationPlatforms.resolveAdapter, simulatedModelPlugin)
+    const thirdAction = await owner.actionProposal.findUniqueOrThrow({ where: { runId: thirdTurn.body.id } })
+    const thirdProposal = character + '/actions/' + thirdAction.id
+    const thirdPreview = await request('GET', thirdProposal)
+    assert.equal(thirdPreview.body.messageContext.trigger.sender, '小林')
+    assert.equal(thirdPreview.body.target.contactId, null)
+    assert.equal((await request('POST', thirdProposal + '/decisions', {
+      key: randomUUID(), ifMatch: thirdPreview.headers.get('etag')!,
+      data: { decision: 'APPROVE', reviewDigest: thirdPreview.body.reviewDigest },
+    })).status, 200)
+    await executeSimulation(executor, thirdAction.id, simulationPlatforms.resolveAdapter)
+    assert.equal((await request('GET', chatPath)).body.turns.at(-1).state, 'SIMULATED')
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }
