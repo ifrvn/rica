@@ -248,6 +248,23 @@ export const auditView = z.object({
   commitment: z.object({ title: z.string(), dueAt: z.iso.datetime() }).optional(),
 })
 
+export const runActivityKind = z.enum(['SIMULATION', 'ASSESSMENT', 'PROPOSAL'])
+export const runActivityQuery = z.object({
+  kind: runActivityKind.optional(),
+  cursor: z.string().max(512).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+})
+export const runActivityItem = z.object({
+  id: resourceId,
+  kind: runActivityKind,
+  platform: z.string(),
+  identity: z.string(),
+  account: z.string(),
+  accountId: resourceId,
+  state: z.string(),
+  createdAt: z.iso.datetime(),
+})
+
 export function pageView<T extends z.ZodType>(item: T) {
   return z.object({ items: z.array(item), nextCursor: z.string().nullable() })
 }

@@ -10,7 +10,7 @@ type Entry = z.infer<typeof auditView>
 type Page = { items: Entry[]; nextCursor: string | null }
 
 const props = defineProps<{ characterId: string; runId?: string; targetId?: string; canReview: boolean }>()
-const emit = defineEmits<{ expired: []; all: []; openRun: [id: string]; proposal: [plugin: string, id: string] }>()
+const emit = defineEmits<{ expired: []; all: []; openRun: [id: string]; proposal: [plugin: string, id: string]; assessment: [plugin: string, id: string] }>()
 const path = '/v1/characters/' + encodeURIComponent(props.characterId) + '/audit'
 const items = ref<Entry[]>([])
 const cursor = ref<string | null>(null)
@@ -114,6 +114,8 @@ onMounted(() => { void load() })
               @click="emit('openRun', item.run!.id)">查看运行</UiButton>
             <UiButton v-if="reviewFor(item)" size="small" variant="quiet"
               @click="openProposal(item)">查看平台提案</UiButton>
+            <UiButton v-if="item.operation === 'newbi.discussion.assess'" size="small" variant="quiet"
+              @click="emit('assessment', 'newbi', item.targetId)">查看讨论评估</UiButton>
           </div>
         </div>
         <details class="audit-details">

@@ -62,6 +62,7 @@ export type ReviewQueue = {
 }
 export const platformReviews: readonly {
   id: string; title: string; component: Component
+  activity?: { title: string; assessment?: Component; states: Record<string, Readonly<Record<string, string>>> }
   installed(workspace: ConsoleWorkspace): boolean
   deployed(deployment: DeploymentPluginsView): boolean
   ownsAudit?(operation: string): boolean

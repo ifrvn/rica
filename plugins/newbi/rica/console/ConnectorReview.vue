@@ -6,6 +6,7 @@ import { autoReviewHandoffLabel } from '@ricajs/contracts/auto-review'
 import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../management/contracts.js'
 import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
+import { replyStatusLabels as statusText } from './activity-labels.js'
 
 type Summary = z.infer<typeof newbiReplySummary>
 type Reply = z.infer<typeof newbiReviewView>
@@ -14,10 +15,6 @@ type Page = { items: Summary[]; nextCursor: string | null }
 const props = defineProps<{ characterId: string; detailId?: string; accountId?: string; statusFilter?: string; canReview: boolean; canManage: boolean; canInspect?: boolean }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; all: []; filter: [status: string]; account: [id: string]; audit: [id: string] }>()
 const base = '/v1/characters/' + encodeURIComponent(props.characterId) + '/newbi/replies'
-const statusText: Record<Summary['status'], string> = {
-  WAITING: '待审批', READY: '待发送', REJECTED: '已拒绝', IN_FLIGHT: '发送中',
-  UNKNOWN: '待核对', SENT: '已发送', CLOSED: '已结案',
-}
 const options = [{ label: '全部状态', value: '' }, ...Object.entries(statusText).map(([value, label]) => ({ label, value }))]
 const filter = computed(() => options.find(({ value }) => value === props.statusFilter)?.value ?? 'WAITING')
 const rows = ref<Summary[]>([])

@@ -11,7 +11,7 @@ import { formatTime, readAll } from '@ricajs/console-shared/console-data'
 import { autoReviewHandoffLabel } from '@ricajs/contracts/auto-review'
 import type { ReconciliationView } from '../contracts/review.js'
 import { chatReplyStopLabels } from '../contracts/review.js'
-import { runFilterKeys } from './run-filters.js'
+import { runFilterKeys, runStateLabels as stateLabels } from './run-filters.js'
 import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Run = z.infer<typeof simulationRunSummary>
@@ -112,12 +112,6 @@ onBeforeUnmount(() => {
   splitLayout.removeEventListener('change', syncLayout)
   clearTimeout(detailTimer)
 })
-
-const stateLabels = {
-  QUEUED: '已排队', CONTEXT_READY: '准备草稿', DRAFTED: '草稿已生成', WAITING_APPROVAL: '待审批', READY: '待执行',
-  EXECUTING: '执行中', RECONCILING: '待对账', SIMULATED: '模拟完成',
-  REJECTED: '已拒绝', BLOCKED: '已拦截', CANCELED: '已取消', EXPIRED: '已过期', SKIPPED: '已旁听',
-} satisfies Record<NonNullable<z.infer<typeof simulationRunQuery>['state']>, string>
 
 function stateName(state: string) {
   return (stateLabels as Record<string, string>)[state] ?? state

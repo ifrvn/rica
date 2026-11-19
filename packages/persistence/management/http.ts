@@ -10,6 +10,8 @@ export type ManagementEnvironment = { Variables: { actor: ManagementPrincipal; r
 export type ManagementPlugin = {
   id: string
   registerRoutes(app: OpenAPIHono<ManagementEnvironment>): void
+  // Sources project id, kind, platform, identity, account, account_id, state, created_at.
+  runActivity?: Partial<Record<z.infer<typeof schema.runActivityKind>, (characterId: string) => Prisma.Sql>>
   account?: PlatformAccountHooks & {
     registration: z.ZodType<{ platform: string }>
     register(tx: Prisma.TransactionClient, scope: Scope, input: unknown): Promise<{ id: string }>

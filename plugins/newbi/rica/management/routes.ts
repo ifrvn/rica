@@ -2,15 +2,15 @@ import { newbiAccountHooks, saveNewbiCredential } from '../persistence/accounts.
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
 import * as management from '@ricajs/persistence/management'
-import type { PrismaClient, Prisma } from '@ricajs/persistence/prisma'
+import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import { body, character, characterParams, error, errors, security, success, failure, type ManagementEnvironment, type ManagementPlugin } from '@ricajs/persistence/management-http'
 import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
 import { autoReviewNewbiReply, bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections, readPendingDeliveries } from '../persistence/management.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadQuery, newbiThreadView } from './contracts.js'
 import type { newbiCatalog } from '../deployment/catalog.js'
-import { newbiAssessmentList, type newbiAssessmentThread } from './contracts.js'
-import { claimNewbiAssessment, listNewbiAssessments, runNewbiAssessment, type AssessDiscussion } from '../persistence/assessments.js'
+import { newbiAssessmentList, newbiAssessmentView, type newbiAssessmentThread } from './contracts.js'
+import { claimNewbiAssessment, listNewbiAssessments, newbiAssessmentActivity, readNewbiAssessment, runNewbiAssessment, type AssessDiscussion } from '../persistence/assessments.js'
 
 export type NewbiManagementOptions = {
   reviewReply?: ReviewPublicReply
@@ -99,6 +99,16 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
     const newbiReplyParams = characterParams.extend({ replyId: schema.resourceId })
     const assessmentParams = characterParams.extend({ accountId: schema.resourceId, postId: schema.resourceId })
     const assessmentPath = `${newbi}/accounts/{accountId}/discussions/{postId}/assessments` as const
+    app.openapi(createRoute({
+      method: 'get', path: `${newbi}/assessments/{assessmentId}`, security,
+      request: { params: characterParams.extend({ assessmentId: schema.resourceId }) },
+      responses: { ...errors, 200: success(newbiAssessmentView) },
+    }), async (c) => {
+      const { characterId, assessmentId } = c.req.valid('param')
+      c.header('Cache-Control', 'no-store')
+      return c.json(await readNewbiAssessment(db, { characterId, actor: c.get('actor') }, assessmentId), 200)
+    })
+
     app.openapi(createRoute({
       method: 'get', path: assessmentPath, security,
       request: { params: assessmentParams }, responses: { ...errors, 200: success(newbiAssessmentList) },
@@ -309,6 +319,20 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
 
   return {
     id: 'newbi', registerRoutes,
+    runActivity: {
+      ASSESSMENT: newbiAssessmentActivity,
+      PROPOSAL: (characterId) => Prisma.sql`
+        SELECT r.id, 'PROPOSAL'::text AS kind, a.platform,
+          coalesce(v.role_profile->>'displayName', i.slug) AS identity,
+          coalesce(nullif(c.username, ''), a.remote_account_id) AS account, r.account_id, r.status AS state, r.created_at
+        FROM public.newbi_replies r
+        JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
+        JOIN public.identities i ON (i.character_id, i.id) = (r.character_id, r.identity_id)
+        LEFT JOIN public.identity_versions v ON (v.character_id, v.identity_id, v.version) = (i.character_id, i.id, i.active_version)
+        LEFT JOIN public.newbi_credentials c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
+        WHERE r.character_id = ${characterId}::uuid
+      `,
+    },
     account: { ...newbiAccountHooks(verifySavedConnector), registration: connectorAccountRegistration,
       register: (tx, scope, input) => registerAccount(tx, scope, connectorAccountRegistration.parse(input)) },
     accountFields: { newbiProfile: newbiAccountProfile.optional() },

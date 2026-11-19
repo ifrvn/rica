@@ -120,6 +120,8 @@ after(async () => {
       await tx.managementAudit.deleteMany({ where })
       await tx.managementMembership.deleteMany({ where })
       await tx.newbiReply.deleteMany({ where })
+      await tx.agentRun.deleteMany({ where })
+      await tx.inboundEvent.deleteMany({ where })
       await tx.platformAccount.deleteMany({ where })
       await tx.identity.updateMany({ where, data: { status: 'PAUSED', activeVersion: null } })
       await tx.identityVersion.deleteMany({ where })
@@ -335,6 +337,45 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
   assert.equal(calls, 4)
   assert.equal(sends, 0)
   assert.equal(await owner.newbiReply.count({ where: { characterId, accountId: account.id } }), 0)
+
+  const assessmentPath = '/newbi/assessments/' + completed.body.id
+  const detail = await request('GET', characterPath(characterId) + assessmentPath, { target })
+  assert.equal(detail.status, 200)
+  assert.equal(detail.body.systemPrompt, 'Fixture discussion system prompt\nSecond line')
+  assert.equal((await request('GET', characterPath(b) + assessmentPath, { target, actor: 'admin-b' })).status, 404)
+
+  const simulationAccount = await owner.platformAccount.create({ data: {
+    characterId, identityId, status: 'ACTIVE', platform: 'mock-a',
+    instanceKey: 'activity-fixture', remoteAccountId: 'sim-' + characterId,
+  } })
+  const simulationBinding = { characterId, identityId, accountId: simulationAccount.id }
+  const inbound = await owner.inboundEvent.create({ data: { ...simulationBinding,
+    sourceKey: 'run-activity-fixture', kind: 'POST', occurredAt: new Date() } })
+  const simulation = await owner.agentRun.create({ data: { ...simulationBinding, inboundEventId: inbound.id,
+    coreVersion: 1, identityVersion: 1, bindingVersion: 1, authEpoch: 1 } })
+  const proposal = await request('POST', characterPath(characterId) + '/newbi/replies', {
+    target, key: randomUUID(), data: { accountId: account.id, postId, content: '手动拟好的一条回复。' },
+  })
+  assert.equal(proposal.status, 201, JSON.stringify(proposal.body))
+
+  const activityPath = characterPath(characterId) + '/run-activity'
+  const firstPage = await request('GET', activityPath + '?limit=2', { target })
+  assert.equal(firstPage.status, 200, JSON.stringify(firstPage.body))
+  assert.deepEqual(firstPage.body.items.map(({ id, state }: { id: string; state: string }) => [id, state]), [
+    [proposal.body.id, 'WAITING'], [simulation.id, 'QUEUED'],
+  ])
+  assert.equal(firstPage.body.items[1].identity, '冷静观察者')
+  const older = await request('GET', activityPath + '?cursor=' + firstPage.body.nextCursor, { target })
+  assert.equal(older.status, 200, JSON.stringify(older.body))
+  assert.equal(older.body.items.length, 5)
+  assert.equal(older.body.items.at(-1).id, completed.body.id)
+  assert.equal(older.body.items.at(-1).kind, 'ASSESSMENT')
+  assert.equal(older.body.nextCursor, null)
+  const filtered = await request('GET', activityPath + '?kind=SIMULATION', { target })
+  assert.deepEqual(filtered.body.items.map(({ id }: { id: string }) => id), [simulation.id])
+  assert.equal((await request('GET', activityPath, { target, actor: 'admin-b' })).status, 404)
+  const foreign = await request('GET', characterPath(b) + '/run-activity?cursor=' + firstPage.body.nextCursor, { target, actor: 'admin-b' })
+  assert.deepEqual(foreign.body, { items: [], nextCursor: null })
 })
 
 test('Newbi auto-approval requires a confirmed prior reply in the same discussion and never sends on creation', async () => {

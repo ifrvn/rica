@@ -5,6 +5,8 @@ import { characterPath, queryPath, type Page } from '@ricajs/console-shared/cons
 import { request } from '@ricajs/console-shared/request'
 import { newbiConsole } from './labels.js'
 import Review from './ConnectorReview.vue'
+import AssessmentHistory from './AssessmentHistory.vue'
+import { assessmentStatusLabels, replyStatusLabels } from './activity-labels.js'
 
 const queues = [
   { status: 'WAITING', label: '待审批' },
@@ -14,6 +16,8 @@ const queues = [
 
 export const newbiReview = {
   id: newbiConsole.id, title: newbiConsole.reviewTitle, component: Review,
+  activity: { title: newbiConsole.name, assessment: AssessmentHistory,
+    states: { ASSESSMENT: assessmentStatusLabels, PROPOSAL: replyStatusLabels } },
   ownsAudit: (operation: string) => operation.startsWith('newbi.reply.'),
   installed: (workspace: z.infer<typeof newbiCharacterWorkspaceView>) => workspace.newbiInstalled,
   deployed: (deployment: NewbiDeploymentView) => deployment.plugins.newbi !== 'NOT_INSTALLED',

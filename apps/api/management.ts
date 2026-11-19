@@ -26,6 +26,7 @@ import { readPluginStatus } from '../plugin-observation.js'
 import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 import { deploymentChangeOwner, deploymentPluginChange, deploymentPluginsView } from '../deployment-plugin-contracts.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../deployment-plugins.js'
+import { listRunActivity } from './run-activity.js'
 
 import { body, character, characterParams, error, errors, extensionFields, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin } from '@ricajs/persistence/management-http'
 
@@ -1030,6 +1031,15 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
       input: { input, expected }, requestId,
     }, (tx) => updateSimulationTerm(tx, scope, chatId, termId, expected, input))
     return c.json({ ...result, requestId }, 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'get', path: `${character}/run-activity`, security,
+    request: { params: characterParams, query: schema.runActivityQuery },
+    responses: { ...errors, 200: success(schema.pageView(schema.runActivityItem)) },
+  }), async (c) => {
+    const scope = { ...c.req.valid('param'), actor: c.get('actor') }
+    return c.json(await listRunActivity(db, scope, c.req.valid('query'), plugins), 200)
   })
 
   app.openapi(createRoute({

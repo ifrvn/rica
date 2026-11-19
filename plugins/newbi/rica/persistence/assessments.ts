@@ -80,6 +80,30 @@ export async function listNewbiAssessments(db: PrismaClient, scope: Scope, accou
   }, { isolationLevel: 'RepeatableRead' })
 }
 
+export async function readNewbiAssessment(db: PrismaClient, scope: Scope, id: string) {
+  return db.$transaction(async (tx) => {
+    await authorize(tx, scope)
+    const row = await tx.newbiDiscussionAssessment.findFirst({
+      where: { id, characterId: scope.characterId, createdAt: { gt: new Date(Date.now() - retentionMs) } },
+    })
+    if (!row) throw new ManagementError(404, 'NOT_FOUND', 'Newbi discussion assessment not found')
+    return assessmentView(row)
+  }, { isolationLevel: 'RepeatableRead' })
+}
+
+export function newbiAssessmentActivity(characterId: string) {
+  return Prisma.sql`
+    SELECT r.id, 'ASSESSMENT'::text AS kind, a.platform, r.identity,
+      coalesce(nullif(c.username, ''), a.remote_account_id) AS account, r.account_id,
+      coalesce(r.result->>'status', CASE WHEN r.created_at > ${new Date(Date.now() - leaseMs)}::timestamptz
+        THEN 'PENDING' ELSE 'UNAVAILABLE' END) AS state, r.created_at
+    FROM public.newbi_discussion_assessments r
+    JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
+    LEFT JOIN public.newbi_credentials c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
+    WHERE r.character_id = ${characterId}::uuid AND r.created_at > ${new Date(Date.now() - retentionMs)}::timestamptz
+  `
+}
+
 export async function runNewbiAssessment(db: PrismaClient, scope: Scope, id: string,
   readThread: ((target: DiscussionTarget) => Promise<Thread | undefined>) | undefined,
   assess: AssessDiscussion | undefined, requireConnector: (endpoint: string) => Promise<void>,

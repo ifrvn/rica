@@ -14,7 +14,7 @@ import AutoReviewSettings from '../features/review/AutoReviewSettings.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
-import type { characterView } from '@ricajs/contracts/management'
+import type { characterView, runActivityItem } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
 import type { Readiness } from '@ricajs/contracts/health'
 
@@ -34,6 +34,7 @@ const PlanningWorkspace = defineAsyncComponent(() => import('../features/plannin
 const PluginWorkspace = defineAsyncComponent(() => import('../features/plugins/PluginWorkspace.vue'))
 const ModelUsage = defineAsyncComponent(() => import('@ricajs/plugin-hosted-models/console').then(({ ModelUsage }) => ModelUsage))
 const SystemHealth = defineAsyncComponent(() => import('../features/health/SystemHealth.vue'))
+const RunActivity = defineAsyncComponent(() => import('../features/review/RunActivity.vue'))
 
 type Character = z.infer<typeof characterView>
 type Page<T> = { items: T[]; nextCursor: string | null }
@@ -55,25 +56,28 @@ const passkeysAvailable = typeof window.PublicKeyCredential === 'function' && wi
 const characters = ref<Character[]>([])
 const canCreate = ref(false)
 const tab = ref<ConsolePage>('character')
-const runPages = { runs: '模拟运行', outbox: '失败任务', metrics: '模拟指标', 'simulation-settings': '模拟设置' } as const
+const runPages = { activity: '全部记录', runs: '模拟运行', outbox: '失败任务', metrics: '模拟指标', 'simulation-settings': '模拟设置' } as const
 const inRuns = computed(() => Object.hasOwn(runPages, tab.value))
 const knowledgePages = ['knowledge', 'growth'] as const
 const accessPages = ['members', 'audit'] as const
 const inKnowledge = computed(() => tab.value === 'knowledge' || tab.value === 'growth')
 const inAccess = computed(() => tab.value === 'members' || tab.value === 'audit')
-const mainPage = computed(() => inRuns.value ? 'runs'
+const mainPage = computed(() => inRuns.value ? 'activity'
   : inKnowledge.value ? 'knowledge'
     : inAccess.value ? 'audit'
       : tab.value === 'connector' ? 'review' : tab.value)
 watch(tab, () => { void nextTick(() => pageHeading.value?.focus()) })
 const pageTitle: Record<ConsolePage, string> = {
   home: '工作台', members: '成员与审计', knowledge: '记忆与身份成长', growth: '记忆与身份成长', planning: '计划与承诺', metrics: '模拟运行指标',
-  character: '角色与身份', review: '审批', runs: '模拟运行', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
+  character: '角色与身份', review: '审批', activity: '运行记录', runs: '模拟运行', outbox: '失败任务', audit: '成员与审计', plugins: '插件中心',
   health: '系统运行状况', accounts: '平台账号池', connector: '审批',
   'model-usage': '外部模型统计',
   'simulation-settings': '模拟设置',
 }
 const detailId = ref<string>()
+watch(detailId, () => {
+  if (tab.value === 'activity') void nextTick(() => pageHeading.value?.focus())
+})
 const runQuery = ref('')
 const startSimulation = ref(false)
 const connectorAccountId = ref<string>()
@@ -83,6 +87,7 @@ let revision = 0
 const characterCursor = ref<string | null>(null)
 const installedReviews = ref<string[]>([])
 const reviewPlugin = ref<string>()
+const assessmentComponent = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)?.activity?.assessment)
 const reviewStatus = ref<string>()
 const auditTarget = ref<string>()
 const activePlatformReview = computed(() => platformReviews.find(({ id }) => id === reviewPlugin.value)
@@ -211,7 +216,7 @@ async function applyLocation(location?: ConsoleLocation, replace = false) {
     runQuery.value = tab.value === 'runs' ? location.runQuery ?? '' : ''
     startSimulation.value = tab.value === 'runs' && !!location.startSimulation
     connectorAccountId.value = tab.value === 'connector' ? location.connectorAccountId : undefined
-    reviewPlugin.value = tab.value === 'connector' ? location.reviewPlugin : undefined
+    reviewPlugin.value = tab.value === 'connector' || tab.value === 'activity' ? location.reviewPlugin : undefined
     reviewStatus.value = tab.value === 'connector' || tab.value === 'review' ? location.reviewStatus : undefined
     auditTarget.value = tab.value === 'audit' && !detailId.value ? location.auditTarget : undefined
     healthNode.value = tab.value === 'health' ? location.healthNode : undefined
@@ -372,6 +377,17 @@ function openRun(id?: string) {
   navigate({ characterId: characterId.value, page: 'runs', detail: id, runQuery: runQuery.value })
 }
 
+function openActivity(entry: z.infer<typeof runActivityItem>) {
+  if (entry.kind === 'SIMULATION') return openRun(entry.id)
+  if (entry.kind === 'ASSESSMENT') return openAssessment(entry.platform, entry.id)
+  navigate({ characterId: characterId.value, page: 'connector', reviewPlugin: entry.platform,
+    connectorAccountId: entry.accountId, detail: entry.id })
+}
+
+function openAssessment(plugin: string, id: string) {
+  navigate({ characterId: characterId.value, page: 'activity', reviewPlugin: plugin, detail: id })
+}
+
 function openRunAudit(id: string) {
   navigate({ characterId: characterId.value, page: 'audit', detail: id })
 }
@@ -478,7 +494,7 @@ function openRunAudit(id: string) {
       </div>
       <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
       <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
-      <nav v-if="inRuns && characterId" class="simulation-navigation" aria-label="模拟运行分区">
+      <nav v-if="inRuns && characterId" class="simulation-navigation" aria-label="运行记录分区">
         <UiButton v-for="(label, page) in runPages" :key="page"
           class="simulation-navigation-button" :variant="tab === page ? 'solid' : 'quiet'"
           :tone="tab === page ? 'primary' : 'default'" :aria-current="tab === page ? 'page' : undefined"
@@ -522,6 +538,15 @@ function openRunAudit(id: string) {
         @select-character="changeCharacter" @load-characters="run(() => fetchCharacters(characterCursor ?? undefined))"
         @account="navigate({ characterId, page: 'accounts', detail: $event })"
         @proposals="(platform, accountId, proposalId) => navigate({ characterId, page: 'connector', reviewPlugin: platform, connectorAccountId: accountId, detail: proposalId })" />
+      <template v-else-if="tab === 'activity' && characterId">
+        <template v-if="detailId">
+          <div class="account-actions"><UiButton size="small" variant="quiet" @click="changeTab('activity')">返回运行记录</UiButton></div>
+          <component v-if="assessmentComponent" :is="assessmentComponent" :key="characterId + '/' + reviewPlugin + '/' + detailId"
+            :character-id="characterId" :assessment-id="detailId" @expired="resetSession" />
+          <UiEmpty v-else description="此平台的评估详情不可访问。" />
+        </template>
+        <RunActivity v-else :key="characterId" :character-id="characterId" @expired="resetSession" @open="openActivity" />
+      </template>
       <template v-else-if="tab === 'runs' && characterId">
         <SimulationWorkspace :key="characterId" :character-id="characterId" can-start can-review
           :detail-id="detailId" :run-query="runQuery" :show-form="startSimulation" @expired="resetSession" @open="openRun" @audit="openRunAudit"
@@ -540,7 +565,7 @@ function openRunAudit(id: string) {
         @expired="resetSession" @open-run="openRun" />
       <AuditWorkspace v-else-if="tab === 'audit' && characterId" :key="characterId + '/' + (detailId ?? '') + '/' + (auditTarget ?? '')"
         :character-id="characterId" :run-id="detailId" :target-id="auditTarget" can-review
-        @expired="resetSession" @all="changeTab('audit')" @open-run="openRun"
+        @expired="resetSession" @all="changeTab('audit')" @open-run="openRun" @assessment="openAssessment"
         @proposal="(plugin, proposalId) => navigate({ characterId, page: 'connector', reviewPlugin: plugin, detail: proposalId })" />
       <template v-else-if="tab === 'model-usage'">
         <ModelUsage v-if="canCreate" @expired="resetSession" />

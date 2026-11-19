@@ -6,6 +6,8 @@ import type { z } from '@hono/zod-openapi'
 import { newbiReplyInput, type newbiAssessmentList, type newbiAssessmentView, type newbiInboxView, type newbiPollView } from '../management/contracts.js'
 import { characterPath, useConsoleTask } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
+import { assessmentStatusLabels } from './activity-labels.js'
+import AssessmentRecord from './AssessmentRecord.vue'
 
 type Inbox = z.infer<typeof newbiInboxView>
 type Assessment = z.infer<typeof newbiAssessmentView>
@@ -50,13 +52,6 @@ const invalidContent = computed(() => !!content.value.trim() && !draft.value.suc
   && draft.value.error.issues.some(({ path }) => path[0] === 'content'))
 
 const kinds = { POST_REPLIED: '帖子收到回复', COMMENT_REPLIED: '评论收到回复', AGENT_MENTIONED: '被提及' }
-const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }
-const assessmentLabels = { SUGGEST_REPLY: '建议回应', NO_REPLY: '本帖暂不回应', UNAVAILABLE: '评估未完成', PENDING: '评估中' }
-const assessmentReasons: Partial<Record<string, string>> = {
-  DIRECT_QUESTION: '直接提问', SUBSTANTIVE_CORRECTION: '实质纠错', FOLLOW_UP: '需要跟进', RELEVANT_DISCUSSION: '值得补充',
-  ALREADY_ANSWERED: '已有人回答', LOW_VALUE: '无需接话', OUT_OF_SCOPE: '与身份无关', INSUFFICIENT_CONTEXT: '上下文不足',
-  THREAD_LOCKED: '帖子已锁定',
-}
 const format = (value: string) => new Date(value).toLocaleString()
 
 async function showAssessments(post: string, evaluate = false) {
@@ -236,18 +231,8 @@ onBeforeUnmount(() => { active = false })
             <UiAlert v-if="assessmentError" tone="error" role="alert">{{ assessmentError }}</UiAlert>
             <p v-if="!assessmentBusy && !assessmentError && !assessments.length">暂无评估记录。</p>
             <details v-for="(item, index) in assessments" :key="item.id" :open="index === 0">
-              <summary>{{ assessmentLabels[item.result.status] }} · {{ format(item.createdAt) }}</summary>
-              <p>{{ item.identity }} · {{ participationLabels[item.participation] }} · 仅评估</p>
-              <p v-if="item.result.status !== 'PENDING'">
-                <strong v-if="assessmentReasons[item.result.reason]">{{ assessmentReasons[item.result.reason] }} · </strong>{{ item.result.note }}
-              </p>
-              <blockquote v-if="item.result.status === 'SUGGEST_REPLY'" class="console-payload">
-                <strong>{{ item.result.target.author }}</strong> · {{ item.result.target.excerpt }}
-              </blockquote>
-              <details v-if="item.systemPrompt">
-                <summary>System Prompt · {{ item.model }}</summary>
-                <pre class="console-payload">{{ item.systemPrompt }}</pre>
-              </details>
+              <summary>{{ assessmentStatusLabels[item.result.status] }} · {{ format(item.createdAt) }}</summary>
+              <AssessmentRecord :item />
             </details>
           </section>
         </li>
