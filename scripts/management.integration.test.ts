@@ -3634,6 +3634,104 @@ test('console simulation runs use an isolated conversation, one approval and one
   }
 })
 
+test('group glossary requires independent examples, stays in its room, and obeys versions and source removal', async (t) => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-group-glossary') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const root = characterPath(characterId)
+  const character = await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { slug: 'glossary-reader', roleProfile: {} } })
+  assert.equal(identity.status, 201)
+  await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
+  const account = await owner.platformAccount.create({ data: {
+    characterId: character.id, identityId: identity.body.id, status: 'ACTIVE', platform: 'mock-a',
+    instanceKey: 'glossary-fixture', remoteAccountId: randomUUID(),
+  } })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  t.after(() => runtime.$disconnect())
+  const chatId = randomUUID()
+  const room = root + '/simulation-chats/' + chatId
+  const candidate = { term: '交作业', meaning: '发表自己拍摄的照片', tone: 'playful' }
+  const observed: { decision: unknown; writing: unknown } = { decision: null, writing: null }
+  let reply = false
+  const hosted = { ...localSimulationModel, implementation: {
+    hostedModel: 'glossary-fixture',
+    async decide(input: Parameters<typeof localSimulationModel.implementation.decide>[0]) {
+      observed.decision = input.glossary
+      return { action: reply ? 'REPLY' : 'NO_OP', reason: reply ? 'RELEVANT_TOPIC' : 'BYSTANDER', glossaryCandidates: [candidate] }
+    },
+    async write(input: Parameters<typeof localSimulationModel.implementation.write>[0]) {
+      observed.writing = input.glossary
+      return { text: '期待看到这组新照片。', evidenceIds: [] }
+    },
+  } }
+  const send = async (speaker: string, message: string, targetChat = chatId) => {
+    const accepted = await request('POST', root + '/runs', { key: randomUUID(), data: { accountId: account.id, chatId: targetChat, speaker, message } })
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.body))
+    const runId: string = accepted.body.id
+    const queued = await owner.outboxEvent.findFirstOrThrow({ where: { runId, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, queued.eventId)
+    const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, draft.eventId, simulationPlatforms.resolveAdapter, hosted)
+    return (await request('GET', root + '/runs/' + runId + '/replay')).body
+  }
+
+  const first = await send('林', '周五交作业，我把海边的照片发群里。')
+  await send('林', '周五交作业，我把海边的照片发群里。')
+  await send('周', '上次交作业发的是黑白街拍。')
+  assert.deepEqual((await request('GET', room)).body.glossary, [])
+  const third = await send('林', '这回交作业想选三张逆光照片。')
+  assert.equal(third.state, 'SKIPPED')
+  assert.deepEqual(third.glossary, [])
+  const [learned] = (await request('GET', room)).body.glossary
+  assert.equal(learned.status, 'LEARNED')
+  assert.equal(learned.meaning, candidate.meaning)
+  assert.ok(learned.sourceRuns.includes(first.id))
+  assert.equal(learned.sourceRuns.length, 3)
+  assert.equal((await request('GET', characterPath(b) + '/simulation-chats/' + chatId, { actor: 'admin-b' })).status, 404)
+  await assert.rejects(runtime.$queryRaw`SELECT meaning FROM public.simulation_chat_terms`, /permission denied/i)
+
+  reply = true
+  const recalled = await send('周', '等你交作业。')
+  assert.equal(recalled.glossary[0].id, learned.id)
+  assert.deepEqual(observed.decision, recalled.glossary)
+  assert.deepEqual(observed.writing, recalled.glossary)
+  const otherChat = randomUUID()
+  assert.deepEqual((await send('周', '等你交作业。', otherChat)).glossary, [])
+  assert.equal((await request('PUT', root + '/simulation-chats/' + otherChat + '/terms/' + learned.id, {
+    ifMatch: '"1"', data: { operation: 'DISABLE' },
+  })).status, 404)
+
+  const update = (version: number, data: object) => request('PUT', room + '/terms/' + learned.id, { ifMatch: `"${version}"`, data })
+  const corrected = { operation: 'CORRECT', meaning: '分享摄影练习的成片', tone: 'neutral' }
+  assert.equal((await update(1, corrected)).status, 200)
+  assert.equal((await update(1, corrected)).status, 412)
+  assert.equal((await request('GET', root + '/runs/' + recalled.id + '/replay')).body.glossary[0].meaning, candidate.meaning)
+  assert.equal((await request('GET', root + '/actions/' + recalled.proposal.id)).body.content, null)
+  const updated = await send('周', '今晚交作业。')
+  assert.equal(updated.glossary[0].meaning, corrected.meaning)
+  const action = root + '/actions/' + updated.proposal.id
+  const preview = await request('GET', action)
+  const approval = await request('POST', action + '/decisions', {
+    key: randomUUID(), ifMatch: preview.headers.get('etag')!,
+    data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest },
+  })
+  assert.equal(approval.body.status, 'READY')
+  assert.equal((await update(2, { operation: 'DISABLE' })).status, 200)
+  const executor = simulationDatabase()
+  t.after(() => executor.$disconnect())
+  await executeSimulation(executor, updated.proposal.id, simulationPlatforms.resolveAdapter)
+  assert.equal((await request('GET', root + '/runs/' + updated.id + '/replay')).body.state, 'BLOCKED')
+  assert.equal(await owner.simulationReceipt.count({ where: { actionId: updated.proposal.id } }), 0)
+  assert.deepEqual((await send('林', '我准备交作业了。')).glossary, [])
+
+  const sourceRun = await owner.agentRun.findUniqueOrThrow({ where: { id: first.id }, select: { inboundEventId: true } })
+  await owner.inboundEvent.update({ where: { id: sourceRun.inboundEventId }, data: { messageText: null, bodyExpiredAt: new Date() } })
+  assert.deepEqual((await request('GET', root + '/runs/' + recalled.id + '/replay')).body.glossary, [])
+  assert.deepEqual((await request('GET', room)).body.glossary[0].sourceRuns, [])
+})
+
 test('a role can register an account before its identities and associate it only once', async () => {
   const created = await request('POST', '/characters', { key: 'pool-character', data: characterData('-pool') })
   assert.equal(created.status, 201)

@@ -1,7 +1,8 @@
 import { simulationPlatformId } from '@ricajs/contracts/management'
 import type { z } from '@hono/zod-openapi'
 import { quarantinedOutboxEvent, runReplayView, simulationBacklogView, simulationChatSummary, simulationChatView,
-  simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView, type simulationRunQuery } from '../contracts/observability.js'
+  simulationDailyRow, simulationRunSummary, type consoleSimulationInput, type simulationDailyMetricsView,
+  type simulationRunQuery, type simulationTermUpdate } from '../contracts/observability.js'
 import { autoReviewerId } from '@ricajs/contracts/auto-review'
 import type { ResolveSimulationAdapter } from '../contracts/platforms.js'
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
@@ -43,11 +44,36 @@ export async function readSimulationChat(db: PrismaClient, scope: Scope, chatId:
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
     const [row] = await tx.$queryRaw<{ chat: unknown }[]>`
-      SELECT public.rica_console_simulation_chat(${scope.characterId}::uuid, ${chatId}::uuid) AS chat
+      SELECT public.rica_console_simulation_chat(${scope.characterId}::uuid, ${chatId}::uuid) || jsonb_build_object('glossary',
+        coalesce((SELECT jsonb_agg(jsonb_build_object('id',t.id,'term',t.term,'tone',t.tone,'version',t.version,
+          'meaning',CASE WHEN source.available THEN t.meaning END,
+          'status',CASE WHEN t.status = 'DISABLED' OR source.available THEN t.status ELSE 'UNAVAILABLE' END,
+          'sourceRuns',CASE WHEN source.available THEN to_jsonb(t.source_runs) ELSE '[]'::jsonb END)
+          ORDER BY t.updated_at DESC,t.id DESC) FROM public.simulation_chat_terms t
+          CROSS JOIN LATERAL (SELECT public.rica_chat_term_available(t.character_id,t.chat_id,t.source_runs,NULL) AS available) source
+          WHERE (t.character_id,t.chat_id) = (${scope.characterId}::uuid,${chatId}::uuid)),'[]'::jsonb)) AS chat
     `
     if (!row.chat) throw new ManagementError(404, 'NOT_FOUND', 'Simulation chat not found')
     return simulationChatView.parse(row.chat)
   }, { isolationLevel: 'RepeatableRead' })
+}
+
+export async function updateSimulationTerm(tx: Prisma.TransactionClient, scope: Scope, chatId: string, id: string,
+  expected: number, input: z.infer<typeof simulationTermUpdate>,
+) {
+  const where = { id, chatId, characterId: scope.characterId }
+  const status = input.operation === 'CORRECT' ? 'CORRECTED' : 'DISABLED'
+  const { count } = await tx.simulationChatTerm.updateMany({
+    where: { ...where, version: expected }, data: { status, updatedAt: new Date(), version: { increment: 1 },
+      ...(input.operation === 'CORRECT' ? { meaning: input.meaning, tone: input.tone } : {}) },
+  })
+  if (!count) {
+    if (!await tx.simulationChatTerm.findFirst({ where, select: { id: true } })) {
+      throw new ManagementError(404, 'NOT_FOUND', 'Simulation glossary term not found')
+    }
+    throw new ManagementError(412, 'STALE_VERSION', 'Simulation glossary term changed')
+  }
+  return { id, status, version: expected + 1 }
 }
 
 type RunListQuery = Omit<z.infer<typeof simulationRunQuery>, 'limit'> & { limit: number }
@@ -86,7 +112,8 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
           'systemPrompts', public.rica_run_system_prompts(${scope.characterId}::uuid, ${runId}::uuid),
           'participationDecision', (SELECT participation_decision FROM public.agent_runs
             WHERE (character_id, id) = (${scope.characterId}::uuid, ${runId}::uuid)),
-          'modelCalls', public.rica_run_model_calls(${scope.characterId}::uuid, ${runId}::uuid)
+          'modelCalls', public.rica_run_model_calls(${scope.characterId}::uuid, ${runId}::uuid),
+          'glossary', public.rica_run_glossary(${scope.characterId}::uuid, ${runId}::uuid)
         ) AS view
       FROM (SELECT 1) base
       LEFT JOIN public.action_proposals a ON (a.character_id, a.run_id) = (${scope.characterId}::uuid, ${runId}::uuid)

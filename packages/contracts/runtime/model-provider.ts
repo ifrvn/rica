@@ -1,6 +1,7 @@
 import { z } from '@hono/zod-openapi'
 import type { RunContinuity, RunTime } from './run-continuity.js'
 import type { PublicReplyReview } from './auto-review.js'
+import type { GlossaryReference } from './glossary.js'
 
 export class ModelProviderError extends Error {
   constructor(readonly code: 'HTTP_ERROR' | 'REQUEST_FAILED' | 'INVALID_OUTPUT', readonly status?: number) {
@@ -34,7 +35,9 @@ export type ModelProvider = Readonly<{
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution,
     capture?: CaptureSystemPrompt): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity; conversation?: ModelConversation; participation?: Participation;
-    identityPrompt?: string; capture?: CaptureSystemPrompt }>, signal: AbortSignal): Promise<unknown>
+    identityPrompt?: string; capture?: CaptureSystemPrompt; glossary?: readonly GlossaryReference[];
+    glossaryExamples?: readonly { speaker: string; message: string }[] }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
-    attribution?: ModelAttribution; conversation?: ModelConversation; capture?: CaptureSystemPrompt }>, signal: AbortSignal): Promise<unknown>
+    attribution?: ModelAttribution; conversation?: ModelConversation; capture?: CaptureSystemPrompt;
+    glossary?: readonly GlossaryReference[] }>, signal: AbortSignal): Promise<unknown>
 }>

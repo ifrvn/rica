@@ -8,6 +8,7 @@ import type { simulationChatSummary, simulationChatView } from '../contracts/obs
 
 type Chat = z.infer<typeof simulationChatView>
 type Room = z.infer<typeof simulationChatSummary>
+type Term = Chat['glossary'][number]
 const props = defineProps<{
   base: string; accounts: { value: string; label: string }[]; canStart: boolean
   selected?: string; requestedChat?: string | null; focusComposer: boolean
@@ -27,6 +28,13 @@ const message = ref('')
 const sending = ref(false)
 const loading = ref(false)
 const error = ref('')
+const editedTerm = ref<Term>()
+const editedMeaning = ref('')
+const editedTone = ref<Term['tone']>('neutral')
+const savingTerm = ref(false)
+const glossaryError = ref('')
+const tones = { neutral: '中性', playful: '玩笑', sarcastic: '反讽', sensitive: '敏感' }
+const termStates = { LEARNED: '自动习得', CORRECTED: '已纠正', DISABLED: '已停用', UNAVAILABLE: '来源不可用' }
 const transcript = ref<HTMLElement>()
 const composer = ref<HTMLTextAreaElement>()
 const author = computed(() => (addingSpeaker.value ? newSpeaker.value : speaker.value).trim())
@@ -106,6 +114,8 @@ async function selectRoom(id: string, user = false) {
   speaker.value = newSpeaker.value = ''
   addingSpeaker.value = true
   error.value = ''
+  editedTerm.value = undefined
+  glossaryError.value = ''
   emit('latest', undefined)
   if (user) {
     emit('browse')
@@ -149,6 +159,39 @@ function refresh() {
   error.value = ''
   void loadRooms()
   if (room.value) void fetchRoom(room.value)
+}
+
+function editTerm(term: Term) {
+  editedTerm.value = term
+  editedMeaning.value = term.meaning ?? ''
+  editedTone.value = term.tone
+  glossaryError.value = ''
+}
+
+async function saveTerm(operation: 'CORRECT' | 'DISABLE') {
+  const term = editedTerm.value
+  if (!term || savingTerm.value || (operation === 'CORRECT' && !editedMeaning.value.trim())) return
+  const token = revision
+  const id = room.value
+  savingTerm.value = true
+  glossaryError.value = ''
+  try {
+    await request(`${props.base}/simulation-chats/${id}/terms/${term.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': `"${term.version}"` },
+      body: JSON.stringify(operation === 'CORRECT' ? { operation, meaning: editedMeaning.value.trim(), tone: editedTone.value } : { operation }),
+    })
+    if (active && token === revision) {
+      editedTerm.value = undefined
+      await fetchRoom(id, token)
+    }
+  } catch (cause) {
+    if (!active || token !== revision) return
+    if (cause instanceof RequestError && cause.status === 401) emit('expired')
+    else glossaryError.value = cause instanceof RequestError && cause.status === 412
+      ? '词条已变化。刷新会话后重新打开该词条。' : '无法保存词条，请核对释义后重试。'
+  } finally {
+    savingTerm.value = false
+  }
 }
 
 async function send() {
@@ -236,6 +279,37 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
         </li>
       </ol>
     </div>
+    <details v-if="chat" class="chat-glossary">
+      <summary>本群黑话词库 · {{ chat.glossary.length }} 条</summary>
+      <p v-if="!chat.glossary.length">暂无词条。托管模型可从多位群员的重复用法中学习。</p>
+      <UiAlert v-if="glossaryError" tone="error" role="alert">{{ glossaryError }}</UiAlert>
+      <ul v-if="chat.glossary.length" class="glossary-list">
+        <li v-for="term in chat.glossary" :key="term.id">
+          <strong>{{ term.term }}</strong> · {{ tones[term.tone] }} · {{ termStates[term.status] }}
+          <p v-if="term.meaning">{{ term.meaning }}</p>
+          <div v-if="term.sourceRuns.length || canStart" class="console-actions">
+            <UiButton v-for="(id, index) in term.sourceRuns" :key="id" size="small" variant="quiet"
+              @click="emit('open', id)">用例 {{ index + 1 }}</UiButton>
+            <UiButton v-if="canStart" size="small" variant="quiet" :disabled="savingTerm" @click="editTerm(term)">管理词条</UiButton>
+          </div>
+          <form v-if="editedTerm?.id === term.id" class="chat-term-form" @submit.prevent="saveTerm('CORRECT')">
+            <UiField label="释义" for="chat-term-meaning">
+              <input id="chat-term-meaning" v-model="editedMeaning" class="ui-control" maxlength="120" :disabled="savingTerm" />
+            </UiField>
+            <UiField label="语气" for="chat-term-tone">
+              <select id="chat-term-tone" v-model="editedTone" class="ui-control" :disabled="savingTerm">
+                <option v-for="(label, tone) in tones" :key="tone" :value="tone">{{ label }}</option>
+              </select>
+            </UiField>
+            <div class="console-actions">
+              <UiButton type="submit" size="small" tone="primary" :disabled="savingTerm || !editedMeaning.trim() || !term.sourceRuns.length">保存释义</UiButton>
+              <UiButton type="button" size="small" variant="quiet" :disabled="savingTerm || term.status === 'DISABLED'" @click="saveTerm('DISABLE')">停用词条</UiButton>
+              <UiButton type="button" size="small" variant="quiet" :disabled="savingTerm" @click="editedTerm = undefined">取消</UiButton>
+            </div>
+          </form>
+        </li>
+      </ul>
+    </details>
     <form v-if="canStart && activeAccount" class="chat-composer" @submit.prevent="send">
       <UiField :label="addingSpeaker ? '新群员昵称' : '发言群员'" :for="addingSpeaker ? 'chat-new-speaker' : 'chat-speaker'">
         <div class="chat-controls chat-speaker-controls">
@@ -260,6 +334,11 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
 
 <style scoped>
 .simulation-chat { display: grid; gap: .75rem; min-width: 0; }
+.chat-glossary { min-width: 0; overflow-wrap: anywhere; }
+.chat-glossary summary { cursor: pointer; }
+.glossary-list { list-style: none; padding: 0; display: grid; gap: .75rem; }
+.glossary-list p { margin: .25rem 0; }
+.chat-term-form { display: grid; gap: .5rem; padding-block: .5rem; }
 .chat-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .5rem .75rem; align-items: end; }
 .chat-controls select { width: 100%; padding-inline: .5rem; text-overflow: ellipsis; }
 .chat-speaker-controls { align-items: center; }

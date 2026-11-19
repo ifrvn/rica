@@ -430,6 +430,12 @@ onMounted(() => {
               <p v-else>提示词已超过保留期限或来源已不可用。</p>
             </details>
           </section>
+          <details v-if="selected.glossary.length" class="run-prompts">
+            <summary>当轮黑话 · {{ selected.glossary.length }} 条</summary>
+            <dl v-for="term in selected.glossary" :key="term.id">
+              <dt>{{ term.term }} · 第 {{ term.version }} 版</dt><dd>{{ term.meaning }}</dd>
+            </dl>
+          </details>
           <details v-if="!selected.modelCalls.length && (selected.systemPrompts?.core || selected.systemPrompts?.identity)" class="run-prompts">
             <summary>当时的角色与身份设定</summary>
             <dl>

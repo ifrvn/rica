@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./model-provider": "./runtime/model-provider.ts",
+    "./glossary": "./runtime/glossary.ts",
     "./run-continuity": "./runtime/run-continuity.ts",
     "./platform-reader": "./platforms/reader.ts",
     "./platform-reply-executor": "./platforms/reply-executor.ts",

@@ -16,12 +16,14 @@ import type { RunContinuity } from '@ricajs/contracts/run-continuity'
 import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from '@ricajs/persistence/run-context'
 import { simulationWritingContext } from '../contracts/observability.js'
 import { recordRunModelCall } from './model-calls.js'
+import { glossaryReferences, learningExamples, matchChatGlossary, readChatGlossary, saveChatTerms, sourcesForTerms,
+  type GlossarySnapshot } from './glossary.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
   | { purpose: 'PRIVATE_REPLY' }
 
 const decisionRequest = { purpose: 'DECISION_SUPPORT' } as const
-type ParticipationDecision = ReplyDecision & { participation: Participation }
+type ParticipationDecision = ReplyDecision & { participation: Participation; glossary: GlossarySnapshot }
 
 async function readEvidence(
   tx: Prisma.TransactionClient, runId: string, request: MemoryRequest,
@@ -79,6 +81,7 @@ async function buildSimulatedDraft(
     model: string
     skip: (reason: 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY') => void
     decision: (decision: ParticipationDecision) => void
+    learned: (terms: ReturnType<typeof sourcesForTerms>) => void
   },
 ) {
   if (text.length > maxSimulatedTextLength) throw new Error('Simulated message is too long')
@@ -101,13 +104,19 @@ async function buildSimulatedDraft(
     const participation = participationLevel.safeParse(profile.participation).data
       ?? (/话痨|talkative/i.test(identityPrompt ?? '') ? 'talkative'
         : /寡言|reserved/i.test(identityPrompt ?? '') ? 'reserved' : 'balanced')
-    const input = { text, evidence, context, conversation, identityPrompt, participation } as const
-    if (await reserveModelBudget(tx, runId, input, 64)) return input
+    const localGlossary = conversation && provider.hostedModel ? await readChatGlossary(tx, runId) : undefined
+    const glossary = localGlossary && conversation
+      ? matchChatGlossary(localGlossary, text, conversation.history.slice(-2).map(({ message }) => message)) : []
+    const examples = localGlossary && observe ? learningExamples(localGlossary) : undefined
+    const input = { text, evidence, context, conversation, identityPrompt, participation,
+      glossary: glossary.length ? glossaryReferences(glossary) : undefined, glossaryExamples: examples } as const
+    if (await reserveModelBudget(tx, runId, input, examples ? 1024 : 64)) return { input, localGlossary, glossary }
     observe?.skip('MODEL_BUDGET_EXHAUSTED')
     return null
   })
   if (!prepared) return null
-  const { evidence: decisionEvidence, context } = prepared
+  const { input: decisionInput, localGlossary, glossary } = prepared
+  const { evidence: decisionEvidence, context } = decisionInput
   const selfRevisions = new Map(context.self.facts.map(({ id, revision }) => [id, revision]))
   const time = { ...context.time }
   const goalVersions = context.goals.map(({ id, version }) => id + ':' + version).join(',')
@@ -117,11 +126,16 @@ async function buildSimulatedDraft(
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
   const captureDecision = observe && provider.hostedModel && writingRequest.purpose === 'PUBLIC_REFERENCE'
     ? (prompt: string) => recordRunModelCall(db, runId, 'DECISION', observe.model, prompt) : undefined
-  const outputDecision = await provider.decide({ ...prepared, capture: captureDecision }, signal)
+  const outputDecision = await provider.decide({ ...decisionInput, capture: captureDecision }, signal)
   signal.throwIfAborted()
-  const decision = replyDecision.parse(outputDecision === 'NO_OP' ? { action: 'NO_OP', reason: 'BYSTANDER' }
-    : outputDecision === 'REPLY' ? { action: 'REPLY', reason: 'RELEVANT_TOPIC' } : outputDecision)
-  observe?.decision({ ...decision, participation: prepared.participation })
+  const structured = outputDecision && typeof outputDecision === 'object' && 'action' in outputDecision && 'reason' in outputDecision
+    ? { action: outputDecision.action, reason: outputDecision.reason } : outputDecision
+  const decision = replyDecision.parse(structured === 'NO_OP' ? { action: 'NO_OP', reason: 'BYSTANDER' }
+    : structured === 'REPLY' ? { action: 'REPLY', reason: 'RELEVANT_TOPIC' } : structured)
+  if (localGlossary && decisionInput.glossaryExamples && outputDecision && typeof outputDecision === 'object' && 'glossaryCandidates' in outputDecision) {
+    observe?.learned(sourcesForTerms(localGlossary, outputDecision.glossaryCandidates))
+  }
+  observe?.decision({ ...decision, participation: decisionInput.participation, glossary })
   if (decision.action === 'NO_OP') {
     observe?.skip('MODEL_NO_REPLY')
     return null
@@ -135,9 +149,10 @@ async function buildSimulatedDraft(
       FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
     if (!profile) return null
-    const conversation = prepared.conversation
+    if (!await glossaryStillAvailable(tx, runId, glossary)) return null
+    const conversation = decisionInput.conversation
     const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined, conversation,
-      corePrompt: profile.corePrompt ?? undefined }
+      corePrompt: profile.corePrompt ?? undefined, glossary: decisionInput.glossary }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
     if (!await reserveModelBudget(tx, runId, input, outputUnits)) {
       observe?.skip('MODEL_BUDGET_EXHAUSTED')
@@ -157,17 +172,24 @@ async function buildSimulatedDraft(
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
   if (containsWritingPrompt(draft.text, writing.corePrompt, writing.identityPrompt)) return null
-  return { draft, conversation: writing.conversation, decisionRevisions,
+  return { draft, conversation: writing.conversation, decisionRevisions, glossary,
     writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
 
+async function glossaryStillAvailable(tx: Prisma.TransactionClient, runId: string, glossary: GlossarySnapshot) {
+  if (!glossary.length) return true
+  const current = await readChatGlossary(tx, runId)
+  return glossary.every(({ id, version }) => current?.terms.some((term) => term.id === id && term.version === version))
+}
+
 async function recheckDraft(
   tx: Prisma.TransactionClient, runId: string, request: WritingRequest, candidate: DraftCandidate,
 ) {
   if (!evidenceMatches(await readEvidence(tx, runId, decisionRequest), candidate.decisionRevisions)
-    || !evidenceMatches(await readEvidence(tx, runId, request), candidate.writingRevisions)) return false
+    || !evidenceMatches(await readEvidence(tx, runId, request), candidate.writingRevisions)
+    || !await glossaryStillAvailable(tx, runId, candidate.glossary)) return false
   const context = await loadRunContinuity(tx, runId)
   return !!context && evidenceMatches(context.self.facts, candidate.selfRevisions)
     && context.goals.map(({ id, version }) => id + ':' + version).join(',') === candidate.goalVersions
@@ -243,11 +265,13 @@ export async function processSimulatedDraft(
   const text = input?.text ?? null
   let skipReason: 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY' = 'DRAFT_UNAVAILABLE'
   let participationDecision: ParticipationDecision | undefined
+  let learnedTerms: ReturnType<typeof sourcesForTerms> = []
   const candidate = request && text !== null
     ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal, {
       model: `${modelId}/${modelVersion}`,
       skip: reason => { skipReason = reason },
       decision: decision => { participationDecision = decision },
+      learned: terms => { learnedTerms = terms },
     })
     : null
 
@@ -262,6 +286,7 @@ export async function processSimulatedDraft(
 
     let actionId: string | undefined
     if (run.state === 'CONTEXT_READY') {
+      await saveChatTerms(tx, run.id, learnedTerms)
       const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
       const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; crossPlatformDuplicate: boolean }[]>`
         SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
@@ -289,6 +314,7 @@ export async function processSimulatedDraft(
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
           selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
           citationIds: candidate.draft.evidenceIds, modelId, modelVersion,
+          glossary: candidate.glossary.map(({ id, version }) => [id, version]),
         })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({

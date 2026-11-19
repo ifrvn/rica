@@ -4,6 +4,7 @@ import { listQuery, resourceId } from '@ricajs/contracts/management'
 import { maxSimulatedTextLength } from './platforms.js'
 import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
 import { participationLevel, replyDecision } from '@ricajs/contracts/model-provider'
+import { glossaryMeaning, glossaryReference, glossaryTone } from '@ricajs/contracts/glossary'
 
 const timestamp = z.iso.datetime({ offset: true })
 const consoleMessage = {
@@ -15,8 +16,14 @@ export const consoleSimulationInput = z.union([z.strictObject(consoleMessage), z
 })])
 export const simulationChatsQuery = listQuery
 export const simulationChatSummary = z.object({ id: resourceId, createdAt: timestamp })
+export const simulationTermUpdate = z.discriminatedUnion('operation', [
+  z.strictObject({ operation: z.literal('CORRECT'), meaning: glossaryMeaning, tone: glossaryTone }),
+  z.strictObject({ operation: z.literal('DISABLE') }),
+])
 export const simulationChatView = z.object({
   id: resourceId, speakers: z.array(z.string()),
+  glossary: z.array(glossaryReference.extend({ status: z.enum(['LEARNED', 'CORRECTED', 'DISABLED', 'UNAVAILABLE']),
+    meaning: glossaryMeaning.nullable(), sourceRuns: z.array(resourceId) })),
   turns: z.array(z.object({
     id: resourceId, accountId: resourceId, identityId: resourceId,
     state: z.string(), speaker: z.string(), message: z.string().nullable(), sentAt: timestamp,
@@ -66,6 +73,7 @@ export const runReplayView = z.object({
     action: z.enum(['NO_OP', 'REPLY']), reason: z.union([replyDecision.options[0].shape.reason, replyDecision.options[1].shape.reason]) }).nullable(),
   modelCalls: z.array(z.object({ id: resourceId, stage: z.enum(['DECISION', 'WRITING', 'REVIEW']),
     model: z.string(), at: timestamp, systemPrompt: z.string().nullable() })),
+  glossary: z.array(glossaryReference).max(4),
   transcript: z.object({ message: z.string(), draft: z.string().nullable(), reviewReason: z.string() }).nullable(),
   goalRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })),
   referencesExpiredAt: timestamp.nullable(),

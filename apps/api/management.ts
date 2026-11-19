@@ -6,8 +6,8 @@ import { commitmentInput, commitmentQuery, commitmentReceiptQuery, commitmentRec
 import { scheduleInput, scheduleUpdate, scheduleView } from '@ricajs/contracts/schedules'
 import { planInput, planStateInput, planView } from '@ricajs/contracts/plans'
 import { listPlans, savePlan, setPlanEnabled } from '@ricajs/persistence/plans'
-import { consoleSimulationInput, simulationChatSummary, simulationChatsQuery, simulationChatView, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView } from '@ricajs/simulation/contracts/observability'
-import { listSimulationChats, readSimulationChat, listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox } from '@ricajs/simulation/observability'
+import { consoleSimulationInput, simulationChatSummary, simulationChatsQuery, simulationChatView, simulationRunQuery, simulationRunSummary, dailyMetricsQuery, outboxQuarantineQuery, outboxQuarantineView, runReplayView, simulationBacklogView, simulationDailyMetricsView, simulationTermUpdate } from '@ricajs/simulation/contracts/observability'
+import { listSimulationChats, readSimulationChat, listSimulationRuns, startConsoleSimulation, readQuarantinedOutbox, readSimulationBacklog, readSimulationDailyMetrics, replaySimulationRun, retryQuarantinedOutbox, updateSimulationTerm } from '@ricajs/simulation/observability'
 import { listConversationOptions, listIdentityBeliefs, listIdentityContacts, listMembers } from '@ricajs/persistence/console-knowledge'
 import * as schema from '@ricajs/contracts/management'
 import type { ResolveSimulationAdapter } from '@ricajs/simulation/contracts/platforms'
@@ -1012,6 +1012,24 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => {
     const { characterId, chatId } = c.req.valid('param')
     return c.json(await readSimulationChat(db, { characterId, actor: c.get('actor') }, chatId), 200)
+  })
+
+  app.openapi(createRoute({
+    method: 'put', path: `${character}/simulation-chats/{chatId}/terms/{termId}`, security,
+    request: { params: characterParams.extend({ chatId: schema.resourceId, termId: schema.resourceId }),
+      headers: schema.versionHeader, body: body(simulationTermUpdate) },
+    responses: { ...errors, 200: success(schema.commandResponse) },
+  }), async (c) => {
+    const { characterId, chatId, termId } = c.req.valid('param')
+    const scope = { characterId, actor: c.get('actor') }
+    const input = c.req.valid('json')
+    const expected = version(c.req.valid('header'))
+    const requestId = c.get('requestId')
+    const result = await management.executeManagementCommand(db, {
+      ...scope, operation: 'simulation.term.update', targetScope: `${characterId}/${chatId}/${termId}`,
+      input: { input, expected }, requestId,
+    }, (tx) => updateSimulationTerm(tx, scope, chatId, termId, expected, input))
+    return c.json({ ...result, requestId }, 200)
   })
 
   app.openapi(createRoute({
