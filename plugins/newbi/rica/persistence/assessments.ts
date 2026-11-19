@@ -6,7 +6,8 @@ import { resolveParticipation, type ModelAttribution } from '@ricajs/contracts/m
 import { authorize, lockCharacter, ManagementError, type Scope } from '@ricajs/persistence/management'
 import { Prisma, type NewbiDiscussionAssessment, type PrismaClient } from '@ricajs/persistence/prisma'
 import { newbiAssessmentResult, newbiAssessmentView, newbiAssessmentThread } from '../management/contracts.js'
-import { authorTermSelect, prepareAuthorGlossary, saveAuthorTerms } from './author-glossary.js'
+import { authorTermSelect, prepareDiscussionGlossary } from './discussion-glossary.js'
+import { sectionSampleSelect } from './section-glossary.js'
 
 const leaseMs = 45_000
 const retentionMs = 30 * 86_400_000
@@ -22,12 +23,16 @@ const timedOut = unavailable('TIMED_OUT', '评估超时，请重新评估讨论�
 const contextChanged = unavailable('CONTEXT_CHANGED', '评估期间账号绑定或身份配置发生变化。')
 const backgroundDisabled = unavailable('BACKGROUND_DISABLED', '评估期间后台开关、外部模型或 Newbi 接入点发生变化。')
 
-const learnedTerms = { select: authorTermSelect, orderBy: { term: 'asc' as const } }
+const glossaryHistory = {
+  learnedTerms: { select: authorTermSelect, orderBy: { term: 'asc' as const } },
+  sectionGlossarySamples: { select: sectionSampleSelect, orderBy: { term: 'asc' as const } },
+}
 
-function assessmentView(row: NewbiDiscussionAssessment & { learnedTerms: Prisma.NewbiAuthorTermGetPayload<typeof learnedTerms>[] }, now = Date.now()) {
+function assessmentView(row: Prisma.NewbiDiscussionAssessmentGetPayload<{ include: typeof glossaryHistory }>, now = Date.now()) {
   return newbiAssessmentView.parse({ ...row, createdAt: row.createdAt.toISOString(), finishedAt: row.finishedAt?.toISOString() ?? null,
     origin: row.triggerSeq === null ? 'ADMIN' : 'BACKGROUND',
     glossaryUsed: row.glossaryUsed ?? [], glossaryLearned: row.learnedTerms.map((term) => ({ ...term, version: 1 })),
+    sectionGlossarySamples: row.sectionGlossarySamples.map((term) => ({ ...term, version: 1 })),
     result: row.result ?? (now - row.createdAt.getTime() >= leaseMs ? timedOut : { status: 'PENDING' }) })
 }
 
@@ -136,7 +141,7 @@ export async function listNewbiAssessments(db: PrismaClient, scope: Scope, accou
     const rows = await tx.newbiDiscussionAssessment.findMany({
       where: { characterId: scope.characterId, accountId, postId, createdAt: { gt: new Date(Date.now() - retentionMs) } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 10,
-      include: { learnedTerms },
+      include: glossaryHistory,
     })
     return { items: rows.map((row) => assessmentView(row)) }
   }, { isolationLevel: 'RepeatableRead' })
@@ -147,7 +152,7 @@ export async function readNewbiAssessment(db: PrismaClient, scope: Scope, id: st
     await authorize(tx, scope)
     const row = await tx.newbiDiscussionAssessment.findFirst({
       where: { id, characterId: scope.characterId, createdAt: { gt: new Date(Date.now() - retentionMs) } },
-      include: { learnedTerms },
+      include: glossaryHistory,
     })
     if (!row) throw new ManagementError(404, 'NOT_FOUND', 'Newbi discussion assessment not found')
     return assessmentView(row)
@@ -187,7 +192,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
   }, { isolationLevel: 'RepeatableRead' })
   const { row, account, events, receipts } = initial
   const cutoff = new Date(Date.now() - retentionMs)
-  let learning: { authorKey: string; candidates: Parameters<typeof saveAuthorTerms>[3] } | undefined
+  let saveLearning: ((tx: Prisma.TransactionClient) => Promise<void>) | undefined
 
   async function evaluate(): Promise<Result> {
     if (!matches(row, account) || !events.length) return contextChanged
@@ -226,7 +231,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     }
     const profile = identityProfile.pick({ writingPrompt: true, draftModelProfile: true }).strip()
       .parse(account.identity.activeProfile?.roleProfile ?? {})
-    const glossary = await prepareAuthorGlossary(db, row.accountId, thread, comments, cutoff)
+    const glossary = await prepareDiscussionGlossary(db, row.accountId, thread, comments, cutoff)
     const input: DiscussionSelectionInput = { title: thread.post.title.slice(0, 240), post: thread.post.content.slice(0, 1800),
       participation: resolveParticipation(row.participation), identityPreferences: profile.writingPrompt, comments,
       ...(glossary?.used.length ? { glossary: glossary.used } : {}),
@@ -252,7 +257,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     if (!decision || (decision.status === 'SUGGEST_REPLY' && !comments.some(({ id, eligible }) => id === decision.commentId && eligible))) {
       return unavailable('INVALID_SELECTION', '评估结果没有指向本轮可回应的评论。')
     }
-    if (glossary?.canLearn) learning = { authorKey: glossary.authorKey, candidates: glossary.candidates(glossaryCandidates) }
+    if (glossary?.canLearn) saveLearning = (tx) => glossary.save(tx, row, glossaryCandidates)
     if (decision.status === 'SUGGEST_REPLY') {
       const comment = byId.get(decision.commentId)!
       return { ...decision, target: { author: comment.author.username.slice(0, 64), excerpt: comment.content.slice(0, 220) } }
@@ -270,7 +275,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     const completed = !valid ? timedOut : !enabled ? backgroundDisabled : unchanged ? result : contextChanged
     const { count } = await tx.newbiDiscussionAssessment.updateMany({ where: { ...where, result: { equals: Prisma.DbNull } },
       data: { result: completed, finishedAt: new Date() } })
-    if (count && valid && enabled && unchanged && learning) await saveAuthorTerms(tx, row, learning.authorKey, learning.candidates, cutoff)
+    if (count && valid && enabled && unchanged) await saveLearning?.(tx)
   })
 }
 

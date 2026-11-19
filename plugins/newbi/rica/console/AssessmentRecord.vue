@@ -21,15 +21,27 @@ const assessmentReasons: Partial<Record<string, string>> = {
   <blockquote v-if="item.result.status === 'SUGGEST_REPLY'" class="console-payload">
     <strong>{{ item.result.target.author }}</strong> · {{ item.result.target.excerpt }}
   </blockquote>
-  <details v-if="item.glossaryUsed.length || item.glossaryLearned.length">
-    <summary>博主词库 · 已引用 {{ item.glossaryUsed.length }} · 新习得 {{ item.glossaryLearned.length }}</summary>
-    <template v-for="group in [{ label: '本次评估引用', terms: item.glossaryUsed }, { label: '本次评估习得', terms: item.glossaryLearned }]" :key="group.label">
-      <template v-if="group.terms.length">
-        <p>{{ group.label }}</p>
-        <ul>
-          <li v-for="term in group.terms" :key="term.id"><strong>{{ term.term }}</strong> · {{ term.meaning }} · {{ tones[term.tone] }}</li>
-        </ul>
-      </template>
+  <details v-if="item.glossaryUsed.length || item.glossaryLearned.length || item.sectionGlossarySamples.length">
+    <summary>词库记录 · 已引用 {{ item.glossaryUsed.length }}</summary>
+    <template v-if="item.glossaryUsed.length">
+      <p>本次评估引用</p>
+      <ul>
+        <li v-for="term in item.glossaryUsed" :key="term.id">
+          <strong>{{ term.term }}</strong> · {{ term.meaning }} · {{ tones[term.tone] }} · {{ term.sectionId ? '分区词库' : '博主词库' }}
+        </li>
+      </ul>
+    </template>
+    <template v-if="item.glossaryLearned.length">
+      <p>博主词库新习得</p>
+      <ul>
+        <li v-for="term in item.glossaryLearned" :key="term.id"><strong>{{ term.term }}</strong> · {{ term.meaning }} · {{ tones[term.tone] }}</li>
+      </ul>
+    </template>
+    <template v-if="item.sectionGlossarySamples.length">
+      <p>本次新增分区用例</p>
+      <ul>
+        <li v-for="term in item.sectionGlossarySamples" :key="term.id"><strong>{{ term.term }}</strong> · {{ term.meaning }} · {{ tones[term.tone] }}</li>
+      </ul>
     </template>
   </details>
   <details v-if="item.systemPrompt">

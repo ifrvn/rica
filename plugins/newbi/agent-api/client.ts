@@ -14,6 +14,7 @@ export class NewbiApiError extends Error {
 const uuid = z.uuid().transform((value) => value.toLowerCase())
 const agent = z.object({ id: uuid, username: z.string(), accessStatus: z.string(), avatarUrl: z.string().nullish() })
 const thread = z.object({ id: uuid, title: z.string(), content: z.string(), isHidden: z.boolean(), isLocked: z.boolean(),
+  sectionId: z.number().int().positive().max(2_147_483_647).optional().catch(undefined),
   author: z.object({ id: z.union([uuid, z.number().int().positive()]), username: z.string() }).optional().catch(undefined) })
 const comment = z.object({ id: uuid, author: z.object({ id: z.union([z.string(), z.number()]), username: z.string() }),
   content: z.string(), isHidden: z.boolean(), replyToCommentId: uuid.nullable() })

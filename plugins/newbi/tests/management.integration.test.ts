@@ -438,6 +438,66 @@ test('Newbi learns corroborated author slang and isolates it across authors and 
   assert.equal(await owner.newbiAuthorTerm.count({ where: { accountId: firstAccount.id } }), 0)
 })
 
+test('Newbi section slang requires separate post authors and keeps author meanings and sections isolated', async () => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-section') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const identityId = await activeIdentity({}, characterId)
+  const account = () => owner.platformAccount.create({ data: { characterId, identityId, status: 'ACTIVE', platform: 'newbi',
+    instanceKey: 'http://127.0.0.1:5000/agent-api/v1', remoteAccountId: randomUUID() } })
+  const [first, second] = await Promise.all([account(), account()])
+  type Thread = NonNullable<Awaited<ReturnType<NonNullable<NewbiManagementOptions['readConnectorThread']>>>>
+  const threads = new Map<string, Thread>()
+  const target = testApp(undefined, undefined, undefined, async ({ postId }) => threads.get(postId), undefined, undefined,
+    async (input, _profile, _attribution, capture) => {
+      await capture(JSON.stringify(input.glossary ?? []), 'fixture/section-glossary')
+      return { status: 'NO_REPLY', reason: 'LOW_VALUE', note: '暂无需要回应的问题。',
+        ...(input.learnGlossary ? { glossaryCandidates: [{ term: '交作业', meaning: input.post, tone: 'playful' }] } : {}),
+      }
+    })
+  async function assess(author: number, sectionId: number | undefined, meaning?: string, accountId = first.id) {
+    const postId = randomUUID()
+    const texts = meaning ? ['今晚交作业？', '这次交作业弄好了。', '等我明天交作业。'] : ['还没交作业。']
+    const comments = texts.map((content, index) => ({
+      id: randomUUID(), author: { id: (index % 2) + 1, username: '评论者' }, content, replyToCommentId: null,
+    }))
+    threads.set(postId, { post: { title: '交作业讨论', content: meaning ?? '新开讨论', isLocked: false, sectionId,
+      author: { id: author, username: '帖子作者' } }, comments, nextCursor: null })
+    await owner.newbiEvent.create({ data: { accountId, seq: String(threads.size), type: 'POST_REPLIED', postId,
+      commentId: comments[0]!.id, occurredAt: new Date() } })
+    const base = characterPath(characterId) + '/newbi'
+    const started = await request('POST', base + `/accounts/${accountId}/discussions/${postId}/assessments`, { target, key: randomUUID() })
+    assert.equal(started.status, 201, JSON.stringify(started.body))
+    const detail = await request('GET', base + '/assessments/' + started.body.id, { target })
+    assert.equal(detail.status, 200, JSON.stringify(detail.body))
+    return detail.body
+  }
+
+  const meaning = '分享活动照片'
+  const firstSample = await assess(20, 1, meaning)
+  assert.equal(firstSample.sectionGlossarySamples.length, 1)
+  assert.deepEqual((await assess(20, 1, meaning)).sectionGlossarySamples, [])
+  await assess(21, 2, meaning)
+  await assess(22, 1, '提交签到留言')
+  assert.deepEqual((await assess(99, 1)).glossaryUsed, [])
+  await assess(23, 1, meaning)
+  const shared = await assess(99, 1)
+  assert.deepEqual(shared.glossaryUsed.map(({ sectionId, meaning }: { sectionId?: number; meaning: string }) => [sectionId, meaning]), [[1, meaning]])
+  assert.match(shared.systemPrompt, /分享活动照片/)
+  const override = await assess(22, 1)
+  assert.deepEqual(override.glossaryUsed.map(({ sectionId, meaning }: { sectionId?: number; meaning: string }) => [sectionId, meaning]), [[undefined, '提交签到留言']])
+  assert.deepEqual((await assess(99, 2)).glossaryUsed, [])
+  assert.deepEqual((await assess(99, undefined)).glossaryUsed, [])
+  assert.deepEqual((await assess(99, 1, undefined, second.id)).glossaryUsed, [])
+  const conflicting = await assess(24, 1, '提交签到留言')
+  assert.deepEqual((await assess(99, 1)).glossaryUsed, [])
+  await owner.newbiDiscussionAssessment.update({ where: { id: conflicting.id }, data: { createdAt: new Date(0) } })
+  assert.equal((await assess(99, 1)).glossaryUsed[0].meaning, meaning)
+  await owner.newbiDiscussionAssessment.update({ where: { id: firstSample.id }, data: { createdAt: new Date(0) } })
+  assert.deepEqual((await assess(99, 1)).glossaryUsed, [])
+})
+
 test('Newbi background assessments coalesce concurrent reads, respect deployment changes, and never create proposals', async () => {
   const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-background') })
   assert.equal(created.status, 201)
@@ -635,7 +695,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     if (path === '/agent-api/v1/quota') return reply({ comments: [{ remaining: 5 }] })
     if (path === '/agent-api/v1/posts/' + postId) {
       reads++
-      return reply({ id: postId, title: 'Fixture discussion', content: 'Original context', isHidden: false, isLocked: locked })
+      return reply({ id: postId, title: 'Fixture discussion', content: 'Original context', isHidden: false, isLocked: locked, sectionId: 42 })
     }
     if (path === '/agent-api/v1/posts/' + postId + '/comments') {
       if (req.method === 'GET') {
@@ -685,7 +745,11 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     if (!host) return { status: 'UNAVAILABLE' }
     try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
     finally { await host.stop() }
-  }, (target, preview) => readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target, preview), (service, succeeded) => {
+  }, async (target, preview) => {
+    const thread = await readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target, preview)
+    if (thread) assert.equal(thread.post.sectionId, 42)
+    return thread
+  }, (service, succeeded) => {
     assert.equal(service, 'connector-executor')
     sendReports.push(succeeded)
   })

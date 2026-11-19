@@ -60,6 +60,7 @@ export const newbiThreadView = z.object({
 export const newbiAssessmentThread = newbiThreadView.extend({
   post: newbiThreadView.shape.post.extend({
     author: z.object({ id: z.union([resourceId, z.number().int().positive()]), username: z.string() }).optional(),
+    sectionId: z.number().int().positive().max(2_147_483_647).optional(),
   }),
   comments: z.array(newbiThreadView.shape.comments.element.extend({
     author: z.object({ username: z.string(), id: z.union([z.string(), z.number()]).optional() }),
@@ -71,13 +72,15 @@ export const newbiAssessmentResult = z.discriminatedUnion('status', [
   z.object({ status: z.literal('UNAVAILABLE'), reason: z.enum(['THREAD_UNAVAILABLE','MODEL_UNAVAILABLE','INVALID_SELECTION', 'CONTEXT_CHANGED','TIMED_OUT','BACKGROUND_DISABLED']), note: z.string() }),
   z.object({ status: z.literal('PENDING') }),
 ])
+export const newbiGlossaryReference = glossaryReference.extend({ sectionId: z.number().int().positive().optional() })
 export const newbiAssessmentView = z.object({
   id: resourceId, accountId: resourceId, postId: resourceId, identity: z.string(), participation: participationLevel,
   createdAt: z.iso.datetime(), finishedAt: z.iso.datetime().nullable(), model: z.string().nullable(),
   systemPrompt: z.string().nullable(), result: newbiAssessmentResult,
   origin: z.enum(['ADMIN', 'BACKGROUND']),
-  glossaryUsed: z.array(glossaryReference),
+  glossaryUsed: z.array(newbiGlossaryReference),
   glossaryLearned: z.array(glossaryReference.extend({ sourceComments: z.array(resourceId).length(3) })),
+  sectionGlossarySamples: z.array(newbiGlossaryReference.extend({ sectionId: z.number().int().positive(), sourceComments: z.array(resourceId).length(3) })),
 })
 export const newbiAssessmentList = z.object({ items: z.array(newbiAssessmentView) })
 export const newbiAccountCheckView = z.object({ verified: z.boolean(), checkedAt: z.iso.datetime() })
