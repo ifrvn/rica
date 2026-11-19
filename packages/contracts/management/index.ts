@@ -41,6 +41,7 @@ export const dailyEnergyView = z.object({
 export const maxIdentityWritingPromptLength = 4000
 
 export const identityProfile = z.strictObject({
+  participation: z.enum(['talkative', 'balanced', 'reserved']).optional(),
   displayName: shortText.optional(),
   timezone: timezone.optional(),
   stateRule: stateRule.optional(),
@@ -241,6 +242,10 @@ export const grantView = z.object({
 export const auditView = z.object({
   id: z.uuid(), operation: z.string(), actorId: z.string(), targetId: z.uuid(),
   requestId: z.uuid(), digest: z.string(), createdAt: z.iso.datetime(),
+  actorLabel: z.string().optional(),
+  run: z.object({ id: z.uuid(), platform: z.string().nullable(), identity: z.string().nullable() }).optional(),
+  decision: z.enum(['APPROVE', 'REJECT']).optional(),
+  commitment: z.object({ title: z.string(), dueAt: z.iso.datetime() }).optional(),
 })
 
 export function pageView<T extends z.ZodType>(item: T) {

@@ -3,6 +3,7 @@ import { z } from '@hono/zod-openapi'
 import { listQuery, resourceId } from '@ricajs/contracts/management'
 import { maxSimulatedTextLength } from './platforms.js'
 import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
+import { participationLevel, replyDecision } from '@ricajs/contracts/model-provider'
 
 const timestamp = z.iso.datetime({ offset: true })
 const consoleMessage = {
@@ -26,7 +27,7 @@ export const simulationWritingContext = z.object({
   speaker: z.string(), history: z.array(z.object({ speaker: z.string(), message: z.string() })),
 })
 export const simulationRunQuery = listQuery.extend({
-  state: z.enum(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'CANCELED', 'WAITING_APPROVAL', 'READY', 'REJECTED',
+  state: z.enum(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'CANCELED', 'SKIPPED', 'WAITING_APPROVAL', 'READY', 'REJECTED',
     'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']).optional(),
   identityId: resourceId.optional(),
   accountId: resourceId.optional(),
@@ -61,6 +62,10 @@ export const runReplayView = z.object({
   inbound: z.object({ kind: z.enum(['POST', 'REPLY', 'MENTION']), receivedAt: timestamp }),
   draft: z.object({ createdAt: timestamp, modelId: z.string().nullable(), modelVersion: z.string().nullable() }).nullable(),
   systemPrompts: z.object({ core: z.string().nullable(), identity: z.string().nullable() }).nullable(),
+  participationDecision: z.object({ participation: participationLevel,
+    action: z.enum(['NO_OP', 'REPLY']), reason: z.union([replyDecision.options[0].shape.reason, replyDecision.options[1].shape.reason]) }).nullable(),
+  modelCalls: z.array(z.object({ id: resourceId, stage: z.enum(['DECISION', 'WRITING', 'REVIEW']),
+    model: z.string(), at: timestamp, systemPrompt: z.string().nullable() })),
   transcript: z.object({ message: z.string(), draft: z.string().nullable(), reviewReason: z.string() }).nullable(),
   goalRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })),
   referencesExpiredAt: timestamp.nullable(),

@@ -53,7 +53,7 @@ const error = ref('')
 const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
   registrationId: null as string | null, platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '',
-  draftModelProfile: '' })
+  draftModelProfile: '', participation: '' })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => !!workspace.value)
 const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && connectorFor(platform)))
@@ -118,7 +118,7 @@ const parsed = computed(() => {
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
     timezone: form.timezone || undefined, writingStyle: form.style, writingPrompt: form.writingPrompt.trim() || undefined,
-    draftModelProfile: form.draftModelProfile || undefined }
+    draftModelProfile: form.draftModelProfile || undefined, participation: form.participation || undefined }
   switch (editor.value) {
     case 'character': return characterInput.safeParse({ slug: form.slug.trim(), timezone: form.timezone, coreProfile })
     case 'core': return coreInput.safeParse({ coreProfile, reason })
@@ -302,6 +302,7 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
     draftModelProfile: identity?.profile?.draftModelProfile ?? '',
+    participation: identity?.profile?.participation ?? '',
     registrationId: null, platform: '',
     instance: 'local', remoteId: '', reason: '' })
   void nextTick(() => editorHeading.value?.focus())
@@ -470,6 +471,14 @@ onMounted(() => { if (props.characterId) void run(load) })
             <option v-if="form.draftModelProfile && form.draftModelProfile !== 'simulated'
               && !draftModels.some(({ id }) => id === form.draftModelProfile)" :value="form.draftModelProfile">配置不可用时使用本地模型</option>
             <option v-for="model in draftModels" :key="model.id" :value="model.id">{{ model.label }}</option>
+          </select>
+        </UiField>
+        <UiField v-if="isIdentity" label="参与程度" for="workspace-participation">
+          <select id="workspace-participation" class="ui-control" v-model="form.participation" :disabled="busy">
+            <option value="">按身份设定（默认适中）</option>
+            <option value="talkative">话痨</option>
+            <option value="balanced">适中</option>
+            <option value="reserved">寡言</option>
           </select>
         </UiField>
         <UiField v-if="isIdentity" label="身份提示词（可选）" for="workspace-writingPrompt"

@@ -38,6 +38,10 @@ export const newbiReplyView = z.object({
   status: newbiReplyStatus,
   autoApproved: z.boolean(),
   autoReviewHandoff: autoReviewHandoff.nullable(),
+  reviewRecord: z.object({ decision: z.enum(['APPROVE', 'REJECT']), at: z.iso.datetime(), reviewerId: z.string(),
+    reason: z.string().nullable(), model: z.string().optional(), policyVersion: z.number().int().optional() }).nullable(),
+  reviewerName: z.string().nullable(),
+  reviewPrompt: z.object({ model: z.string(), at: z.iso.datetime(), systemPrompt: z.string(), policyVersion: z.number().int() }).nullable(),
   attempts: z.number().int(), remoteCommentId: resourceId.nullable(), expiresAt: z.iso.datetime(),
   retryNotBefore: z.iso.datetime().nullable(), leaseUntil: z.iso.datetime().nullable(), closureReason: z.string().nullable(),
 })

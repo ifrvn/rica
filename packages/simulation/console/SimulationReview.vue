@@ -107,7 +107,8 @@ function statusTone(state: ActionView['state']) {
           <div><dt>目标</dt><dd>{{ selected.target.conversation }} / {{ selected.target.message }}</dd></div>
           <div><dt>受众</dt><dd>{{ selected.target.audience === 'PUBLIC' ? '公开' : '私聊' }}<template v-if="selected.target.contact"> · {{ selected.target.contact }}</template></dd></div>
           <div v-if="selected.review"><dt>审批决定</dt><dd>{{ selected.autoApproved ? 'AI 已批准' : selected.review.decision === 'APPROVE' ? '人工已批准' : '人工已拒绝' }} · {{ formatTime(selected.review.at) }}</dd></div>
-          <div v-if="selected.review?.reason"><dt>审批理由</dt><dd>{{ selected.review.reason }}</dd></div>
+          <div v-if="selected.review?.reviewer"><dt>审批人</dt><dd>{{ selected.review.reviewer }}</dd></div>
+          <div v-if="selected.review"><dt>审批理由</dt><dd style="white-space: pre-wrap">{{ selected.review.reason || '当时未填写' }}</dd></div>
         </dl>
         <UiAlert v-if="selected.autoReviewPending" tone="info">AI 审核中，结果会自动更新。</UiAlert>
         <UiAlert v-if="!selected.autoReviewHandoff && selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
@@ -138,7 +139,8 @@ function statusTone(state: ActionView['state']) {
           <h4>拟回复内容</h4>
           <p class="console-payload">{{ selected.content }}</p>
           <UiAlert v-if="selected.followUp" tone="info">
-            <strong>{{ selected.followUp.kind === 'PLAN' ? 'AI 拟定计划' : 'AI 拟登记承诺' }} · {{ selected.followUp.title }}</strong>
+            <strong>{{ selected.followUp.kind === 'PLAN' ? '曾拟定计划' : '曾拟登记承诺' }} · {{ selected.followUp.title }}</strong>
+            <p v-if="selected.state === 'WAITING_APPROVAL'">批准回复只会执行模拟发送。</p>
             <p>{{ selected.followUp.task }}</p>
             <p v-if="selected.followUp.dailyAt">每日 {{ selected.followUp.dailyAt }} · {{ selected.followUp.zone }}</p>
             <p v-else-if="selected.followUp.dueAt">截止 {{ new Date(selected.followUp.dueAt).toLocaleString() }}</p>
@@ -165,7 +167,7 @@ function statusTone(state: ActionView['state']) {
           </UiField>
           <div class="decision-buttons">
             <UiButton tone="primary" type="submit" :disabled="busy">
-              {{ selected.followUp ? '批准回复及后续事项' : '批准模拟回复' }}
+              批准模拟回复
             </UiButton>
             <UiButton tone="error" :disabled="busy" @click="emit('decide', 'REJECT')">拒绝</UiButton>
           </div>

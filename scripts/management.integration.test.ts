@@ -781,7 +781,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
   url.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(url.href)
   const inspect = (id: string) => request('GET', actionPath(id))
-  let verdict = 'APPROVE\nextra'
+  let verdict: unknown = 'APPROVE\nextra'
   let duringReview: (() => Promise<void>) | undefined
   let observedPrompt: string | undefined
   const review = createAutoReviewer(async (check) => check({
@@ -800,14 +800,14 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
     const invalid = await inspect(first.action.id)
     assert.equal(invalid.body.state, 'WAITING_APPROVAL')
     assert.equal(invalid.body.autoReviewHandoff.status, 'UNAVAILABLE')
-    verdict = 'REVIEW: 回复含有未核实的事实。'
+    verdict = { status: 'REVIEW', reason: '回复含有未核实的事实。' }
     await attempt(first)
     assert.deepEqual((await inspect(first.action.id)).body.autoReviewHandoff, {
       status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
     })
     const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
     assert.equal(queue.body.items.find(({ id }: { id: string }) => id === first.action.id).autoReviewHandoff, null)
-    verdict = 'APPROVE'
+    verdict = { status: 'APPROVE', reason: '回复符合当前讨论。' }
     duringReview = async () => { assert.equal((await save(1, false)).status, 200) }
     await attempt(first)
     assert.equal((await inspect(first.action.id)).body.state, 'WAITING_APPROVAL')
@@ -822,7 +822,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
     const approval = await owner.actionApproval.findUniqueOrThrow({ where: { actionId: second.action.id } })
     assert.equal(approval.reviewerId, autoReviewerId)
     assert.equal(approval.reviewDigest, second.action.reviewDigest)
-    assert.match(approval.reason, /v3 · fixture\/default-review-model/)
+    assert.match(approval.reason, /回复符合当前讨论。\n自动审核规则第 3 版 · fixture\/default-review-model/)
 
     await owner.simulatedDraft.update({
       where: { characterId_runId: { characterId: a, runId: first.action.runId } }, data: { content: null },
@@ -1533,24 +1533,15 @@ async function confirmCommitmentReceipt(actionId: string) {
   }
 }
 
-for (const kind of ['PLAN', 'COMMITMENT'] as const) {
-  test(`AI follow-up registers a ${kind} once from an approved simulation receipt`, async (t) => {
-    await owner.character.update({ where: { id: a }, data: { timezone: simulationZone(12) } })
+test('ordinary replies cannot register timing from generated or previously stored follow-ups', async () => {
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+  for (const kind of ['PLAN', 'COMMITMENT'] as const) {
     const accountId = await newSimulationAccount()
-    const platform = 'mock-b'
-    const collaboratorId = await reflectionIdentity()
-    const collaborator = await owner.platformAccount.create({ data: {
-      characterId: a, identityId: collaboratorId, status: 'ACTIVE',
-      platform, instanceKey: 'integration', remoteAccountId: randomUUID(),
-    } })
-    t.after(async () => { await owner.platformAccount.update({ where: { id: collaborator.id }, data: { status: 'PAUSED' } }) })
-    const companionTask = '在另一平台整理常见问题'
-    const dueAt = new Date(await databaseNow() + 86_400_000).toISOString()
-    const dailyAt = '13:00'
     const followUp = {
-      kind, title: 'Review follow-up ' + kind, task: '整理活动报名问题',
-      ...(kind === 'PLAN' ? { dailyAt, additionalTasks: [{ platform, task: companionTask }] }
-        : { dueAt, collaboratorPlatforms: [platform] }),
+      kind, title: 'Untrusted follow-up ' + kind, task: '整理活动报名问题',
+      ...(kind === 'PLAN' ? { dailyAt: '13:00', zone: 'Asia/Hong_Kong' }
+        : { dueAt: new Date(await databaseNow() + 86_400_000).toISOString() }),
     }
     const model = {
       ...localSimulationModel,
@@ -1562,87 +1553,22 @@ for (const kind of ['PLAN', 'COMMITMENT'] as const) {
     }
     const { action } = await proposeReview(accountId, undefined, model)
     const path = actionPath(action.id)
-    assert.equal((await request('GET', path, { actor: 'admin-b' })).status, 404)
+    assert.equal((await request('GET', path, { actor: 'reviewer' })).body.followUp, null)
+    // A proposal written before the change can still carry a previously reviewed follow-up.
+    await owner.actionProposal.update({ where: { id: action.id }, data: { followUp } })
     const preview = await request('GET', path, { actor: 'reviewer' })
-    assert.equal(preview.body.followUp.title, followUp.title)
-    assert.equal(preview.body.followUp.task, followUp.task)
-    assert.deepEqual(preview.body.followUp.participants.map(({ identityId, accountId, platform }: Record<string, string>) =>
-      ({ identityId, accountId, platform })), [{ identityId: collaboratorId, accountId: collaborator.id, platform }])
-    if (kind === 'PLAN') {
-      assert.equal(preview.body.followUp.dailyAt, dailyAt)
-      assert.equal(preview.body.followUp.participants[0].task, companionTask)
-    } else assert.equal(preview.body.followUp.dueAt, dueAt)
-    assert.equal(preview.body.target.accountId, accountId)
+    assert.equal(preview.body.followUp.kind, kind)
     const decide = await request('POST', path + '/decisions', {
       actor: 'reviewer', key: 'follow-up-' + action.id, ifMatch: preview.headers.get('etag')!,
-      data: { decision: 'APPROVE', reason: 'Reviewed the reply and follow-up', reviewDigest: action.reviewDigest },
+      data: { decision: 'APPROVE', reason: 'Approve the simulated reply', reviewDigest: action.reviewDigest },
     })
     assert.equal(decide.status, 200, JSON.stringify(decide.body))
-
-    const list = characterPath(a) + (kind === 'PLAN' ? '/plans' : '/commitments?accountId=' + accountId)
-    const registered = async () => (await request('GET', list)).body.items.filter(
-      ({ title }: { title: string }) => title === followUp.title,
-    )
-    assert.deepEqual(await registered(), [])
     await confirmCommitmentReceipt(action.id)
     await confirmCommitmentReceipt(action.id)
-    const items = await registered()
-    assert.equal(items.length, 1)
-    const [item] = items
-    assert.equal(item.source, 'AI')
-    if (kind === 'PLAN') {
-      assert.deepEqual(item.rule, { kind: 'DAILY', localTime: dailyAt })
-      assert.equal(item.zone, preview.body.followUp.zone)
-      assert.equal(item.participants.length, 2)
-      assert.equal(item.participants.find((participant: { accountId: string }) => participant.accountId === accountId)?.task, followUp.task)
-      const assigned = item.participants.find((participant: { accountId: string }) => participant.accountId === collaborator.id)
-      assert.equal(assigned?.task, companionTask)
-      assert.ok(assigned?.nextAt)
-    } else {
-      assert.equal(item.actionId, action.id)
-      assert.equal(item.task, followUp.task)
-      assert.equal(item.dueAt, dueAt)
-      assert.equal(item.collaborators.length, 1)
-      assert.equal(item.collaborators[0].identityId, collaboratorId)
-      assert.equal(item.collaborators[0].accountId, collaborator.id)
-      assert.deepEqual((await request('GET', characterPath(a) + '/commitment-receipts?runId=' + action.runId)).body.items, [])
-    }
-  })
-}
-
-test('AI follow-up ignores promises missing from the reply and respects rejection', async () => {
-  const accountId = await newSimulationAccount()
-  const followUp = {
-    kind: 'COMMITMENT', title: 'Unapproved follow-up', task: '整理活动报名问题',
-    dueAt: new Date(await databaseNow() + 86_400_000).toISOString(),
+    assert.equal(await owner.simulationPlan.count({ where: { characterId: a, title: followUp.title } }), 0)
+    assert.equal(await owner.simulationCommitment.count({ where: { actionId: action.id } }), 0)
+    assert.equal(await owner.simulationSchedule.count({ where: { accountId } }), 0)
   }
-  const model = (text: string) => ({
-    ...localSimulationModel,
-    implementation: {
-      hostedModel: 'fixture',
-      decide: async () => 'REPLY',
-      write: async () => ({ text, evidenceIds: [], followUp }),
-    },
-  })
-  const ungrounded = await proposeReview(accountId, undefined, model('报名时间尚未确定。'))
-  assert.equal((await request('GET', actionPath(ungrounded.action.id), { actor: 'reviewer' })).body.followUp, null)
-  const grounded = await proposeReview(accountId, undefined, model('我会在明天整理活动报名问题。'))
-  const path = actionPath(grounded.action.id)
-  const preview = await request('GET', path, { actor: 'reviewer' })
-  assert.deepEqual(preview.body.followUp, followUp)
-  const rejected = await request('POST', path + '/decisions', {
-    actor: 'reviewer', key: 'reject-follow-up-' + grounded.action.id, ifMatch: preview.headers.get('etag')!,
-    data: { decision: 'REJECT', reason: 'Reject the simulated reply', reviewDigest: grounded.action.reviewDigest },
-  })
-  assert.equal(rejected.status, 200, JSON.stringify(rejected.body))
-  const executor = simulationDatabase()
-  try {
-    await executeSimulation(executor, grounded.action.id, simulationPlatforms.resolveAdapter)
-  } finally {
-    await executor.$disconnect()
-  }
-  assert.equal(await owner.simulationReceipt.count({ where: { actionId: grounded.action.id } }), 0)
-  assert.deepEqual((await request('GET', characterPath(a) + '/commitments?accountId=' + accountId)).body.items, [])
 })
 
 test('commitments require a confirmed receipt and preserve its recipient across filters', async () => {
@@ -2686,8 +2612,11 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
     const configuration = configurations.find(({ baseUrl }) => url === baseUrl + '/chat/completions')
     assert.ok(configuration)
     assert.equal(new Headers(options.headers).get('Authorization'), 'Bearer ' + configuration.apiKey)
-    assert.equal(JSON.parse(String(options.body)).model, configuration.model)
-    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: '这是用于验证模型绑定的回复。' } }] })
+    const body = JSON.parse(String(options.body))
+    assert.equal(body.model, configuration.model)
+    const content = body.messages[0].content.startsWith('Decide whether')
+      ? JSON.stringify({ action: 'REPLY', reason: 'RELEVANT_TOPIC' }) : '这是用于验证模型绑定的回复。'
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content } }] })
   })
   const characters = []
   for (const [actor, suffix] of [['admin-a', '-model-role-a'], ['admin-b', '-model-role-b']]) {
@@ -2706,6 +2635,7 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   })
   assert.equal(unavailable.status, 422)
 
+  const runIds: string[] = []
   for (const [index, { profile, characterId, actor }] of [
     { profile: shared, characterId: firstRole, actor: 'admin-a' },
     { profile: separate, characterId: firstRole, actor: 'admin-a' },
@@ -2713,7 +2643,8 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   ].entries()) {
     const path = characterPath(characterId) + '/identities'
     const identity = await request('POST', path, {
-      actor, key: randomUUID(), data: { slug: 'model-persona-' + index, roleProfile: { draftModelProfile: profile.id } },
+      actor, key: randomUUID(), data: { slug: 'model-persona-' + index,
+        roleProfile: { draftModelProfile: profile.id, writingPrompt: 'Original identity wording ' + index } },
     })
     assert.equal(identity.status, 201, JSON.stringify(identity.body))
     if (index === 0) {
@@ -2725,12 +2656,13 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
     await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
     const target = await topicAccount(identity.body.id, 'mock-a', false, characterId)
     const { runId, eventId } = await prepareTopic(runtime, target, 'Public draft model fixture ' + index)
+    runIds.push(runId)
     await processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, loader.read)
     const draft = await owner.simulatedDraft.findFirstOrThrow({ where: { runId } })
     assert.equal(draft.modelVersion, profile.model)
   }
   assert.deepEqual(upstream.mock.calls.map(({ arguments: [url] }) => url), [
-    'https://shared.example/v1/chat/completions', 'https://separate.example/v1/chat/completions', 'https://shared.example/v1/chat/completions',
+    ...['shared', 'separate', 'shared'].flatMap((model) => Array<string>(2).fill(`https://${model}.example/v1/chat/completions`)),
   ])
   const sharedIdentity = await owner.identity.findFirstOrThrow({
     where: { characterId: firstRole, slug: 'model-persona-0' },
@@ -2739,9 +2671,12 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   await models.remove(shared.id, 2)
   modelProfileIds.delete(shared.id)
   const renamed = await request('PUT', identityPath, {
-    ifMatch: '"1"', data: { roleProfile: { displayName: 'Renamed', draftModelProfile: shared.id } },
+    ifMatch: '"1"', data: { roleProfile: { displayName: 'Renamed', draftModelProfile: shared.id, writingPrompt: 'Updated identity wording' } },
   })
   assert.equal(renamed.status, 200)
+  const oldRun = await request('GET', characterPath(firstRole) + '/runs/' + runIds[0] + '/replay')
+  assert.equal(oldRun.status, 200, JSON.stringify(oldRun.body))
+  assert.match(oldRun.body.modelCalls.find(({ stage }: { stage: string }) => stage === 'WRITING').systemPrompt, /Original identity wording 0/u)
   const denied = await request('PUT', identityPath, {
     actor: 'admin-b', ifMatch: '"2"', data: { roleProfile: { draftModelProfile: shared.id } },
   })
@@ -3412,12 +3347,15 @@ test('console simulation runs use an isolated conversation, one approval and one
     const plugins = await startCognitionPlugins({}, undefined, {
       provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key',
     })
-    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({
-      choices: [{ finish_reason: 'stop', message: { content: generatedReply } }],
-    }))
+    const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
+      const system = JSON.parse(String(request.body)).messages[0].content
+      const content = system.startsWith('Decide whether')
+        ? JSON.stringify({ action: 'REPLY', reason: 'RELEVANT_TOPIC' }) : generatedReply
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content } }] })
+    })
     try {
       await processSimulatedDraft(runtime, draft.eventId, simulationPlatforms.resolveAdapter, plugins.model)
-      assert.equal(fetch.mock.callCount(), 1)
+      assert.equal(fetch.mock.callCount(), 2)
     } finally {
       fetch.mock.restore()
       await plugins.stop()
@@ -3519,12 +3457,13 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(newestAudit.status, 200, JSON.stringify(newestAudit.body))
     assert.equal(newestAudit.body.items.length, 1)
     assert.equal(newestAudit.body.nextCursor, newestAudit.body.items[0].id)
-    assert.deepEqual(Object.keys(newestAudit.body.items[0]).sort(),
-      ['actorId', 'createdAt', 'digest', 'id', 'operation', 'requestId', 'targetId'])
-    const olderAudit = await request('GET', audit + '&order=desc&limit=1&cursor=' + newestAudit.body.nextCursor)
+    assert.equal(newestAudit.body.items[0].run.id, id)
+    const olderAudit = await request('GET', audit + '&order=desc&limit=3&cursor=' + newestAudit.body.nextCursor)
     const entries = [...newestAudit.body.items, ...olderAudit.body.items]
-    assert.deepEqual(entries.map((item: { operation: string }) => item.operation).sort(), ['action.review', 'simulation.start'])
-    assert.deepEqual(entries.map((item: { targetId: string }) => item.targetId).sort(), [id, action.id].sort())
+    assert.deepEqual(entries.map((item: { operation: string }) => item.operation).sort(),
+      ['action.review', 'simulation.executing', 'simulation.simulated', 'simulation.start'])
+    assert.equal(entries.find((item: { operation: string }) => item.operation === 'action.review').decision, 'APPROVE')
+    assert.ok(entries.every((item: { run?: { id: string } }) => item.run?.id === id))
     assert.ok(Date.parse(entries[0].createdAt) >= Date.parse(entries[1].createdAt))
     assert.equal(olderAudit.body.nextCursor, null)
     const foreignCursor = await request('GET', character + '/audit?runId=' + second.body.id)
@@ -3547,7 +3486,19 @@ test('console simulation runs use an isolated conversation, one approval and one
     const firstDraft = await prepareTurn(firstTurn.body.id)
     const firstReplay = path + '/' + firstTurn.body.id + '/replay'
     let reviewObserved = false
-    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel, undefined, async () => {
+    const tracedModel = { ...localSimulationModel, implementation: {
+      hostedModel: 'fixture',
+      async decide(input: Parameters<typeof localSimulationModel.implementation.decide>[0]) {
+        await input.capture?.('Participation system prompt\nOriginal identity context')
+        return { action: 'REPLY', reason: 'SOCIAL_OPENING' }
+      },
+      async write(input: Parameters<typeof localSimulationModel.implementation.write>[0], signal: AbortSignal) {
+        await input.capture?.('Writing system prompt\nOriginal identity context')
+        return localSimulationModel.implementation.write(input, signal)
+      },
+    } }
+    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, tracedModel, undefined, async (_settings, _reply, _attribution, capture) => {
+      await capture?.('Review system prompt\nOriginal policy', 'fixture/review')
       const duringReview = await request('GET', firstReplay)
       assert.equal(duringReview.body.autoReviewPending, true)
       const proposalPath = character + '/actions/' + duringReview.body.proposal.id
@@ -3559,13 +3510,22 @@ test('console simulation runs use an isolated conversation, one approval and one
       })
       assert.equal(race.body.error.code, 'AUTO_REVIEW_PENDING')
       reviewObserved = true
-      return { status: 'APPROVE', model: 'fixture/review' }
+      return { status: 'APPROVE', model: 'fixture/review', reason: '讨论相关的低风险回复。' }
     })
     assert.equal(reviewObserved, true)
     const automatic = await request('GET', firstReplay)
     assert.equal(automatic.body.chatId, chatId)
     assert.equal(automatic.body.autoReviewPending, false)
     assert.equal(automatic.body.autoApproved, true)
+    assert.deepEqual(automatic.body.modelCalls.map((call: { stage: string; systemPrompt: string }) => [call.stage, call.systemPrompt]), [
+      ['DECISION', 'Participation system prompt\nOriginal identity context'],
+      ['WRITING', 'Writing system prompt\nOriginal identity context'],
+      ['REVIEW', 'Review system prompt\nOriginal policy'],
+    ])
+    assert.match((await request('GET', character + '/actions/' + automatic.body.proposal.id)).body.review.reason,
+      /讨论相关的低风险回复/u)
+    assert.equal((await request('GET', firstReplay, { actor: 'nonmember' })).status, 404)
+    await assert.rejects(runtime.$queryRaw`SELECT public.rica_run_model_calls(${characterId}::uuid,${firstTurn.body.id}::uuid)`, /permission denied/i)
     // Keep the remaining group turns in quiet hours to exercise interactive receipt issuance.
     await owner.character.update({ where: { id: characterId }, data: { timezone: simulationZone(1) } })
     await executeSimulation(executor, automatic.body.proposal.id, simulationPlatforms.resolveAdapter)
@@ -3602,6 +3562,13 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.deepEqual(seenContext, { speaker: '小周', history: [
       { speaker: '小林', message: '我们在比较两套方案。' }, { speaker: '角色', message: chat.body.turns[0].reply },
     ] })
+    const quietTurn = await send('小周', '明天交作业哈哈', randomUUID(), newAccount.id)
+    const quietDraft = await prepareTurn(quietTurn.body.id)
+    await processSimulatedDraft(runtime, quietDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)
+    const quietReplay = await request('GET', path + '/' + quietTurn.body.id + '/replay')
+    assert.deepEqual(quietReplay.body.participationDecision, { participation: 'balanced', action: 'NO_OP', reason: 'BYSTANDER' })
+    assert.equal(quietReplay.body.state, 'SKIPPED')
+    assert.equal(quietReplay.body.proposal, null)
     assert.equal((await request('GET', chatPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(b) + '/simulation-chats/' + chatId, { actor: 'admin-b' })).status, 404)
     assert.deepEqual((await request('GET', characterPath(b) + '/simulation-chats', { actor: 'admin-b' })).body.items, [])
@@ -3628,7 +3595,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(moreHistory.body.items[0].autoApproved, true)
     assert.equal((await request('GET', secondProposal)).body.review.reason, 'Fixture rejection')
 
-    const thirdTurn = await send('小林', '我补充一下预算。')
+    const thirdTurn = await send('小林', '@角色 我补充一下预算。')
     const thirdDraft = await prepareTurn(thirdTurn.body.id)
     await processSimulatedDraft(runtime, thirdDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)
     const thirdAction = await owner.actionProposal.findUniqueOrThrow({ where: { runId: thirdTurn.body.id } })
@@ -3645,6 +3612,23 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.deepEqual(finalChat.body.speakers, ['小林', '小周'])
     assert.equal(finalChat.body.turns.at(-1).state, 'SIMULATED')
     assert.equal(finalChat.body.turns.at(-1).accountId, account.id)
+
+    for (const [version, participation, action] of [[1, 'talkative', 'REPLY'], [2, 'balanced', 'NO_OP'], [3, 'reserved', 'NO_OP']] as const) {
+      const configured = await request('PUT', character + '/identities/' + newIdentityId, {
+        ifMatch: `"${version}"`, data: { roleProfile: { participation } },
+      })
+      assert.equal(configured.status, 200, JSON.stringify(configured.body))
+      const turn = await request('POST', path, { key: randomUUID(), data: {
+        accountId: newAccount.id, chatId: randomUUID(), speaker: '小周', message: '这张照片的颜色真有意思',
+      } })
+      assert.equal(turn.status, 201, JSON.stringify(turn.body))
+      const job = await prepareTurn(turn.body.id)
+      await processSimulatedDraft(runtime, job.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)
+      const replay = await request('GET', path + '/' + turn.body.id + '/replay')
+      assert.equal(replay.body.participationDecision.participation, participation)
+      assert.equal(replay.body.participationDecision.action, action)
+      assert.equal(Boolean(replay.body.proposal), action === 'REPLY')
+    }
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }

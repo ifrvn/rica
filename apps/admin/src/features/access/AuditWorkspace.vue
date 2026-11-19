@@ -30,6 +30,9 @@ const labels: Record<string, string> = {
   'auto-review.update': '修改自动审批设置', 'action.auto-approve': 'AI 批准模拟回复',
   'newbi.reply.auto-approve': 'AI 批准 Newbi 回复',
   'simulation.resolve': '模拟对账', 'outbox.retry': '恢复隔离事件',
+  'simulation.executing': '领取模拟执行许可', 'simulation.simulated': '模拟执行完成',
+  'simulation.blocked': '模拟执行被拦截', 'simulation.reconciling': '模拟发送结果待核对',
+  'plan.register_from_receipt': '由回执登记模拟计划', 'commitment.register_from_receipt': '由回执登记模拟承诺',
   'character.create': '创建角色', 'character.core.update': '更新角色核心',
   'identity.create': '创建身份', 'identity.update': '更新身份', 'account.create': '登记平台账号',
   'account.register': '添加账号到账号池', 'account.associate': '关联平台账号',
@@ -96,15 +99,17 @@ onMounted(() => { void load() })
       <li v-for="item in items" :key="item.id">
         <div class="console-group-row">
           <div class="audit-summary">
-            <strong>{{ labels[item.operation] || item.operation }}</strong>
+            <strong>{{ item.operation === 'action.review' && item.decision ? (item.decision === 'APPROVE' ? '人工批准模拟回复' : '人工拒绝模拟回复') : labels[item.operation] || '系统活动' }}</strong>
             <div class="console-group-meta">
               <time :datetime="item.createdAt">{{ new Date(item.createdAt).toLocaleString() }}</time>
-              <span>操作者 {{ item.actorId.length > 12 ? item.actorId.slice(0, 12) + '…' : item.actorId }}</span>
+              <span v-if="item.actorLabel">{{ item.actorLabel }}</span>
+              <span v-if="item.run?.identity">{{ item.run.identity }} · {{ item.run.platform }}</span>
+              <span v-if="item.commitment">{{ item.commitment.title }} · 当前到期 {{ new Date(item.commitment.dueAt).toLocaleString() }}</span>
             </div>
           </div>
           <div class="console-actions">
-            <UiButton v-if="!runId && item.operation === 'simulation.start'" size="small" variant="quiet"
-              @click="emit('openRun', item.targetId)">查看运行</UiButton>
+            <UiButton v-if="!runId && item.run" size="small" variant="quiet"
+              @click="emit('openRun', item.run!.id)">查看运行</UiButton>
             <UiButton v-if="reviewFor(item)" size="small" variant="quiet"
               @click="openProposal(item)">查看平台提案</UiButton>
           </div>

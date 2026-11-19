@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
 import { reviewTarget, simulationReviewContext, type ActionView, type actionDecision } from '../contracts/review.js'
 import { simulationFollowUp } from '../contracts/follow-up.js'
+import { recordRunModelCall } from './model-calls.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 import { authorize, denyPermission, ManagementError, type Scope } from '@ricajs/persistence/management'
@@ -120,6 +121,8 @@ export async function listReviewActions(
       const [context] = canSeeDraft ? await tx.$queryRaw<{ context: unknown }[]>`
         SELECT public.rica_simulation_review_context(${scope.characterId}::uuid, ${row.id}::uuid) AS context
       ` : []
+      const reviewer = actionId && row.reviewerId && row.reviewerId !== autoReviewerId
+        ? await tx.adminUser.findUnique({ where: { actorId: row.reviewerId }, select: { username: true } }) : null
       actions.push({
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
@@ -127,7 +130,7 @@ export async function listReviewActions(
         autoApproved: row.reviewerId === autoReviewerId,
         autoReviewPending: row.autoReviewPending && state === 'WAITING_APPROVAL',
         review: row.decision && row.reviewedAt ? { decision: row.decision, at: row.reviewedAt.toISOString(),
-          reason: actionId && row.reviewerId !== autoReviewerId ? row.reviewReason || null : null } : null,
+          reason: actionId ? row.reviewReason || null : null, reviewer: reviewer?.username ?? null } : null,
         autoReviewHandoff: canSeeDraft && state === 'WAITING_APPROVAL' && !row.autoReviewPending
           ? autoReviewHandoff.safeParse(row.autoReviewHandoff).data ?? skipSimulationReview(row, target) ?? missingAutoReviewHandoff
           : null,
@@ -160,7 +163,8 @@ export async function autoReviewSimulation(
   const { settings, proposal, target, content } = input
   const outcome = settings.enabled
     ? await review(settings, { platform: target.platform, draft: content, discussion },
-      { characterId, identityId: target.identityId, platform: target.platform })
+      { characterId, identityId: target.identityId, platform: target.platform },
+      (prompt, model) => recordRunModelCall(db, proposal.runId, 'REVIEW', model, prompt))
     : { status: 'SKIPPED', reason: '该角色未启用自动审批。' } as const
 
   await db.$transaction(async (tx) => {
@@ -179,8 +183,9 @@ export async function autoReviewSimulation(
       `
       return
     }
+    const basis = `自动审核规则第 ${settings.version} 版 · ${outcome.model}`
     const result = await finishReview(tx, characterId, current, autoReviewerId, 'APPROVE',
-      `Auto-review v${settings.version} · ${outcome.model}`, resolveAdapter)
+      outcome.reason ? `${outcome.reason}\n${basis}` : basis, resolveAdapter)
     if (result.status === 'READY') await tx.managementAudit.create({ data: {
       characterId, actorId: autoReviewerId, operation: 'action.auto-approve', targetId: actionId,
       digest: current.reviewDigest, requestId: randomUUID(),

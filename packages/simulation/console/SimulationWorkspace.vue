@@ -55,8 +55,12 @@ const stoppedReasons: Record<string, string> = {
   PAYLOAD_INVALID: '草稿、证据或当前授权未通过执行前核验。',
   PROPOSAL_EXPIRED: '提案已过有效期。',
   MODEL_BUDGET_EXHAUSTED: '角色当日模型预算不足，已跳过模型调用。',
-  MODEL_NO_REPLY: '决策模型选择不回复这条消息。',
+  MODEL_NO_REPLY: '此身份选择旁听。',
 }
+const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }
+const decisionLabels = { DIRECT_REQUEST: '收到直接提问或点名', RELEVANT_TOPIC: '话题适合此身份回应',
+  SOCIAL_OPENING: '适合自然接话', ALREADY_ADDRESSED: '话题已回应或重复', BYSTANDER: '适合旁听', UNCLEAR: '对话意图不明确' }
+const modelStage = { DECISION: '参与判断', WRITING: '写作', REVIEW: 'AI 审核' }
 const stopReason = computed(() => selected.value?.stateReason ? stoppedReasons[selected.value.stateReason] : undefined)
 const modelName = computed(() => [selected.value?.draft?.modelId, selected.value?.draft?.modelVersion].filter(Boolean).join(' · '))
 function accountName(id: string, platform?: string) {
@@ -109,7 +113,7 @@ onBeforeUnmount(() => {
 const stateLabels = {
   QUEUED: '已排队', CONTEXT_READY: '准备草稿', DRAFTED: '草稿已生成', WAITING_APPROVAL: '待审批', READY: '待执行',
   EXECUTING: '执行中', RECONCILING: '待对账', SIMULATED: '模拟完成',
-  REJECTED: '已拒绝', BLOCKED: '已拦截', CANCELED: '已取消', EXPIRED: '已过期',
+  REJECTED: '已拒绝', BLOCKED: '已拦截', CANCELED: '已取消', EXPIRED: '已过期', SKIPPED: '已旁听',
 } satisfies Record<NonNullable<z.infer<typeof simulationRunQuery>['state']>, string>
 
 function stateName(state: string) {
@@ -408,15 +412,26 @@ onMounted(() => {
           <UiAlert v-else-if="selected.state === 'EXECUTING'" tone="info" title="已领取许可，正在等待模拟回执">
             回执写入后，这条运行会显示「模拟完成」。
           </UiAlert>
-          <UiAlert v-if="stopReason" tone="warning">{{ stopReason }}</UiAlert>
+          <UiAlert v-if="stopReason && selected.state !== 'SKIPPED'" tone="warning">{{ stopReason }}</UiAlert>
           <dl class="run-meta">
             <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
             <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>
             <div v-if="modelName"><dt>模型</dt><dd>{{ modelName }}</dd></div>
+            <div v-if="selected.participationDecision"><dt>参与决定</dt><dd>{{ participationLabels[selected.participationDecision.participation] }} · {{ decisionLabels[selected.participationDecision.reason] }}</dd></div>
             <div><dt>运行 ID</dt><dd>{{ selected.id }}</dd></div>
           </dl>
-          <details v-if="selected.systemPrompts?.core || selected.systemPrompts?.identity" class="run-prompts">
-            <summary>系统提示词</summary>
+          <section aria-labelledby="run-prompts-heading" class="run-prompts">
+            <h4 id="run-prompts-heading">模型调用与 System Prompt</h4>
+            <p v-if="selected.participationDecision && !selected.modelCalls.some(call => call.stage === 'DECISION')">参与决定由本地规则产生。</p>
+            <p v-else-if="!selected.modelCalls.length">当时未采集提示词。</p>
+            <details v-for="call in selected.modelCalls" :key="call.id">
+              <summary>{{ modelStage[call.stage] }} · {{ call.model }} · {{ formatTime(call.at) }}</summary>
+              <pre v-if="call.systemPrompt !== null" class="console-payload">{{ call.systemPrompt }}</pre>
+              <p v-else>提示词已超过保留期限或来源已不可用。</p>
+            </details>
+          </section>
+          <details v-if="!selected.modelCalls.length && (selected.systemPrompts?.core || selected.systemPrompts?.identity)" class="run-prompts">
+            <summary>当时的角色与身份设定</summary>
             <dl>
               <template v-if="selected.systemPrompts.core">
                 <dt>角色核心设定</dt><dd class="console-payload">{{ selected.systemPrompts.core }}</dd>

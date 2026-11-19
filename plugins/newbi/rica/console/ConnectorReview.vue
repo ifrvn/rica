@@ -346,6 +346,21 @@ onMounted(() => { void list() })
           <p>{{ reply.autoReviewHandoff.reason }}</p>
           <small v-if="reply.autoReviewHandoff.model">审核模型 {{ reply.autoReviewHandoff.model }}</small>
         </UiAlert>
+        <section aria-labelledby="newbi-review-history-heading">
+          <h4 id="newbi-review-history-heading">审批记录</h4>
+          <dl v-if="reply.reviewRecord">
+            <div><dt>决定</dt><dd>{{ reply.autoApproved ? 'AI 审核' : '人工审核' }} · {{ reply.reviewRecord.decision === 'APPROVE' ? '批准' : '拒绝' }} · {{ formatTime(reply.reviewRecord.at) }}</dd></div>
+            <div v-if="reply.reviewerName"><dt>审批人</dt><dd>{{ reply.reviewerName }}</dd></div>
+            <div><dt>理由</dt><dd>{{ reply.reviewRecord.reason ?? '当时未填写' }}</dd></div>
+            <div v-if="reply.reviewRecord.model"><dt>模型</dt><dd>{{ reply.reviewRecord.model }} · 规则第 {{ reply.reviewRecord.policyVersion }} 版</dd></div>
+          </dl>
+          <p v-else-if="!reply.autoReviewHandoff">{{ reply.status === 'WAITING' ? '尚无审批决定。' : '当时未采集审批详情。' }}</p>
+          <details v-if="reply.reviewPrompt">
+            <summary>审核 System Prompt · {{ reply.reviewPrompt.model }} · {{ formatTime(reply.reviewPrompt.at) }}</summary>
+            <pre class="console-payload">{{ reply.reviewPrompt.systemPrompt }}</pre>
+          </details>
+          <p v-else-if="reply.autoApproved">没有可查看的审核提示词快照。</p>
+        </section>
         <div v-if="canManage && (reply.status === 'READY' || canRetry)" class="send-actions">
           <UiButton v-if="canSend" tone="primary" :disabled="submitting" @click="confirmation = true">
             {{ canRetry ? '核对后重试' : '发送公开回复' }}

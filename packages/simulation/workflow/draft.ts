@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
 import { reviewTarget } from '../contracts/review.js'
-import { modelFollowUp, simulationFollowUp } from '../contracts/follow-up.js'
 import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
-import type { ModelEvidence, ModelProvider, WritingStyle } from '@ricajs/contracts/model-provider'
+import { participationLevel, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
+  type ReplyDecision, type WritingStyle } from '@ricajs/contracts/model-provider'
 import { localSimulationModel } from '../adapters/model.js'
 import type { Plugin } from '@ricajs/plugin-host'
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
@@ -15,11 +15,13 @@ import { loadRunContinuity } from '@ricajs/persistence/run-continuity'
 import type { RunContinuity } from '@ricajs/contracts/run-continuity'
 import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from '@ricajs/persistence/run-context'
 import { simulationWritingContext } from '../contracts/observability.js'
+import { recordRunModelCall } from './model-calls.js'
 
 type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
   | { purpose: 'PRIVATE_REPLY' }
 
 const decisionRequest = { purpose: 'DECISION_SUPPORT' } as const
+type ParticipationDecision = ReplyDecision & { participation: Participation }
 
 async function readEvidence(
   tx: Prisma.TransactionClient, runId: string, request: MemoryRequest,
@@ -73,8 +75,11 @@ async function readChatWritingContext(tx: Prisma.TransactionClient, runId: strin
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
-  provider: ModelProvider, signal: AbortSignal, suggestFollowUp = false,
-  onSkip?: (reason: 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY') => void,
+  provider: ModelProvider, signal: AbortSignal, observe?: {
+    model: string
+    skip: (reason: 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY') => void
+    decision: (decision: ParticipationDecision) => void
+  },
 ) {
   if (text.length > maxSimulatedTextLength) throw new Error('Simulated message is too long')
   signal.throwIfAborted()
@@ -86,9 +91,19 @@ async function buildSimulatedDraft(
     const evidence = await readEvidence(tx, runId, decisionRequest)
     const context = evidence && await loadRunContinuity(tx, runId)
     if (!context || !await captureSelfModelSnapshot(tx, runId, context.characterId, context.self.facts)) return null
-    const input = { text, evidence, context }
+    const [profile] = await tx.$queryRaw<{ prompt: string | null; participation: string | null }[]>`
+      SELECT prompt, public.rica_simulation_participation(${runId}::uuid) AS participation
+      FROM public.rica_simulated_writing_profile(${runId}::uuid)
+    `
+    if (!profile) return null
+    const conversation = writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
+    const identityPrompt = profile.prompt ?? undefined
+    const participation = participationLevel.safeParse(profile.participation).data
+      ?? (/话痨|talkative/i.test(identityPrompt ?? '') ? 'talkative'
+        : /寡言|reserved/i.test(identityPrompt ?? '') ? 'reserved' : 'balanced')
+    const input = { text, evidence, context, conversation, identityPrompt, participation } as const
     if (await reserveModelBudget(tx, runId, input, 64)) return input
-    onSkip?.('MODEL_BUDGET_EXHAUSTED')
+    observe?.skip('MODEL_BUDGET_EXHAUSTED')
     return null
   })
   if (!prepared) return null
@@ -100,13 +115,17 @@ async function buildSimulatedDraft(
 
   signal.throwIfAborted()
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
-  const decision = await provider.decide(prepared, signal)
+  const captureDecision = observe && provider.hostedModel && writingRequest.purpose === 'PUBLIC_REFERENCE'
+    ? (prompt: string) => recordRunModelCall(db, runId, 'DECISION', observe.model, prompt) : undefined
+  const outputDecision = await provider.decide({ ...prepared, capture: captureDecision }, signal)
   signal.throwIfAborted()
-  if (decision === 'NO_OP') {
-    onSkip?.('MODEL_NO_REPLY')
+  const decision = replyDecision.parse(outputDecision === 'NO_OP' ? { action: 'NO_OP', reason: 'BYSTANDER' }
+    : outputDecision === 'REPLY' ? { action: 'REPLY', reason: 'RELEVANT_TOPIC' } : outputDecision)
+  observe?.decision({ ...decision, participation: prepared.participation })
+  if (decision.action === 'NO_OP') {
+    observe?.skip('MODEL_NO_REPLY')
     return null
   }
-  if (decision !== 'REPLY') throw new Error('Invalid simulated decision output')
 
   const writing = await db.$transaction(async (tx) => {
     const evidence = await readEvidence(tx, runId, writingRequest)
@@ -116,13 +135,12 @@ async function buildSimulatedDraft(
       FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
     if (!profile) return null
-    const conversation = writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
+    const conversation = prepared.conversation
     const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined, conversation,
-      corePrompt: profile.corePrompt ?? undefined,
-      ...(suggestFollowUp ? { suggestFollowUp } : {}) }
+      corePrompt: profile.corePrompt ?? undefined }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
     if (!await reserveModelBudget(tx, runId, input, outputUnits)) {
-      onSkip?.('MODEL_BUDGET_EXHAUSTED')
+      observe?.skip('MODEL_BUDGET_EXHAUSTED')
       return null
     }
     const { characterId, identityId, platform } = context
@@ -133,41 +151,17 @@ async function buildSimulatedDraft(
   // Preserve the authorized revisions independently of the objects passed to the provider.
   const allowedRevisions = new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
   signal.throwIfAborted()
-  const output = await provider.write(writing, signal)
+  const captureWriting = captureDecision && observe
+    ? (prompt: string) => recordRunModelCall(db, runId, 'WRITING', observe.model, prompt) : undefined
+  const output = await provider.write({ ...writing, capture: captureWriting }, signal)
   signal.throwIfAborted()
   const draft = validateDraft(output, allowedRevisions)
   if (containsWritingPrompt(draft.text, writing.corePrompt, writing.identityPrompt)) return null
-  const suggestion = suggestFollowUp && output && typeof output === 'object' && 'followUp' in output
-    ? modelFollowUp.safeParse(output.followUp).data : undefined
-  const due = suggestion?.dueAt ? Date.parse(suggestion.dueAt) : NaN
-  const now = Date.parse(time.now)
-  const followUp = suggestion && (suggestion.dailyAt || (due > now && due <= now + 7 * 86_400_000))
-    && (suggestion.kind === 'PLAN' || draft.text.includes(suggestion.task)) ? suggestion : undefined
-
-  return { draft, followUp, time, conversation: writing.conversation, decisionRevisions,
+  return { draft, conversation: writing.conversation, decisionRevisions,
     writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
 type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
-
-async function resolveFollowUp(tx: Prisma.TransactionClient, runId: string, candidate: DraftCandidate) {
-  if (!candidate.followUp) return
-  const { additionalTasks, collaboratorPlatforms, ...details } = candidate.followUp
-  const assignments = details.kind === 'PLAN' ? additionalTasks?.map(({ platform, task }) => [platform, task] as const)
-    : collaboratorPlatforms?.map((platform) => [platform, undefined] as const)
-  const zone = details.dailyAt ? candidate.time.timezone : undefined
-  if (!assignments?.length) return simulationFollowUp.parse({ ...details, ...(zone ? { zone } : {}) })
-  const byPlatform = new Map(assignments)
-  if (byPlatform.size !== assignments.length) return
-  const available = await tx.$queryRaw<{ identityId: string; accountId: string; identity: string; account: string;
-    platform: string }[]>`
-    SELECT * FROM public.rica_follow_up_accounts(${runId}::uuid)
-  `
-  const participants = available.filter(({ platform }) => byPlatform.has(platform))
-    .map((item) => ({ ...item, ...(byPlatform.get(item.platform) ? { task: byPlatform.get(item.platform) } : {}) }))
-  if (participants.length !== assignments.length) return
-  return simulationFollowUp.parse({ ...details, ...(zone ? { zone } : {}), participants })
-}
 
 async function recheckDraft(
   tx: Prisma.TransactionClient, runId: string, request: WritingRequest, candidate: DraftCandidate,
@@ -248,9 +242,13 @@ export async function processSimulatedDraft(
   const signal = AbortSignal.timeout(model.implementation.hostedModel ? 20_000 : 5_000)
   const text = input?.text ?? null
   let skipReason: 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY' = 'DRAFT_UNAVAILABLE'
+  let participationDecision: ParticipationDecision | undefined
   const candidate = request && text !== null
-    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal,
-      request.purpose === 'PUBLIC_REFERENCE' && Boolean(model.implementation.hostedModel), reason => { skipReason = reason })
+    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal, {
+      model: `${modelId}/${modelVersion}`,
+      skip: reason => { skipReason = reason },
+      decision: decision => { participationDecision = decision },
+    })
     : null
 
   const actionId = await db.$transaction(async (tx) => {
@@ -276,14 +274,13 @@ export async function processSimulatedDraft(
         && adapter && matchesSimulationAdapter(input.adapter, adapter) && content
         && content.length <= maxSimulatedTextLength
       if (proposed) {
-        const followUp = await resolveFollowUp(tx, run.id, candidate)
         const settings = await tx.character.findUniqueOrThrow({
           where: { id: run.characterId }, select: { autoReviewEnabled: true, simulationProposalHours: true },
         })
         const expiresAt = new Date(Date.now() + settings.simulationProposalHours * 3_600_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
         const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
-        const autoReview = review && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate && !followUp
+        const autoReview = review && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate
         const reviewDigest = createHash('sha256').update(JSON.stringify({
           payloadHash, target, ...adapter, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
@@ -291,7 +288,7 @@ export async function processSimulatedDraft(
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
           decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
           selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
-          citationIds: candidate.draft.evidenceIds, modelId, modelVersion, followUp,
+          citationIds: candidate.draft.evidenceIds, modelId, modelVersion,
         })).digest('hex')
         signal.throwIfAborted()
         await tx.simulatedDraft.createMany({
@@ -311,7 +308,7 @@ export async function processSimulatedDraft(
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
             policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
-            followUp, autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
+            autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
           }, select: { id: true },
         })
         actionId = action.id
@@ -319,8 +316,9 @@ export async function processSimulatedDraft(
       const { count } = await tx.agentRun.updateMany({
         where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
         data: {
-          state: proposed ? 'WAITING_APPROVAL' : 'CANCELED',
+          state: proposed ? 'WAITING_APPROVAL' : skipReason === 'MODEL_NO_REPLY' ? 'SKIPPED' : 'CANCELED',
           stateReason: proposed ? null : skipReason,
+          participationDecision,
           stateVersion: { increment: 1 },
         },
       })

@@ -37,7 +37,8 @@ export const actionView = z.object({
   messageContext: simulationReviewContext.nullable(),
   autoApproved: z.boolean(),
   autoReviewPending: z.boolean(),
-  review: z.object({ decision: z.enum(['APPROVE', 'REJECT']), at: z.iso.datetime(), reason: z.string().nullable() }).nullable(),
+  review: z.object({ decision: z.enum(['APPROVE', 'REJECT']), at: z.iso.datetime(), reason: z.string().nullable(),
+    reviewer: z.string().nullable() }).nullable(),
   autoReviewHandoff: autoReviewHandoff.nullable(),
   followUp: simulationFollowUp.nullable(),
 })

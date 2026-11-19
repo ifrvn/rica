@@ -693,7 +693,8 @@ export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { r
       `
       where.OR = [
         { targetId: runId, operation: 'simulation.start' },
-        ...(proposal ? [{ targetId: proposal.id, operation: { in: ['action.review', 'action.invalidate', 'simulation.resolve'] } }] : []),
+        ...(proposal ? [{ targetId: proposal.id, operation: { in: ['action.review', 'action.auto-approve', 'action.invalidate',
+          'simulation.resolve', 'simulation.executing', 'simulation.simulated', 'simulation.blocked', 'simulation.reconciling'] } }] : []),
         { targetId: { in: events.map(({ id }) => id) }, operation: 'outbox.retry' },
       ]
     }
@@ -701,7 +702,44 @@ export async function listAudit(db: PrismaClient, scope: Scope, page: Page & { r
     const rows = await tx.managementAudit.findMany({
       ...args, where, orderBy: [{ createdAt: order }, { id: order }],
     })
-    return makePage(rows, page, ({ characterId: _, createdAt, ...entry }) => ({ ...entry, createdAt: createdAt.toISOString() }))
+    const scopedTargets = { characterId: scope.characterId }
+    const startedRunIds = rows.filter(({ operation }) => operation === 'simulation.start').map(({ targetId }) => targetId)
+    const commitmentIds = rows.filter(({ operation }) => operation.startsWith('commitment.')).map(({ targetId }) => targetId)
+    const [commitments, actors] = await Promise.all([
+      tx.simulationCommitment.findMany({
+        where: { ...scopedTargets, id: { in: commitmentIds } }, select: { id: true, actionId: true, title: true, dueAt: true },
+      }),
+      tx.adminUser.findMany({ where: { actorId: { in: rows.map(({ actorId }) => actorId) } },
+        select: { actorId: true, username: true } }),
+    ])
+    const actionIds = rows.filter(({ operation }) => operation.startsWith('action.')
+      || ['simulation.resolve', 'simulation.executing', 'simulation.simulated', 'simulation.blocked', 'simulation.reconciling'].includes(operation))
+      .map(({ targetId }) => targetId)
+    const actions = await tx.actionProposal.findMany({
+      where: { ...scopedTargets, OR: [
+        { id: { in: [...actionIds, ...commitments.map(({ actionId }) => actionId)] } },
+        { runId: { in: startedRunIds } },
+      ] },
+      select: { id: true, runId: true, target: true, approval: { select: { decision: true } } },
+    })
+    const commitmentById = new Map(commitments.map((item) => [item.id, item]))
+    const actionById = new Map(actions.map((item) => [item.id, item]))
+    const actorNames = new Map(actors.map(({ actorId, username }) => [actorId, username]))
+    const actionByRun = new Map(actions.map((item) => [item.runId, item]))
+    return makePage(rows, page, ({ characterId: _, createdAt, ...entry }) => {
+      const commitment = commitmentById.get(entry.targetId)
+      const started = entry.operation === 'simulation.start'
+      const action = started ? actionByRun.get(entry.targetId) : actionById.get(commitment?.actionId ?? entry.targetId)
+      const target = action?.target
+      const labels = target && typeof target === 'object' && !Array.isArray(target) ? target : null
+      const run = action ? { id: action.runId, platform: typeof labels?.platform === 'string' ? labels.platform : null,
+        identity: typeof labels?.identity === 'string' ? labels.identity : null }
+        : started ? { id: entry.targetId, platform: null, identity: null } : undefined
+      return { ...entry, createdAt: createdAt.toISOString(), run,
+        actorLabel: actorNames.get(entry.actorId) ?? (entry.actorId === 'system:auto-review' ? 'AI 审核' : undefined),
+        decision: entry.operation === 'action.review' || entry.operation === 'action.auto-approve' ? action?.approval?.decision : undefined,
+        commitment: commitment ? { title: commitment.title, dueAt: commitment.dueAt.toISOString() } : undefined }
+    })
   }, { isolationLevel: 'RepeatableRead' })
 }
 

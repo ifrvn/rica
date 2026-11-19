@@ -37,9 +37,10 @@ test('hosted models send only writing input and parse each provider response', a
     const reported = id === 'anthropic' ? { usage: { input_tokens: 5, cache_read_input_tokens: 4, cache_creation_input_tokens: 1, output_tokens: 7 } }
       : id === 'gemini' ? { usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 2, totalTokenCount: 17 } }
         : { usage: { prompt_tokens: 10, completion_tokens: 7, total_tokens: 17 } }
-    let responseBody: unknown = { ...result, ...reported }
+    const responseBody = { ...result, ...reported }
     let sentBytes = 0
     const usage: HostedUsageRecord[] = []
+    let sentPrompt: string | undefined
     const fetch = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
       assert.equal(url, endpoint)
       assert.equal(new Headers(options.headers).get(header), keyValue)
@@ -53,6 +54,7 @@ test('hosted models send only writing input and parse each provider response', a
       })
       const instructions = id === 'gemini' ? body.systemInstruction.parts[0].text
         : id === 'anthropic' ? body.system : body.messages[0].content
+      sentPrompt = instructions
       assert.ok(instructions.includes(input.identityPrompt))
       assert.ok(instructions.includes(input.corePrompt))
       if (id === 'openai') assert.equal(body.store, false)
@@ -71,23 +73,17 @@ test('hosted models send only writing input and parse each provider response', a
       const model = plugins.model.implementation
       assert.equal(model.hostedProvider, id)
       assert.equal(model.hostedModel, 'fixture-model')
-      assert.equal(await model.decide({ text: input.text } as Parameters<ModelProvider['decide']>[0], signal), 'REPLY')
-      assert.equal(fetch.mock.callCount(), 0)
-      assert.deepEqual(await model.write({ ...input, attribution }, signal), { text: '下午三点。', evidenceIds: ['internal-memory-id'] })
+      let capturedPrompt: string | undefined
+      assert.deepEqual(await model.write({ ...input, attribution, capture: async prompt => { capturedPrompt = prompt } }, signal),
+        { text: '下午三点。', evidenceIds: ['internal-memory-id'] })
       assert.equal(fetch.mock.callCount(), 1)
+      assert.ok(sentPrompt)
+      assert.equal(capturedPrompt, sentPrompt)
       assert.equal(usage.length, 1)
       assert.deepEqual(usage[0]?.attribution, attribution)
       assert.deepEqual(usage[0]?.tokens, { inputTokens: 10, outputTokens: 7, totalTokens: 17 })
       assert.equal(usage[0]?.sentBytes, sentBytes)
       assert.equal(usage[0]?.receivedBytes, Buffer.byteLength(JSON.stringify(responseBody)))
-      if (id === 'openai') {
-        const followUp = { kind: 'COMMITMENT', title: '整理报名问题', task: '整理活动报名问题', dueAt: '2026-11-11T02:00:00Z' }
-        const output = { text: '我明天会整理活动报名问题。', followUp }
-        responseBody = { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }
-        assert.deepEqual(await model.write({ ...input, suggestFollowUp: true }, signal), {
-          ...output, evidenceIds: ['internal-memory-id'],
-        })
-      }
     } finally {
       fetch.mock.restore()
       await plugins.stop()

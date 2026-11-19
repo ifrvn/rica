@@ -3,7 +3,7 @@ import type { z } from '@hono/zod-openapi'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../runtime/identity.js'
 import { coreProfile, identityProfile } from '@ricajs/contracts/management'
 import { newbiInboxView, newbiReplySummary, newbiReplyView, type newbiReplyQuery, type newbiAccountInput, type newbiReplyInput, type newbiDecisionInput, type newbiClosureInput, type newbiThreadView } from '../management/contracts.js'
-import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
+import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import { associateAccount, authorize, denyPermission, registerAccount, makePage, ManagementError, pageArgs, type Page, type Scope } from '@ricajs/persistence/management'
 import { autoReviewHandoff, autoReviewerId, missingAutoReviewHandoff, type AutoReviewOutcome, type AutoReviewSettings, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { lockAutoReview, readAutoReviewSettings } from '@ricajs/persistence/auto-review'
@@ -80,13 +80,16 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
       include: { account: { select: { instanceKey: true, remoteAccountId: true, identity: { select: { slug: true } } } } } })
     if (!reply) missing()
     const canPreview = reply.status === 'WAITING' && reply.executorKey === executorKey && reply.content
+    const reviewer = reply.reviewerId && reply.reviewerId !== autoReviewerId
+      ? await tx.adminUser.findUnique({ where: { actorId: reply.reviewerId }, select: { username: true } }) : null
     return newbiReplyView.parse({
       ...reply, identity: reply.account.identity.slug, agentId: reply.account.remoteAccountId,
       endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
       content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
       autoApproved: reply.reviewerId === autoReviewerId,
-      autoReviewHandoff: canPreview
-        ? autoReviewHandoff.safeParse(reply.autoReviewHandoff).data ?? missingAutoReviewHandoff : null,
+      reviewerName: reviewer?.username ?? null,
+      autoReviewHandoff: autoReviewHandoff.safeParse(reply.autoReviewHandoff).data ?? (canPreview ? missingAutoReviewHandoff : null),
+      reviewPrompt: reply.content && Date.now() - reply.createdAt.getTime() < 30 * 86_400_000 ? reply.reviewPrompt : null,
       retryNotBefore: reply.retryNotBefore?.toISOString() ?? null,
       leaseUntil: reply.leaseUntil?.toISOString() ?? null,
     })
@@ -147,7 +150,14 @@ export async function autoReviewNewbiReply(
     const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
       comments: thread.comments.map(({ content }) => content) })
     return review(policy, { platform: 'newbi', draft: current.content, discussion },
-      { characterId, identityId: current.identityId, platform: 'newbi' })
+      { characterId, identityId: current.identityId, platform: 'newbi' }, async (systemPrompt, model) => {
+        const { count } = await db.newbiReply.updateMany({
+          where: { id, characterId, status: 'WAITING', reviewDigest: current.reviewDigest, autoReviewVersion: policy.version,
+            reviewPrompt: { equals: Prisma.DbNull } },
+          data: { reviewPrompt: { model, systemPrompt, at: new Date().toISOString(), policyVersion: policy.version } },
+        })
+        if (!count) throw new Error('Newbi proposal no longer accepts a model call')
+      })
   }
   const outcome = await evaluate(reply, settings)
 
@@ -162,7 +172,8 @@ export async function autoReviewNewbiReply(
       return
     }
     await decideReply(tx, characterId, autoReviewerId, id,
-      { decision: 'APPROVE', reviewDigest: reply.reviewDigest }, requireConnector)
+      { decision: 'APPROVE', reviewDigest: reply.reviewDigest, reason: outcome.reason }, requireConnector,
+      { model: outcome.model, policyVersion: settings.version })
     await tx.managementAudit.create({ data: {
       characterId, actorId: autoReviewerId, operation: 'newbi.reply.auto-approve', targetId: id,
       requestId, digest: reply.reviewDigest,
@@ -179,8 +190,9 @@ export async function decideNewbiReply(
 
 async function decideReply(
   tx: Prisma.TransactionClient, characterId: string, reviewerId: string, id: string,
-  input: Pick<z.infer<typeof newbiDecisionInput>, 'decision' | 'reviewDigest'>,
+  input: z.infer<typeof newbiDecisionInput>,
   requireConnector: (endpoint: string) => Promise<void>,
+  autoReview?: { model: string; policyVersion: number },
 ) {
   const reply = await tx.newbiReply.findFirst({ where: { id, characterId } })
   if (!reply) missing()
@@ -196,7 +208,8 @@ async function decideReply(
   const status = input.decision === 'APPROVE' ? 'READY' : 'REJECTED'
   const { count } = await tx.newbiReply.updateMany({
     where: { id, status: 'WAITING', executorKey },
-    data: { status, reviewerId, approvedExecutorKey: status === 'READY' ? executorKey : null },
+    data: { status, reviewerId, approvedExecutorKey: status === 'READY' ? executorKey : null,
+      reviewRecord: { decision: input.decision, at: clock.now.toISOString(), reviewerId, reason: input.reason ?? null, ...autoReview } },
   })
   if (count !== 1) conflict()
   return { id, status }

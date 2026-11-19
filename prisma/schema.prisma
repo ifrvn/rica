@@ -62,6 +62,7 @@ enum RunState {
   RECONCILING
   SIMULATED
   BLOCKED
+  SKIPPED
 }
 
 enum RunStateReason {
@@ -373,6 +374,8 @@ model NewbiReply {
   approvedExecutorKey String? @map("approved_executor_key")
   autoReviewVersion Int? @map("auto_review_version")
   autoReviewHandoff Json? @map("auto_review_handoff")
+  reviewRecord    Json? @map("review_record")
+  reviewPrompt    Json? @map("review_prompt")
   proposerId      String @map("proposer_id")
   reviewerId      String? @map("reviewer_id")
   status          String @default("WAITING")
@@ -436,6 +439,7 @@ model AgentRun {
   goalRefs Json @default("[]") @map("goal_refs")
   contextTimezone String?         @map("context_timezone")
   referencesExpiredAt DateTime?   @map("references_expired_at") @db.Timestamptz
+  participationDecision Json? @map("participation_decision")
   inboundEvent    InboundEvent    @relation(fields: [characterId, identityId, accountId, inboundEventId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
   core            CoreVersion     @relation(fields: [characterId, coreVersion], references: [characterId, version], onDelete: Restrict, onUpdate: NoAction)
   identity        IdentityVersion @relation(fields: [characterId, identityId, identityVersion], references: [characterId, identityId, version], onDelete: Restrict, onUpdate: NoAction)
@@ -446,6 +450,7 @@ model AgentRun {
 
   snapshots          ContextSnapshot[]
   draft              SimulatedDraft?
+  modelCalls         RunModelCall[]
   scheduleOccurrence ScheduleOccurrence?
 
   @@unique([characterId, id])
@@ -453,6 +458,20 @@ model AgentRun {
   contactBoundaryVersion Int? @map("contact_boundary_version")
   @@index([characterId, createdAt, id], map: "agent_runs_character_created_id_idx")
   @@map("agent_runs")
+}
+
+model RunModelCall {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId  String   @map("character_id") @db.Uuid
+  runId        String   @map("run_id") @db.Uuid
+  stage        String
+  model        String
+  systemPrompt String?  @map("system_prompt")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  run          AgentRun @relation(fields: [characterId, runId], references: [characterId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([characterId, runId, createdAt], map: "run_model_calls_run_idx")
+  @@map("run_model_calls")
 }
 
 model DailyEnergyProjection {

@@ -85,7 +85,7 @@ export function useSimulationReview({ characterId, reviewStatus, busy, notice, r
       if (current !== revision()) return
       actions.value = actions.value.filter(({ id }) => id !== proposal.id)
       selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version,
-        review: { decision, at: new Date().toISOString(), reason: note || null } }
+        review: { decision, at: new Date().toISOString(), reason: note || null, reviewer: null } }
       reason.value = ''
       pending = undefined
       notice.value = outcome.status === 'READY' ? '已批准，等待模拟执行。' : '已拒绝模拟提案。'

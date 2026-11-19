@@ -25,8 +25,10 @@ export const autoReviewHandoff = z.object({
   model: z.string().optional(),
 })
 export type AutoReviewHandoff = z.infer<typeof autoReviewHandoff>
-export type AutoReviewOutcome = AutoReviewHandoff | { status: 'APPROVE'; model: string }
-export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview, attribution: ModelAttribution) => Promise<AutoReviewOutcome>
+export const modelReviewDecision = autoReviewHandoff.pick({ reason: true }).extend({ status: z.enum(['APPROVE', 'REVIEW']) }).strict()
+export type AutoReviewOutcome = AutoReviewHandoff | { status: 'APPROVE'; model: string; reason?: string }
+export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview, attribution: ModelAttribution,
+  capture?: (systemPrompt: string, model: string) => Promise<void>) => Promise<AutoReviewOutcome>
 
 export const autoReviewHandoffLabels = {
   REVIEW: 'AI 建议人工复审', SKIPPED: '未进行 AI 审核', UNAVAILABLE: 'AI 审核未完成',

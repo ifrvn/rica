@@ -267,15 +267,16 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
     return { status: 'UNAVAILABLE' }
   }, async () => ({
     post: { title: 'Test thread', content: 'Public topic', isLocked: locked }, comments: [previousComment], nextCursor: null,
-  }), undefined, async (settings, { draft }) => {
+  }), undefined, async (settings, { draft }, _attribution, capture) => {
     calls++
     assert.equal(settings.prompt, prompt)
+    await capture?.('Newbi review system prompt\n' + prompt, 'fixture/default-review-model')
     if (handoff) {
       assert.equal(draft, 'New assertion')
       return { status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model' }
     }
     assert.equal(draft, 'Routine follow-up')
-    return { status: 'APPROVE', model: 'fixture/default-review-model' }
+    return { status: 'APPROVE', model: 'fixture/default-review-model', reason: '回复直接跟进当前帖子。' }
   })
   const list = base + '/newbi/replies'
   const postId = randomUUID()
@@ -292,9 +293,10 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   assert.equal((await propose('Internal account writing instructions')).body.error.code, 'PRIVATE_WRITING_PROMPT')
   const human = await request('POST', list + '/' + first.body.id + '/decision', {
     target, actor: 'reviewer', key: randomUUID(),
-    data: { decision: 'APPROVE', reviewDigest: waiting.body.reviewDigest },
+    data: { decision: 'APPROVE', reviewDigest: waiting.body.reviewDigest, reason: '已核对帖子。' },
   })
   assert.equal(human.status, 200)
+  assert.equal((await inspect(first.body.id)).body.reviewRecord.reason, '已核对帖子。')
   await owner.newbiReply.update({ where: { id: first.body.id },
     data: { status: 'SENT', attempts: 1, remoteCommentId: previousComment.id } })
 
@@ -305,6 +307,10 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   const approved = await inspect(second.body.id)
   assert.equal(approved.body.status, 'READY')
   assert.equal(approved.body.autoApproved, true)
+  assert.equal(approved.body.reviewRecord.reason, '回复直接跟进当前帖子。')
+  assert.equal(approved.body.reviewRecord.policyVersion, 1)
+  assert.equal(approved.body.reviewPrompt.systemPrompt, 'Newbi review system prompt\n' + prompt)
+  assert.equal((await request('GET', list + '/' + second.body.id, { target, actor: 'admin-b' })).status, 404)
   assert.equal(calls, 1)
   assert.equal(writes, 0)
   assert.equal(await owner.managementAudit.count({ where: { targetId: second.body.id, operation: 'newbi.reply.auto-approve' } }), 1)
@@ -318,6 +324,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   })
   await owner.newbiReply.update({ where: { id: escalated.body.id }, data: { content: null } })
   assert.equal((await owner.newbiReply.findUniqueOrThrow({ where: { id: escalated.body.id } })).autoReviewHandoff, null)
+  assert.equal((await inspect(escalated.body.id)).body.reviewPrompt, null)
 
   locked = true
   const third = await propose('Locked discussion')
