@@ -3,11 +3,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import { newbiReplyInput, type newbiInboxView, type newbiPollView } from '../management/contracts.js'
+import { newbiReplyInput, type newbiAssessmentList, type newbiAssessmentView, type newbiInboxView, type newbiPollView } from '../management/contracts.js'
 import { characterPath, useConsoleTask } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
 
 type Inbox = z.infer<typeof newbiInboxView>
+type Assessment = z.infer<typeof newbiAssessmentView>
 const props = defineProps<{ characterId: string; accountId: string; accountStatus: string; accountLabel: string; identityLabel: string;
   canReview: boolean; canPropose: boolean }>()
 const emit = defineEmits<{ expired: []; proposals: [accountId: string, proposalId?: string] }>()
@@ -20,6 +21,20 @@ const pollError = ref('')
 let active = true
 const base = characterPath(props.characterId) + '/newbi'
 const eventsPath = base + '/accounts/' + encodeURIComponent(props.accountId) + '/events'
+const assessmentPost = ref('')
+const assessments = ref<Assessment[]>([])
+const assessmentBusy = ref(false)
+const assessmentError = ref('')
+let assessmentRequest: { postId: string; key: string } | undefined
+const discussions = computed(() => {
+  const grouped = new Map<string, Inbox['items']>()
+  for (const event of inbox.value?.items ?? []) {
+    const group = grouped.get(event.postId)
+    if (group) group.push(event)
+    else grouped.set(event.postId, [event])
+  }
+  return [...grouped].map(([postId, events]) => ({ postId, events, latest: events[0]! }))
+})
 const composer = ref(false)
 const composerHeading = ref<HTMLElement>()
 const postId = ref('')
@@ -35,7 +50,41 @@ const invalidContent = computed(() => !!content.value.trim() && !draft.value.suc
   && draft.value.error.issues.some(({ path }) => path[0] === 'content'))
 
 const kinds = { POST_REPLIED: '帖子收到回复', COMMENT_REPLIED: '评论收到回复', AGENT_MENTIONED: '被提及' }
+const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }
+const assessmentLabels = { SUGGEST_REPLY: '建议回应', NO_REPLY: '本帖暂不回应', UNAVAILABLE: '评估未完成', PENDING: '评估中' }
+const assessmentReasons: Partial<Record<string, string>> = {
+  DIRECT_QUESTION: '直接提问', SUBSTANTIVE_CORRECTION: '实质纠错', FOLLOW_UP: '需要跟进', RELEVANT_DISCUSSION: '值得补充',
+  ALREADY_ANSWERED: '已有人回答', LOW_VALUE: '无需接话', OUT_OF_SCOPE: '与身份无关', INSUFFICIENT_CONTEXT: '上下文不足',
+  THREAD_LOCKED: '帖子已锁定',
+}
 const format = (value: string) => new Date(value).toLocaleString()
+
+async function showAssessments(post: string, evaluate = false) {
+  if (assessmentBusy.value || (evaluate && (!props.canPropose || props.accountStatus !== 'ACTIVE'))) return
+  if (assessmentPost.value !== post) assessments.value = []
+  assessmentPost.value = post
+  assessmentBusy.value = true
+  assessmentError.value = ''
+  const path = `${base}/accounts/${encodeURIComponent(props.accountId)}/discussions/${encodeURIComponent(post)}/assessments`
+  try {
+    if (evaluate) {
+      if (assessmentRequest?.postId !== post) assessmentRequest = { postId: post, key: crypto.randomUUID() }
+      await request(path, { method: 'POST', headers: { 'Idempotency-Key': assessmentRequest.key } }, 25_000)
+      assessmentRequest = undefined
+    }
+    const list = await request<z.infer<typeof newbiAssessmentList>>(path)
+    if (active) assessments.value = list.items
+  } catch (cause) {
+    if (!active) return
+    if (cause instanceof RequestError && cause.status === 401) emit('expired')
+    else if (cause instanceof RequestError && [403, 404, 409].includes(cause.status)) {
+      assessmentRequest = undefined
+      assessmentError.value = '讨论或账号当前不可评估，请刷新读取状态后重试。'
+    } else assessmentError.value = '无法读取评估记录，请重试。'
+  } finally {
+    assessmentBusy.value = false
+  }
+}
 
 async function load() {
   if (busy.value) return
@@ -161,12 +210,46 @@ onBeforeUnmount(() => { active = false })
         事件游标已重置 {{ inbox.historyLostCount }} 次。{{ inbox.lastHistoryLostAt ? '最近一次 ' + format(inbox.lastHistoryLostAt) : '' }}
       </UiAlert>
       <UiEmpty v-if="inbox.items?.length === 0" description="暂无已读取事件。" />
-      <ul v-if="inbox.items?.length" class="connector-events" aria-label="最近读取事件">
-        <li v-for="event in inbox.items" :key="event.seq">
-          <strong>{{ kinds[event.type] }}</strong>
-          <time :datetime="event.occurredAt">{{ format(event.occurredAt) }}</time>
-          <span>帖子 {{ event.postId }}</span>
-          <UiButton v-if="canPropose && !composer" size="tiny" variant="soft" @click="openComposer($event, event.postId)">拟写回复</UiButton>
+      <ul v-if="discussions.length" class="connector-events" aria-label="最近讨论">
+        <li v-for="discussion in discussions" :key="discussion.postId">
+          <div class="connector-actions">
+            <strong>{{ kinds[discussion.latest.type] }}</strong>
+            <time :datetime="discussion.latest.occurredAt">{{ format(discussion.latest.occurredAt) }}</time>
+          </div>
+          <span>帖子 {{ discussion.postId }}</span>
+          <details v-if="discussion.events.length > 1">
+            <summary>{{ discussion.events.length }} 条事件</summary>
+            <ul>
+              <li v-for="event in discussion.events" :key="event.seq">
+                {{ kinds[event.type] }} · <time :datetime="event.occurredAt">{{ format(event.occurredAt) }}</time>
+              </li>
+            </ul>
+          </details>
+          <div class="connector-actions">
+            <UiButton v-if="canPropose && accountStatus === 'ACTIVE'" size="small" variant="soft" :disabled="assessmentBusy || polling"
+              @click="showAssessments(discussion.postId, true)">评估讨论</UiButton>
+            <UiButton size="small" variant="quiet" :disabled="assessmentBusy" @click="showAssessments(discussion.postId)">评估记录</UiButton>
+            <UiButton v-if="canPropose && !composer" size="small" variant="quiet" @click="openComposer($event, discussion.postId)">拟写回复</UiButton>
+          </div>
+          <section v-if="assessmentPost === discussion.postId" aria-label="讨论评估记录" class="assessment-history">
+            <UiSpinner v-if="assessmentBusy" aria-label="正在读取讨论评估" />
+            <UiAlert v-if="assessmentError" tone="error" role="alert">{{ assessmentError }}</UiAlert>
+            <p v-if="!assessmentBusy && !assessmentError && !assessments.length">暂无评估记录。</p>
+            <details v-for="(item, index) in assessments" :key="item.id" :open="index === 0">
+              <summary>{{ assessmentLabels[item.result.status] }} · {{ format(item.createdAt) }}</summary>
+              <p>{{ item.identity }} · {{ participationLabels[item.participation] }} · 仅评估</p>
+              <p v-if="item.result.status !== 'PENDING'">
+                <strong v-if="assessmentReasons[item.result.reason]">{{ assessmentReasons[item.result.reason] }} · </strong>{{ item.result.note }}
+              </p>
+              <blockquote v-if="item.result.status === 'SUGGEST_REPLY'" class="console-payload">
+                <strong>{{ item.result.target.author }}</strong> · {{ item.result.target.excerpt }}
+              </blockquote>
+              <details v-if="item.systemPrompt">
+                <summary>System Prompt · {{ item.model }}</summary>
+                <pre class="console-payload">{{ item.systemPrompt }}</pre>
+              </details>
+            </details>
+          </section>
         </li>
       </ul>
     </template>
@@ -182,5 +265,8 @@ dl { display: grid; gap: .4rem; }
 dl > div { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .5rem; }
 dd { margin: 0; overflow-wrap: anywhere; }
 .connector-events { list-style: none; margin: .5rem 0 0; padding: 0; }
-.connector-events li { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem 0; border-top: 1px solid var(--console-line); overflow-wrap: anywhere; }
+.connector-events > li { display: grid; gap: .5rem; padding: .5rem 0; border-top: 1px solid var(--console-line); overflow-wrap: anywhere; }
+.assessment-history { display: grid; gap: .5rem; min-width: 0; }
+.assessment-history summary { cursor: pointer; }
+.assessment-history p { margin-block: .35rem; }
 </style>

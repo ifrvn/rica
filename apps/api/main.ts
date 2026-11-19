@@ -17,6 +17,7 @@ import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
 import { createAutoReviewer } from '../auto-review.js'
+import type { ModelProvider } from '@ricajs/contracts/model-provider'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
@@ -45,13 +46,14 @@ const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsC
 const recordUsage = hostedUsageRecorder(db)
 const activeModel = async () => (await modelSettings.read()).configuration.provider
 const reviewSettings = enabledModelSettings(modelSettings, () => deploymentPlugins.isEnabled(hostedModelsPluginId))
-const reviewReply = createAutoReviewer(async (check) => {
-  const { configuration } = await reviewSettings.read()
+async function withHostedModel<T>(check: (model: ModelProvider) => Promise<T>, profile?: string) {
+  const { configuration } = await reviewSettings.read(profile)
   if (configuration.provider === 'simulated') return null
   const selected = await startObservedModelPlugin(configuration, recordUsage)
   try { return await check(selected.model.implementation) }
   finally { await selected.stop() }
-})
+}
+const reviewReply = createAutoReviewer(withHostedModel)
 const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
@@ -70,6 +72,11 @@ const management = managementConfig && managementDb && auth && platforms ? creat
     createNewbiManagement(managementDb, newbi, {
       ...createNewbiOperations(db, newbi),
       reviewReply,
+      assessDiscussion: async (input, profile, attribution, capture) => (await withHostedModel(async (model) => {
+        if (!model.selectDiscussion || !model.hostedProvider || !model.hostedModel) return
+        const name = `${model.hostedProvider}/${model.hostedModel}`
+        return model.selectDiscussion(input, AbortSignal.timeout(8000), attribution, (prompt) => capture(prompt, name))
+      }, profile)) ?? undefined,
       reportConnectorOperation: (service, succeeded) =>
         reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
     }),

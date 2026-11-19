@@ -2,6 +2,8 @@ import { z } from '@hono/zod-openapi'
 import { accountRegistrationView, accountView, characterWorkspaceView, listQuery, optionalDecisionReason, resourceId, simulationPlatformId } from '@ricajs/contracts/management'
 import { newbiCredential, newbiEndpoint } from '../../agent-api/connection.js'
 import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
+import { discussionSelection } from '@ricajs/contracts/discussion-selection'
+import { participationLevel } from '@ricajs/contracts/model-provider'
 
 export const newbiAccountTest = z.strictObject({ credential: newbiCredential })
 export const newbiAccountPreview = z.object({ agentId: resourceId, username: z.string(), avatarUrl: z.string().nullable() })
@@ -54,6 +56,21 @@ export const newbiThreadView = z.object({
     replyToCommentId: resourceId.nullable() })),
   nextCursor: newbiThreadCursor.nullable(),
 })
+export const newbiAssessmentThread = newbiThreadView.extend({ comments: z.array(newbiThreadView.shape.comments.element.extend({
+  author: z.object({ username: z.string(), id: z.union([z.string(), z.number()]).optional() }),
+})) })
+export const newbiAssessmentResult = z.discriminatedUnion('status', [
+  discussionSelection.options[0].extend({ target: z.object({ author: z.string(), excerpt: z.string() }) }),
+  discussionSelection.options[1].extend({ reason: z.enum(['ALREADY_ANSWERED','LOW_VALUE','OUT_OF_SCOPE','INSUFFICIENT_CONTEXT','THREAD_LOCKED']) }),
+  z.object({ status: z.literal('UNAVAILABLE'), reason: z.enum(['THREAD_UNAVAILABLE','MODEL_UNAVAILABLE','INVALID_SELECTION', 'CONTEXT_CHANGED','TIMED_OUT']), note: z.string() }),
+  z.object({ status: z.literal('PENDING') }),
+])
+export const newbiAssessmentView = z.object({
+  id: resourceId, accountId: resourceId, postId: resourceId, identity: z.string(), participation: participationLevel,
+  createdAt: z.iso.datetime(), finishedAt: z.iso.datetime().nullable(), model: z.string().nullable(),
+  systemPrompt: z.string().nullable(), result: newbiAssessmentResult,
+})
+export const newbiAssessmentList = z.object({ items: z.array(newbiAssessmentView) })
 export const newbiAccountCheckView = z.object({ verified: z.boolean(), checkedAt: z.iso.datetime() })
 
 export const newbiReadError = z.enum(['AGENT_MISMATCH', 'CREDENTIAL_INVALID', 'ACCESS_DENIED', 'RATE_LIMITED',

@@ -30,6 +30,7 @@ const labels: Record<string, string> = {
   'simulation.term.update': '更新模拟群聊词条',
   'auto-review.update': '修改自动审批设置', 'action.auto-approve': 'AI 批准模拟回复',
   'newbi.reply.auto-approve': 'AI 批准 Newbi 回复',
+  'newbi.discussion.assess': '评估 Newbi 讨论',
   'simulation.resolve': '模拟对账', 'outbox.retry': '恢复隔离事件',
   'simulation.executing': '领取模拟执行许可', 'simulation.simulated': '模拟执行完成',
   'simulation.blocked': '模拟执行被拦截', 'simulation.reconciling': '模拟发送结果待核对',

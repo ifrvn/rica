@@ -39,7 +39,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
   sendConnector?: NewbiManagementOptions['sendConnector'],
   readConnectorThread?: NewbiManagementOptions['readConnectorThread'],
   reportConnectorOperation?: NewbiManagementOptions['reportConnectorOperation'],
-  reviewReply?: NewbiManagementOptions['reviewReply']) =>
+  reviewReply?: NewbiManagementOptions['reviewReply'], assessDiscussion?: NewbiManagementOptions['assessDiscussion']) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
@@ -47,7 +47,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
     plugins: [createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
       identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
-      pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply,
+      pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply, assessDiscussion,
     })],
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
@@ -238,6 +238,103 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   assert.equal(disabled.body.connectorAvailable, false)
   assert.equal((await decide('APPROVE')).body.error.code, 'PLUGIN_STATE_CONFLICT')
   assert.equal((await decide('REJECT', 'admin-b')).body.status, 'REJECTED')
+})
+
+test('Newbi discussion assessment is scoped, inspectable, idempotent, and never creates a reply proposal', async () => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-assessment') })
+  assert.equal(created.status, 201)
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const identityId = await activeIdentity({ displayName: '冷静观察者', participation: 'reserved' }, characterId)
+  const agentId = randomUUID()
+  const account = await owner.platformAccount.create({ data: {
+    characterId, identityId, status: 'ACTIVE', platform: 'newbi',
+    instanceKey: 'http://127.0.0.1:5000/agent-api/v1', remoteAccountId: agentId,
+  } })
+  const postId = randomUUID()
+  const question = { id: randomUUID(), author: { id: 12, username: '提问者' }, content: '请问活动的开始时间？', replyToCommentId: null }
+  const answered = { ...question, id: randomUUID(), content: '之前的活动在哪里？' }
+  const own = { id: randomUUID(), author: { id: agentId, username: 'fixture-agent' }, content: '在社区活动室。', replyToCommentId: answered.id }
+  await owner.newbiEvent.createMany({ data: [
+    { accountId: account.id, seq: '1', type: 'POST_REPLIED', postId, commentId: answered.id, occurredAt: new Date() },
+    { accountId: account.id, seq: '2', type: 'AGENT_MENTIONED', postId, commentId: question.id, occurredAt: new Date() },
+  ] })
+  const started = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  let calls = 0
+  let reads = 0
+  let sends = 0
+  let locked = false
+  let changeIdentity = false
+  const target = testApp(undefined, undefined, async () => { sends++; return { status: 'UNAVAILABLE' } }, async ({ postId: current }) => {
+    reads++
+    assert.equal(current, postId)
+    return { post: { title: '社区活动', content: '活动安排讨论', isLocked: locked }, comments: [answered, own, question], nextCursor: null }
+  }, undefined, undefined, async (input, _profile, attribution, capture) => {
+    calls++
+    assert.equal(attribution.identityId, identityId)
+    assert.equal(input.participation, 'reserved')
+    assert.equal(input.comments.find(({ id }) => id === question.id)?.signal, 'MENTION')
+    assert.equal(input.comments.find(({ id }) => id === own.id)?.eligible, false)
+    assert.equal(input.comments.find(({ id }) => id === answered.id)?.eligible, false)
+    await capture('Fixture discussion system prompt\nSecond line', 'fixture/assessment-model')
+    if (calls === 1) {
+      started.resolve()
+      await resume.promise
+      return { status: 'SUGGEST_REPLY', commentId: question.id, reason: 'DIRECT_QUESTION', note: '对方直接询问时间，讨论中仍没有回答。' }
+    }
+    if (calls === 2) return { status: 'NO_REPLY', reason: 'LOW_VALUE', note: '暂时没有值得追加的内容。' }
+    if (changeIdentity) {
+      const updated = await request('PUT', characterPath(characterId) + '/identities/' + identityId, {
+        ifMatch: '"1"', data: { roleProfile: { participation: 'talkative' } },
+      })
+      assert.equal(updated.status, 200, JSON.stringify(updated.body))
+      return { status: 'SUGGEST_REPLY', commentId: question.id, reason: 'DIRECT_QUESTION', note: '对方询问时间。' }
+    }
+    return { status: 'SUGGEST_REPLY', commentId: own.id, reason: 'DIRECT_QUESTION', note: '无效选择。' }
+  })
+  const pathFor = (character: string, post: string) => characterPath(character) + `/newbi/accounts/${account.id}/discussions/${post}/assessments`
+  const path = pathFor(characterId, postId)
+  const assess = (key = randomUUID()) => request('POST', path, { target, key })
+  const history = async () => (await request('GET', path, { target })).body.items
+  assert.equal((await request('GET', pathFor(b, postId), { target, actor: 'admin-b' })).status, 404)
+  assert.equal((await request('POST', pathFor(characterId, randomUUID()), { target, key: randomUUID() })).status, 404)
+  assert.equal(reads, 0)
+
+  const key = randomUUID()
+  const first = assess(key)
+  try {
+    await Promise.race([started.promise, first.then((response) => assert.fail(JSON.stringify(response.body)))])
+    const duplicate = await assess()
+    assert.equal(duplicate.body.status, 'PENDING')
+    assert.equal(duplicate.body.id, (await history())[0].id)
+    assert.equal(calls, 1)
+  } finally {
+    resume.resolve()
+  }
+  const completed = await first
+  assert.equal(completed.status, 201, JSON.stringify(completed.body))
+  assert.equal((await assess(key)).body.id, completed.body.id)
+  const [suggested] = await history()
+  assert.equal(suggested.result.commentId, question.id)
+  assert.deepEqual(suggested.result.target, { author: question.author.username, excerpt: question.content })
+  assert.equal(suggested.systemPrompt, 'Fixture discussion system prompt\nSecond line')
+
+  assert.equal((await assess()).status, 201)
+  assert.equal((await history())[0].result.status, 'NO_REPLY')
+  assert.equal((await assess()).status, 201)
+  assert.equal((await history())[0].result.reason, 'INVALID_SELECTION')
+  locked = true
+  assert.equal((await assess()).status, 201)
+  assert.equal((await history())[0].result.reason, 'THREAD_LOCKED')
+  assert.equal((await history())[0].systemPrompt, null)
+  locked = false
+  changeIdentity = true
+  assert.equal((await assess()).status, 201)
+  assert.equal((await history())[0].result.reason, 'CONTEXT_CHANGED')
+  assert.equal(calls, 4)
+  assert.equal(sends, 0)
+  assert.equal(await owner.newbiReply.count({ where: { characterId, accountId: account.id } }), 0)
 })
 
 test('Newbi auto-approval requires a confirmed prior reply in the same discussion and never sends on creation', async () => {

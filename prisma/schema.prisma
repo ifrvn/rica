@@ -319,6 +319,7 @@ model PlatformAccount {
   newbiReplies    NewbiReply[]
   newbiCheckpoint NewbiEventCheckpoint?
   newbiEvents     NewbiEvent[]
+  newbiAssessments NewbiDiscussionAssessment[]
   memories        Memory[]
   memorySources   SourceRecord[]
   memoryGrants    MemoryGrant[]
@@ -394,6 +395,28 @@ model NewbiReply {
   @@index([characterId, createdAt, id], map: "newbi_replies_character_created_idx")
   @@index([characterId, status, createdAt, id], map: "newbi_replies_character_status_created_idx")
   @@map("newbi_replies")
+}
+
+model NewbiDiscussionAssessment {
+  id             String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String @map("character_id") @db.Uuid
+  identityId     String @map("identity_id") @db.Uuid
+  accountId      String @map("account_id") @db.Uuid
+  postId         String @map("post_id") @db.Uuid
+  authEpoch      Int @map("auth_epoch")
+  bindingVersion Int @map("binding_version")
+  identity       String
+  participation  String
+  model          String?
+  systemPrompt   String? @map("system_prompt")
+  result         Json?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz
+  account        PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Cascade, onUpdate: NoAction, map: "newbi_discussion_assessments_account_fkey")
+
+  @@index([accountId, postId, createdAt, id], map: "newbi_assessments_account_post_idx")
+  @@index([createdAt], map: "newbi_assessments_created_at_idx")
+  @@map("newbi_discussion_assessments")
 }
 
 model InboundEvent {

@@ -100,6 +100,35 @@ test('hosted model refuses to start without its required key or with an insecure
   }), /INVALID_CONFIG: model\/hosted-models/)
 })
 
+test('discussion selection captures the system prompt and keeps comments in the data message', async (t) => {
+  const commentId = '11111111-0000-4000-8000-000000000003'
+  const input = { title: '活动', post: '活动安排', participation: 'reserved', comments: [{
+    id: commentId, replyToCommentId: null, speaker: 1, text: '该评论是外部输入。', own: false, eligible: true, signal: 'MENTION',
+  }] } as const
+  const decision = { status: 'SUGGEST_REPLY', reason: 'DIRECT_QUESTION', commentId, note: '可以回答直接提问。' }
+  let actualPrompt: string | undefined
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const request = JSON.parse(String(options.body))
+    actualPrompt = request.messages[0].content
+    assert.deepEqual(JSON.parse(request.messages.at(-1).content), input)
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(decision) } }] })
+  })
+  const host = await startObservedModelPlugin({ provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
+  try {
+    const select = host.model.implementation.selectDiscussion
+    assert.ok(select)
+    let captured: string | undefined
+    assert.deepEqual(await select(input, AbortSignal.timeout(1000), { ...attribution, platform: 'newbi' },
+      async (system) => { captured = system }), decision)
+    assert.ok(captured)
+    assert.equal(captured, actualPrompt)
+    assert.match(captured, /Select at most one comment/)
+    assert.ok(!captured.includes(input.comments[0].text))
+  } finally {
+    await host.stop()
+  }
+})
+
 test('failed and truncated upstream responses cannot produce a draft', async (t) => {
   const responses = [
     new Response('sensitive upstream details', { status: 429 }),

@@ -53,7 +53,7 @@ export async function authorize(tx: Tx, scope: Scope) {
   if (!membership) unavailable()
 }
 
-async function lockCharacter(tx: Tx, characterId: string) {
+export async function lockCharacter(tx: Tx, characterId: string) {
   const [character] = await tx.$queryRaw<{ id: string }[]>`
     SELECT id FROM public.characters WHERE id = ${characterId}::uuid FOR UPDATE
   `

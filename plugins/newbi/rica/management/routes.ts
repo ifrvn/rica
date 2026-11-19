@@ -9,20 +9,23 @@ import { autoReviewNewbiReply, bindNewbiAccount, checkNewbiAccount, closeNewbiRe
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadQuery, newbiThreadView } from './contracts.js'
 import type { newbiCatalog } from '../deployment/catalog.js'
+import { newbiAssessmentList, type newbiAssessmentThread } from './contracts.js'
+import { claimNewbiAssessment, listNewbiAssessments, runNewbiAssessment, type AssessDiscussion } from '../persistence/assessments.js'
 
 export type NewbiManagementOptions = {
   reviewReply?: ReviewPublicReply
+  assessDiscussion?: AssessDiscussion
   identifyConnector?: (credential: string, endpoint?: string) => Promise<(z.infer<typeof newbiAccountPreview> & { endpoint: string }) | undefined>
   pollConnector?: (accountId: string) => Promise<z.infer<typeof newbiPollView> | undefined>
   sendConnector?: (replyId: string, retry: boolean) => Promise<z.infer<typeof newbiSendView>>
   reportConnectorOperation?: (service: keyof typeof newbiCatalog, succeeded: boolean) => void | Promise<void>
   readConnectorThread?: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>,
     preview?: z.infer<typeof newbiThreadQuery>) =>
-    Promise<z.infer<typeof newbiThreadView> | undefined>
+    Promise<z.infer<typeof newbiAssessmentThread> | undefined>
 }
 
 export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { readNewbi(): Promise<{ endpoint: string } | undefined>; isInstalled(): Promise<boolean> } | undefined,
-  { identifyConnector, pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply }: NewbiManagementOptions): ManagementPlugin {
+  { identifyConnector, pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply, assessDiscussion }: NewbiManagementOptions): ManagementPlugin {
   async function observe<T>(service: keyof typeof newbiCatalog, run: () => Promise<T>, succeeded: (result: T) => boolean) {
     let completed = false
     try {
@@ -94,6 +97,37 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
 
     const newbi = `${character}/newbi` as const
     const newbiReplyParams = characterParams.extend({ replyId: schema.resourceId })
+    const assessmentParams = characterParams.extend({ accountId: schema.resourceId, postId: schema.resourceId })
+    const assessmentPath = `${newbi}/accounts/{accountId}/discussions/{postId}/assessments` as const
+    app.openapi(createRoute({
+      method: 'get', path: assessmentPath, security,
+      request: { params: assessmentParams }, responses: { ...errors, 200: success(newbiAssessmentList) },
+    }), async (c) => {
+      const { characterId, accountId, postId } = c.req.valid('param')
+      return c.json(await listNewbiAssessments(db, { characterId, actor: c.get('actor') }, accountId, postId), 200)
+    })
+
+    app.openapi(createRoute({
+      method: 'post', path: assessmentPath, security,
+      request: { params: assessmentParams, headers: schema.idempotencyHeader },
+      responses: { ...errors, 201: success(schema.commandResponse) },
+    }), async (c) => {
+      const { characterId, accountId, postId } = c.req.valid('param')
+      const scope = { characterId, actor: c.get('actor') }
+      const requestId = c.get('requestId')
+      let started = false
+      const result = await management.executeManagementCommand(db, {
+        ...scope, operation: 'newbi.discussion.assess', targetScope: `${characterId}/${accountId}/${postId}`,
+        input: { accountId, postId }, requestId, key: c.req.valid('header')['idempotency-key'],
+      }, async (tx) => {
+        const row = await claimNewbiAssessment(tx, scope, accountId, postId)
+        started = row.status === 'STARTED'
+        return row
+      })
+      if (started) await runNewbiAssessment(db, scope, result.id, readConnectorThread, assessDiscussion, requireNewbi)
+      return c.json({ ...result, requestId }, 201)
+    })
+
     app.openapi(createRoute({
       method: 'post', path: `${newbi}/accounts`, security,
       request: { params: characterParams, headers: schema.idempotencyHeader, body: body(newbiAccountInput) },

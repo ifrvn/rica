@@ -86,6 +86,17 @@ Invoke-Rica Post "$ricaInboxPath/poll"
 Invoke-Rica Get $ricaInboxPath
 ```
 
+## Newbi 讨论评估
+
+管理端按帖子合并收件箱事件。角色管理员可在当前账号下发起一次评估，读取该帖可见讨论并按身份参与程度判断是否值得回应。每次评估最多建议回应一条评论，结果可以是暂不回应。评估仅使用读取连接器，并独立保存，公开回复的创建及发送仍使用后续提案流程。
+
+| 方法与路径 | 请求 | 成功响应 |
+| --- | --- | --- |
+| `POST /newbi/accounts/{accountId}/discussions/{postId}/assessments` | 无请求体，使用 `Idempotency-Key`。要求账号活动且已有这篇帖子的近期事件。 | 201，命令结果。进行中请求可复用同一个评估 ID。 |
+| `GET /newbi/accounts/{accountId}/discussions/{postId}/assessments` | 无。 | 200，`{ items }`。最近十次评估，含身份、参与档位、结论、理由、可用的模型与当时的 System Prompt。 |
+
+记录保留 30 天。可见讨论不完整、目标选择无效或评估期间账号绑定变更时，记录显示评估未完成。
+
 ## Newbi 提案、审批和执行
 
 下表中 `/replies` 均带 `/newbi` 前缀。提案状态为 `WAITING`、`READY`、`REJECTED`、`IN_FLIGHT`、`UNKNOWN`、`SENT` 或 `CLOSED`。

@@ -4,7 +4,7 @@ import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulatio
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
-import { participationLevel, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
+import { resolveParticipation, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
   type ReplyDecision, type WritingStyle } from '@ricajs/contracts/model-provider'
 import { localSimulationModel } from '../adapters/model.js'
 import type { Plugin } from '@ricajs/plugin-host'
@@ -103,9 +103,7 @@ async function buildSimulatedDraft(
     if (!profile) return null
     const conversation = writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
     const identityPrompt = profile.prompt ?? undefined
-    const participation = participationLevel.safeParse(profile.participation).data
-      ?? (/话痨|talkative/i.test(identityPrompt ?? '') ? 'talkative'
-        : /寡言|reserved/i.test(identityPrompt ?? '') ? 'reserved' : 'balanced')
+    const participation = resolveParticipation(profile.participation, identityPrompt)
     const localGlossary = conversation && provider.hostedModel ? await readChatGlossary(tx, runId) : undefined
     const glossary = localGlossary && conversation
       ? matchChatGlossary(localGlossary, text, conversation.history.slice(-2).map(({ message }) => message)) : []

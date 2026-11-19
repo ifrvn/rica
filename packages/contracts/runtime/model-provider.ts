@@ -2,6 +2,7 @@ import { z } from '@hono/zod-openapi'
 import type { RunContinuity, RunTime } from './run-continuity.js'
 import type { PublicReplyReview } from './auto-review.js'
 import type { GlossaryReference } from './glossary.js'
+import type { DiscussionSelectionInput } from './discussion-selection.js'
 
 export class ModelProviderError extends Error {
   constructor(readonly code: 'HTTP_ERROR' | 'REQUEST_FAILED' | 'INVALID_OUTPUT', readonly status?: number) {
@@ -21,6 +22,10 @@ export type ModelAttribution = Readonly<{ characterId: string; identityId: strin
 
 export const participationLevel = z.enum(['talkative', 'balanced', 'reserved'])
 export type Participation = z.infer<typeof participationLevel>
+export function resolveParticipation(explicit?: string | null, preferences?: string | null): Participation {
+  return participationLevel.safeParse(explicit).data ?? (/话痨|talkative/i.test(preferences ?? '') ? 'talkative'
+    : /寡言|reserved/i.test(preferences ?? '') ? 'reserved' : 'balanced')
+}
 type ModelConversation = { speaker: string; history: { speaker: string; message: string }[] }
 export const replyDecision = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('REPLY'), reason: z.enum(['DIRECT_REQUEST', 'RELEVANT_TOPIC', 'SOCIAL_OPENING']) }),
@@ -32,6 +37,8 @@ export type CaptureSystemPrompt = (prompt: string) => Promise<void>
 export type ModelProvider = Readonly<{
   hostedProvider?: string
   hostedModel?: string
+  selectDiscussion?(input: DiscussionSelectionInput, signal: AbortSignal, attribution: ModelAttribution,
+    capture: CaptureSystemPrompt): Promise<unknown>
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution,
     capture?: CaptureSystemPrompt): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity; conversation?: ModelConversation; participation?: Participation;
