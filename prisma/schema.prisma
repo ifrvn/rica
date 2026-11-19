@@ -108,6 +108,7 @@ model Character {
   managementAudit       ManagementAudit[]
   platformAccountPool   PlatformAccountRegistration[]
   simulationPlans       SimulationPlan[]
+  simulationChats       SimulationChat[]
 
   dailyEnergyProjections DailyEnergyProjection[]
   modelDailyUsage ModelDailyUsage[]
@@ -655,6 +656,18 @@ model Contact {
   @@map("contacts")
 }
 
+model SimulationChat {
+  id            String         @id @db.Uuid
+  characterId   String         @map("character_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  character     Character      @relation(fields: [characterId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  conversations Conversation[]
+
+  @@unique([characterId, id])
+  @@index([characterId, createdAt, id])
+  @@map("simulation_chats")
+}
+
 model Conversation {
   id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   characterId      String               @map("character_id") @db.Uuid
@@ -663,9 +676,11 @@ model Conversation {
   remoteKey        String               @map("remote_key")
   channel          ConversationChannel
   privateContactId String?              @map("private_contact_id") @db.Uuid
+  simulationChatId String?              @map("simulation_chat_id") @db.Uuid
   createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz
   account          PlatformAccount      @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Restrict, onUpdate: NoAction)
   privateContact   Contact?             @relation(fields: [characterId, identityId, accountId, privateContactId], references: [characterId, identityId, accountId, id], onDelete: Restrict, onUpdate: NoAction)
+  simulationChat   SimulationChat?      @relation(fields: [characterId, simulationChatId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   inboundEvents    InboundEvent[]
   schedules        SimulationSchedule[]
   memories         Memory[]
@@ -675,6 +690,7 @@ model Conversation {
   @@unique([characterId, identityId, accountId, id])
   @@unique([characterId, identityId, accountId, id, privateContactId], map: "conversations_private_recipient_key")
   @@unique([accountId, remoteKey])
+  @@index([characterId, simulationChatId])
   @@map("conversations")
 }
 

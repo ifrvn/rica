@@ -87,8 +87,8 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
 | `GET /c/commitment-receipts` | ADMIN 查询当前角色尚未登记承诺的已确认模拟回执，可用 `runId` 筛选。响应包含负责身份、平台、对象和回执时间。 |
 | `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记和编辑承诺事项、截止时间和协作身份，也可延期或关闭。负责人和提醒范围由已确认模拟回执确定。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
-| `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。用幂等键提交 `accountId`、`message`，并携带 `chatId`（UUID）和 `speaker`（群员昵称）时，在指定模拟群聊中排队。首次发言时创建群聊和群员。仅提交账号和消息时发起单条模拟。 |
-| `GET /c/simulation-chats?accountId=…`、`GET /c/simulation-chats/{chatId}` | ADMIN 按接收账号查看最近会话，读取会话群员、最近 40 次发言和保留期内已确认的模拟回复。 |
+| `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。用幂等键提交 `accountId`、`message`，并携带 `chatId`（UUID）和 `speaker`（群员昵称）时，在当前角色的模拟群聊中排队。每次发言以本次提交的接收账号创建运行。首次发言时创建群聊和群员。仅提交账号和消息时发起单条模拟。 |
+| `GET /c/simulation-chats`、`GET /c/simulation-chats/{chatId}` | ADMIN 分页查看当前角色的会话。详情返回群员、最近 40 次发言各自的接收账号和身份，以及保留期内已确认的模拟回复。 |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 查询脱敏运行轨迹和当前角色的积压。 |
 | `GET /c/simulation-settings`、`PUT /c/simulation-settings` | ADMIN 读取角色时区、继承的模型预算及当前模拟限制，或提交完整的限制设置。写入使用 `If-Match` 版本并记录审计。 |
 | `GET /c/monitoring/daily?from=YYYY-MM-DD&through=YYYY-MM-DD` | ADMIN 查询最多 31 个 UTC 日的模拟评测、模型预算用量和漂移信号。 |

@@ -1001,9 +1001,9 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   app.openapi(createRoute({
     method: 'get', path: `${character}/simulation-chats`, security,
     request: { params: characterParams, query: simulationChatsQuery },
-    responses: { ...errors, 200: success(z.object({ items: simulationChatSummary.array() })) },
+    responses: { ...errors, 200: success(schema.pageView(simulationChatSummary)) },
   }), async (c) => c.json(await listSimulationChats(db, { ...c.req.valid('param'), actor: c.get('actor') },
-    c.req.valid('query').accountId), 200))
+    management.parsePage(c.req.valid('query'))), 200))
 
   app.openapi(createRoute({
     method: 'get', path: `${character}/simulation-chats/{chatId}`, security,

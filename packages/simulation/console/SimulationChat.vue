@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
-import { formatTime } from '@ricajs/console-shared/console-data'
+import { formatTime, queryPath, type Page } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import type { z } from '@hono/zod-openapi'
 import type { simulationChatSummary, simulationChatView } from '../contracts/observability.js'
@@ -10,13 +10,15 @@ type Chat = z.infer<typeof simulationChatView>
 type Room = z.infer<typeof simulationChatSummary>
 const props = defineProps<{
   base: string; accounts: { value: string; label: string }[]; canStart: boolean
-  selected?: string; requestedChat?: string | null; requestedAccount?: string; focusComposer: boolean
-  identity: (accountId: string) => string; stateName: (state: string) => string
+  selected?: string; requestedChat?: string | null; focusComposer: boolean
+  identity: (identityId: string) => string; stateName: (state: string) => string
 }>()
 const emit = defineEmits<{ expired: []; open: [id?: string]; latest: [id?: string]; browse: []; sent: []; identities: [] }>()
 const account = ref('')
 const room = ref('')
 const rooms = ref<Room[]>([])
+const roomCursor = ref<string | null>(null)
+const loadingRooms = ref(false)
 const chat = ref<Chat>()
 const speaker = ref('')
 const newSpeaker = ref('')
@@ -41,7 +43,7 @@ const bubbles = computed(() => (chat.value?.turns ?? []).flatMap(turn => {
   const inbound = { key: turn.id, run: turn.id, text: turn.message, at: turn.sentAt, sender: turn.speaker,
     state: turn.repliedAt ? '' : turn.state, isReply: false }
   return turn.repliedAt ? [inbound, { key: turn.id + '-reply', run: turn.id, text: turn.reply, at: turn.repliedAt,
-    sender: props.identity(chat.value!.accountId), state: '', isReply: true }] : [inbound]
+    sender: props.identity(turn.identityId), state: '', isReply: true }] : [inbound]
 }).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)))
 
 function scrollToEnd() {
@@ -55,7 +57,7 @@ function handle(cause: unknown, fallback: string) {
   if (status === 401) emit('expired')
   else error.value = ({
     403: '当前账号无权访问此模拟会话。', 404: '找不到此模拟会话。',
-    409: '模拟账号或群员当前不可用，请核对角色和账号状态。', 422: '请核对群员昵称和消息内容。',
+    409: '会话、模拟账号或群员当前不可用。', 422: '请核对群员昵称和消息内容。',
   } as Record<number, string>)[status] ?? fallback
 }
 
@@ -112,36 +114,41 @@ async function selectRoom(id: string, user = false) {
   if (id) await fetchRoom(id, token)
 }
 
-async function selectAccount(id: string, preferred = '', user = false) {
-  account.value = id
-  rooms.value = []
-  await selectRoom('', user)
-  if (!id) return
+async function loadRooms(append = false, selectLatest = false) {
+  if (loadingRooms.value || (append && !roomCursor.value)) return
   const token = revision
-  loading.value = true
+  loadingRooms.value = true
   try {
-    const page = await request<{ items: Room[] }>(props.base + '/simulation-chats?accountId=' + encodeURIComponent(id))
-    if (!active || revision !== token) return
-    rooms.value = page.items
-    await selectRoom(preferred || page.items[0]?.id || '')
+    const page = await request<Page<Room>>(queryPath(props.base + '/simulation-chats', {
+      limit: '50', cursor: append ? roomCursor.value : null,
+    }))
+    if (!active) return
+    if (append) {
+      const known = new Set(rooms.value.map(({ id }) => id))
+      rooms.value = [...rooms.value, ...page.items.filter(({ id }) => !known.has(id))]
+    } else rooms.value = page.items
+    roomCursor.value = page.nextCursor
+    if (selectLatest && !room.value && token === revision && rooms.value[0]) await selectRoom(rooms.value[0].id)
   } catch (cause) {
-    if (active && revision === token) handle(cause, '无法读取群聊，请刷新后重试。')
+    if (active) handle(cause, '无法读取会话列表，请刷新后重试。')
   } finally {
-    if (revision === token) loading.value = false
+    if (active) loadingRooms.value = false
   }
 }
 
-watch(() => [props.requestedAccount, props.requestedChat, props.accounts] as const, ([targetAccount, targetChat, options]) => {
-  if (targetChat && targetAccount) {
-    if (account.value !== targetAccount) void selectAccount(targetAccount, targetChat)
-    else if (room.value !== targetChat) void selectRoom(targetChat)
-  } else if (!account.value && options.length) void selectAccount(options[0].value)
+watch(() => props.accounts, (options) => {
+  if (!options.some(({ value }) => value === account.value)) account.value = options[0]?.value ?? ''
+}, { immediate: true })
+watch(() => props.requestedChat, (chatId) => {
+  if (chatId && chatId !== room.value) void selectRoom(chatId)
 }, { immediate: true })
 watch(() => props.focusComposer, value => { if (value) void nextTick(() => composer.value?.focus()) }, { immediate: true })
+onMounted(() => { void loadRooms(false, true) })
 
 function refresh() {
+  error.value = ''
+  void loadRooms()
   if (room.value) void fetchRoom(room.value)
-  else void selectAccount(account.value)
 }
 
 async function send() {
@@ -191,24 +198,26 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
   <section class="console-card simulation-chat" aria-labelledby="simulation-chat-heading">
     <div class="console-section-heading">
       <h3 id="simulation-chat-heading" tabindex="-1">模拟群聊</h3>
-      <UiButton size="small" variant="quiet" :disabled="!account || loading || sending" @click="refresh">刷新会话</UiButton>
+      <UiButton size="small" variant="quiet" :disabled="loadingRooms || loading || sending" @click="refresh">刷新会话</UiButton>
     </div>
-    <div class="chat-controls" v-if="accounts.length">
+    <div class="chat-controls">
       <UiField label="接收账号" for="chat-account">
-        <select id="chat-account" :value="account" class="ui-control" :disabled="sending"
-          @change="selectAccount(($event.target as HTMLSelectElement).value, '', true)">
-          <option v-if="account && !activeAccount" :value="account" disabled>已停用的模拟账号</option>
+        <select id="chat-account" v-model="account" class="ui-control" :disabled="sending || !accounts.length">
+          <option v-if="!accounts.length" value="">暂无可用账号</option>
           <option v-for="choice in accounts" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
         </select>
       </UiField>
       <UiField label="会话" for="chat-room">
-        <select id="chat-room" :value="room" class="ui-control" :disabled="loading || sending"
+        <select id="chat-room" :value="room" class="ui-control" :disabled="loading || loadingRooms || sending"
           @change="selectRoom(($event.target as HTMLSelectElement).value, true)">
           <option value="">新群聊</option>
+          <option v-if="room && !rooms.some(({ id }) => id === room)" :value="room">当前群聊</option>
           <option v-for="item in rooms" :key="item.id" :value="item.id">群聊 · {{ formatTime(item.createdAt) }}</option>
         </select>
       </UiField>
     </div>
+    <UiButton v-if="roomCursor" class="chat-more" size="small" variant="quiet" :loading="loadingRooms"
+      :disabled="sending" @click="loadRooms(true)">加载更早会话</UiButton>
     <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
     <div ref="transcript" class="chat-transcript" tabindex="0" role="region" aria-label="群聊消息">
       <UiSpinner v-if="loading && !chat" aria-label="正在读取群聊" />
@@ -268,6 +277,7 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
 .chat-bubble--selected { border-color: var(--console-primary); }
 .chat-composer { display: grid; gap: .625rem; }
 .chat-send { justify-self: end; }
+.chat-more { justify-self: end; }
 @media (max-width: 30rem) {
   .chat-controls { grid-template-columns: minmax(0,1fr); }
 }

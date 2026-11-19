@@ -301,9 +301,8 @@ onMounted(() => {
       <div class="run-left">
         <SimulationChat :base="base" :accounts="options" :can-start="canStart" :selected="previewId"
           :requested-chat="detailId || !followingRoom ? selected?.chatId : undefined"
-          :requested-account="detailId || !followingRoom ? selected?.accountId : undefined"
           :focus-composer="showForm" :state-name="stateName"
-          :identity="id => identityName(accounts.find(account => account.id === id)?.identityId ?? id)"
+          :identity="identityName"
           @expired="emit('expired')" @identities="emit('identities')" @open="emit('open', $event)"
           @latest="chatLatest = $event" @browse="followingRoom = true" @sent="list()" />
         <details class="console-card run-list" :open="!!runQuery">

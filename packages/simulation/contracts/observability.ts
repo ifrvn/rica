@@ -12,12 +12,13 @@ const consoleMessage = {
 export const consoleSimulationInput = z.union([z.strictObject(consoleMessage), z.strictObject({
   ...consoleMessage, chatId: resourceId, speaker: z.string().trim().min(1).max(40).regex(/^[^\p{Cc}]+$/u),
 })])
-export const simulationChatsQuery = z.object({ accountId: resourceId })
+export const simulationChatsQuery = listQuery
 export const simulationChatSummary = z.object({ id: resourceId, createdAt: timestamp })
 export const simulationChatView = z.object({
-  id: resourceId, accountId: resourceId, speakers: z.array(z.string()),
+  id: resourceId, speakers: z.array(z.string()),
   turns: z.array(z.object({
-    id: resourceId, state: z.string(), speaker: z.string(), message: z.string().nullable(), sentAt: timestamp,
+    id: resourceId, accountId: resourceId, identityId: resourceId,
+    state: z.string(), speaker: z.string(), message: z.string().nullable(), sentAt: timestamp,
     reply: z.string().nullable(), repliedAt: timestamp.nullable(),
   })),
 })

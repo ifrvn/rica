@@ -28,13 +28,14 @@ export async function startConsoleSimulation(
   return { id: row.id, status: 'QUEUED' }
 }
 
-export async function listSimulationChats(db: PrismaClient, scope: Scope, accountId: string) {
+export async function listSimulationChats(db: PrismaClient, scope: Scope, { cursor, limit }: { cursor?: string; limit: number }) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
-    const [row] = await tx.$queryRaw<{ chats: unknown }[]>`
-      SELECT public.rica_console_simulation_chats(${scope.characterId}::uuid, ${accountId}::uuid) AS chats
+    const rows = await tx.$queryRaw<{ id: string; createdAt: Date }[]>`
+      SELECT * FROM public.rica_console_simulation_chats(${scope.characterId}::uuid, ${cursor ?? null}::uuid, ${limit + 1}::int)
     `
-    return { items: simulationChatSummary.array().parse(row.chats) }
+    const items = rows.slice(0, limit).map((row) => simulationChatSummary.parse({ ...row, createdAt: row.createdAt.toISOString() }))
+    return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null }
   })
 }
 

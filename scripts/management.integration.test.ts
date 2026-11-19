@@ -3532,8 +3532,8 @@ test('console simulation runs use an isolated conversation, one approval and one
 
     const chatId = randomUUID()
     const chatPath = character + '/simulation-chats/' + chatId
-    const send = (speaker: string, message: string, key = randomUUID()) =>
-      request('POST', path, { key, data: { accountId: account.id, chatId, speaker, message } })
+    const send = (speaker: string, message: string, key = randomUUID(), accountId = account.id) =>
+      request('POST', path, { key, data: { accountId, chatId, speaker, message } })
     const prepareTurn = async (turn: string) => {
       const inbound = await owner.outboxEvent.findFirstOrThrow({ where: { runId: turn, type: runQueuedEvent } })
       await prepareSimulatedRun(runtime, inbound.eventId)
@@ -3570,7 +3570,17 @@ test('console simulation runs use an isolated conversation, one approval and one
     await owner.character.update({ where: { id: characterId }, data: { timezone: simulationZone(1) } })
     await executeSimulation(executor, automatic.body.proposal.id, simulationPlatforms.resolveAdapter)
 
-    const secondTurn = await send('小周', '刚才那套方案包含运费吗？')
+    const newIdentity = await request('POST', character + '/identities', {
+      key: randomUUID(), data: { slug: 'another-persona', roleProfile: { displayName: '另一个身份' } },
+    })
+    assert.equal(newIdentity.status, 201, JSON.stringify(newIdentity.body))
+    const newIdentityId: string = newIdentity.body.id
+    await owner.identity.update({ where: { id: newIdentityId }, data: { status: 'ACTIVE' } })
+    const newAccount = await owner.platformAccount.create({ data: {
+      characterId, identityId: newIdentityId, status: 'ACTIVE', platform: 'mock-b',
+      instanceKey: 'console-fixture', remoteAccountId: randomUUID(),
+    } })
+    const secondTurn = await send('小周', '刚才那套方案包含运费吗？', randomUUID(), newAccount.id)
     assert.equal(secondTurn.status, 201, JSON.stringify(secondTurn.body))
     const secondDraft = await prepareTurn(secondTurn.body.id)
     let seenContext: unknown
@@ -3584,6 +3594,8 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(chat.status, 200, JSON.stringify(chat.body))
     assert.deepEqual(chat.body.speakers, ['小林', '小周'])
     assert.deepEqual(chat.body.turns.map(({ id }: { id: string }) => id), [firstTurn.body.id, secondTurn.body.id])
+    assert.deepEqual(chat.body.turns.map(({ accountId, identityId }: { accountId: string; identityId: string }) =>
+      [accountId, identityId]), [[account.id, identityId], [newAccount.id, newIdentityId]])
     assert.equal(chat.body.turns[0].state, 'SIMULATED')
     assert.equal(chat.body.turns[1].reply, null)
     assert.ok(chat.body.turns[0].reply)
@@ -3592,12 +3604,20 @@ test('console simulation runs use an isolated conversation, one approval and one
     ] })
     assert.equal((await request('GET', chatPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(b) + '/simulation-chats/' + chatId, { actor: 'admin-b' })).status, 404)
+    assert.deepEqual((await request('GET', characterPath(b) + '/simulation-chats', { actor: 'admin-b' })).body.items, [])
     await assert.rejects(runtime.$queryRaw`SELECT public.rica_console_simulation_chat(${characterId}::uuid,${chatId}::uuid)`, /permission denied/i)
-    const chats = await request('GET', character + '/simulation-chats?accountId=' + account.id)
-    assert.equal(chats.body.items[0].id, chatId)
+    const oldChat = await owner.simulationChat.create({ data: { id: randomUUID(), characterId, createdAt: new Date(0) } })
+    const chats = await request('GET', character + '/simulation-chats?limit=1')
+    assert.deepEqual(chats.body.items.map(({ id }: { id: string }) => id), [chatId])
+    assert.equal(chats.body.nextCursor, chatId)
+    const olderChats = await request('GET', character + '/simulation-chats?limit=1&cursor=' + chatId)
+    assert.deepEqual(olderChats.body.items.map(({ id }: { id: string }) => id), [oldChat.id])
     const secondAction = await owner.actionProposal.findUniqueOrThrow({ where: { runId: secondTurn.body.id } })
     const secondProposal = character + '/actions/' + secondAction.id
     const approvalPreview = await request('GET', secondProposal)
+    assert.equal(approvalPreview.body.target.platform, 'mock-b')
+    assert.deepEqual(approvalPreview.body.messageContext.previous.map(({ content }: { content: string }) =>
+      content), ['我们在比较两套方案。'])
     assert.equal((await request('POST', secondProposal + '/decisions', {
       key: randomUUID(), ifMatch: approvalPreview.headers.get('etag')!,
       data: { decision: 'REJECT', reviewDigest: approvalPreview.body.reviewDigest, reason: 'Fixture rejection' },
@@ -3621,7 +3641,10 @@ test('console simulation runs use an isolated conversation, one approval and one
       data: { decision: 'APPROVE', reviewDigest: thirdPreview.body.reviewDigest },
     })).status, 200)
     await executeSimulation(executor, thirdAction.id, simulationPlatforms.resolveAdapter)
-    assert.equal((await request('GET', chatPath)).body.turns.at(-1).state, 'SIMULATED')
+    const finalChat = await request('GET', chatPath)
+    assert.deepEqual(finalChat.body.speakers, ['小林', '小周'])
+    assert.equal(finalChat.body.turns.at(-1).state, 'SIMULATED')
+    assert.equal(finalChat.body.turns.at(-1).accountId, account.id)
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }
