@@ -409,14 +409,35 @@ model NewbiDiscussionAssessment {
   participation  String
   model          String?
   systemPrompt   String? @map("system_prompt")
+  glossaryUsed   Json? @map("glossary_used")
   result         Json?
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   finishedAt     DateTime? @map("finished_at") @db.Timestamptz
   account        PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Cascade, onUpdate: NoAction, map: "newbi_discussion_assessments_account_fkey")
+  learnedTerms   NewbiAuthorTerm[]
 
+  @@unique([accountId, id], map: "newbi_assessments_account_id_key")
   @@index([accountId, postId, createdAt, id], map: "newbi_assessments_account_post_idx")
   @@index([createdAt], map: "newbi_assessments_created_at_idx")
   @@map("newbi_discussion_assessments")
+}
+
+model NewbiAuthorTerm {
+  id                 String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId          String @map("account_id") @db.Uuid
+  authorKey          String @map("author_key")
+  termKey            String @map("term_key")
+  term               String
+  meaning            String
+  tone               String
+  sourceAssessmentId String @map("source_assessment_id") @db.Uuid
+  sourceComments     String[] @map("source_comments") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+  source             NewbiDiscussionAssessment @relation(fields: [accountId, sourceAssessmentId], references: [accountId, id], onDelete: Cascade, onUpdate: NoAction, map: "newbi_author_terms_source_fkey")
+
+  @@unique([accountId, authorKey, termKey], map: "newbi_author_terms_scope_key")
+  @@index([accountId, sourceAssessmentId], map: "newbi_author_terms_source_idx")
+  @@map("newbi_author_terms")
 }
 
 model InboundEvent {

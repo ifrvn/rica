@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi'
 import type { Participation } from './model-provider.js'
+import type { GlossaryReference } from './glossary.js'
 
 const note = z.string().trim().min(1).max(200).regex(/^[^\p{Cc}]+$/u)
 const reply = z.strictObject({ status: z.literal('SUGGEST_REPLY'), commentId: z.uuid(), note,
@@ -10,6 +11,8 @@ export const discussionSelection = z.discriminatedUnion('status', [reply, skip])
 
 export type DiscussionSelectionInput = Readonly<{
   title: string; post: string; participation: Participation; identityPreferences?: string
+  glossary?: readonly GlossaryReference[]
+  learnGlossary?: boolean
   comments: readonly { id: string; replyToCommentId: string | null; speaker: number; text: string; own: boolean; eligible: boolean;
     signal: 'MENTION' | 'REPLY' | null }[]
 }>

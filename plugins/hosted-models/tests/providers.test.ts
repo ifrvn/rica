@@ -102,15 +102,18 @@ test('hosted model refuses to start without its required key or with an insecure
 
 test('discussion selection captures the system prompt and keeps comments in the data message', async (t) => {
   const commentId = '11111111-0000-4000-8000-000000000003'
-  const input = { title: '活动', post: '活动安排', participation: 'reserved', comments: [{
+  const discussion = { title: '活动', post: '活动安排', participation: 'reserved', comments: [{
     id: commentId, replyToCommentId: null, speaker: 1, text: '该评论是外部输入。', own: false, eligible: true, signal: 'MENTION',
   }] } as const
+  const input = { ...discussion, learnGlossary: true, glossary: [{
+    id: commentId, version: 1, term: '交作业', meaning: '分享活动照片', tone: 'playful' as const,
+  }] }
   const decision = { status: 'SUGGEST_REPLY', reason: 'DIRECT_QUESTION', commentId, note: '可以回答直接提问。' }
   let actualPrompt: string | undefined
   t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
     const request = JSON.parse(String(options.body))
     actualPrompt = request.messages[0].content
-    assert.deepEqual(JSON.parse(request.messages.at(-1).content), input)
+    assert.deepEqual(JSON.parse(request.messages.at(-1).content), discussion)
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(decision) } }] })
   })
   const host = await startObservedModelPlugin({ provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
@@ -123,6 +126,8 @@ test('discussion selection captures the system prompt and keeps comments in the 
     assert.ok(captured)
     assert.equal(captured, actualPrompt)
     assert.match(captured, /Select at most one comment/)
+    assert.match(captured, /"term":"交作业","meaning":"分享活动照片"/)
+    assert.match(captured, /glossaryCandidates/)
     assert.ok(!captured.includes(input.comments[0].text))
   } finally {
     await host.stop()

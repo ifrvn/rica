@@ -378,6 +378,65 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
   assert.deepEqual(foreign.body, { items: [], nextCursor: null })
 })
 
+test('Newbi learns corroborated author slang and isolates it across authors and accounts', async () => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-author-glossary') })
+  assert.equal(created.status, 201)
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const identityId = await activeIdentity({ participation: 'reserved' }, characterId)
+  const createAccount = () => owner.platformAccount.create({ data: { characterId, identityId, status: 'ACTIVE', platform: 'newbi',
+    instanceKey: 'http://127.0.0.1:5000/agent-api/v1', remoteAccountId: randomUUID() } })
+  const [firstAccount, secondAccount] = await Promise.all([createAccount(), createAccount()])
+  const comments = [
+    { id: randomUUID(), author: { id: 4, username: '成员甲' }, content: '这次交作业我会发照片。', replyToCommentId: null },
+    { id: randomUUID(), author: { id: 5, username: '成员乙' }, content: '上周交作业发的是风景照。', replyToCommentId: null },
+    { id: randomUUID(), author: { id: 4, username: '成员甲' }, content: '明天交作业选两张照片。', replyToCommentId: null },
+  ]
+  type Thread = NonNullable<Awaited<ReturnType<NonNullable<NewbiManagementOptions['readConnectorThread']>>>>
+  const threads = new Map<string, Thread>()
+  const audiences: boolean[] = []
+  const target = testApp(undefined, undefined, undefined, async ({ postId }) => threads.get(postId), undefined, undefined,
+    async (input, _profile, _attribution, capture) => {
+      audiences.push(input.learnGlossary === true)
+      await capture('Fixture exact prompt\n' + JSON.stringify(input.glossary ?? []), 'fixture/glossary')
+      return { status: 'NO_REPLY', reason: 'LOW_VALUE', note: '暂无需要回应的问题。', glossaryCandidates: [
+        { term: '交作业', meaning: '分享活动照片', tone: 'playful' },
+        { term: '发照片', meaning: '证据不足的候选', tone: 'neutral' },
+      ] }
+    })
+  async function assess(accountId: string, authorId: number, username: string, examples = comments.slice(0, 1)) {
+    const postId = randomUUID()
+    threads.set(postId, { post: { title: '交作业讨论', content: '大家最近在做什么？', isLocked: false,
+      author: { id: authorId, username } }, comments: examples, nextCursor: null })
+    await owner.newbiEvent.create({ data: { accountId, seq: String(threads.size), type: 'POST_REPLIED', postId,
+      commentId: examples[0].id, occurredAt: new Date() } })
+    const base = characterPath(characterId) + '/newbi'
+    const started = await request('POST', base + `/accounts/${accountId}/discussions/${postId}/assessments`, { target, key: randomUUID() })
+    assert.equal(started.status, 201, JSON.stringify(started.body))
+    const detail = await request('GET', base + '/assessments/' + started.body.id, { target })
+    assert.equal(detail.status, 200, JSON.stringify(detail.body))
+    return detail.body
+  }
+
+  const repeated = await assess(firstAccount.id, 20, '博主甲', [comments[0], { ...comments[0], id: randomUUID() }, comments[1]])
+  assert.deepEqual(repeated.glossaryLearned, [])
+  const learned = await assess(firstAccount.id, 20, '博主甲', comments)
+  assert.deepEqual(learned.glossaryUsed, [])
+  assert.equal(learned.glossaryLearned.length, 1)
+  assert.equal(learned.glossaryLearned[0].meaning, '分享活动照片')
+  assert.deepEqual(new Set(learned.glossaryLearned[0].sourceComments), new Set(comments.map(({ id }) => id)))
+  const reused = await assess(firstAccount.id, 20, '博主甲改名')
+  assert.equal(reused.glossaryUsed[0].id, learned.glossaryLearned[0].id)
+  assert.match(reused.systemPrompt, /分享活动照片/)
+  assert.deepEqual((await assess(firstAccount.id, 21, '博主甲')).glossaryUsed, [])
+  assert.deepEqual((await assess(secondAccount.id, 20, '博主甲')).glossaryUsed, [])
+  assert.deepEqual(audiences, [false, true, false, false, false])
+  await owner.newbiDiscussionAssessment.update({ where: { id: learned.id }, data: { createdAt: new Date(0) } })
+  assert.deepEqual((await assess(firstAccount.id, 20, '博主甲')).glossaryUsed, [])
+  await sweepRuntimeRetention(owner)
+  assert.equal(await owner.newbiAuthorTerm.count({ where: { accountId: firstAccount.id } }), 0)
+})
+
 test('Newbi auto-approval requires a confirmed prior reply in the same discussion and never sends on creation', async () => {
   const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-auto-review') })
   assert.equal(created.status, 201, JSON.stringify(created.body))
