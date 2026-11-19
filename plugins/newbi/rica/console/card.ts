@@ -22,9 +22,10 @@ export const newbiCard = {
       id, detail: id, version, label: kind === 'platform-reader'
         ? newbiConsole.capabilityNames['platform-reader'] : newbiConsole.capabilityNames['platform-reply-executor'],
     }))) ?? [],
-  summary: ({ newbi }: NewbiDeploymentView) => newbi.endpoint ? '可接入账号' : '等待配置 Agent API',
+  summary: ({ newbi }: NewbiDeploymentView) => newbi.endpoint
+    ? newbi.backgroundAssessments ? '后台讨论评估已开启' : '可接入账号' : '等待配置 Agent API',
   configureLabel: ({ newbi }: NewbiDeploymentView) => newbi.endpoint ? '查看 Agent API 设置' : '配置 Agent API',
-  editorProps: ({ newbi }: NewbiDeploymentView) => ({ value: newbi.endpoint ?? '' }),
+  editorProps: ({ newbi }: NewbiDeploymentView) => ({ value: newbi.endpoint ?? '', backgroundAssessments: newbi.backgroundAssessments ?? false }),
   accountLink: (status?: ConnectorCardStatus) => !!status?.newbiRegistrationAvailable,
   upgradeQueue(status?: ConnectorCardStatus) {
     const pending = status?.newbiPendingDeliveries
@@ -34,5 +35,4 @@ export const newbiCard = {
       { label: '待核对', status: 'UNKNOWN', count: pending.unknown },
     ]
   },
-  settingsChange: (endpoint: string) => ({ action: 'CONFIGURE_NEWBI', endpoint }),
 }

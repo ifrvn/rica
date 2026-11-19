@@ -22,7 +22,6 @@ type PluginCard = {
   configureLabel(deployment: DeploymentPluginsView): string
   editorProps(deployment: DeploymentPluginsView, canStartSimulation: boolean): object
   accountLink?(status?: ConnectorCardStatus): boolean
-  settingsChange?(value: string): unknown
   upgradeQueue?(status?: ConnectorCardStatus): { label: string; status: string; count: number }[] | undefined
 }
 

@@ -6,10 +6,10 @@ import { newbiExecutorKey } from '../runtime/identity.js'
 import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { NewbiManagementOptions } from './routes.js'
 
-export function createNewbiOperations(db: PrismaClient, deploymentPlugins: NewbiConnectionStore): NewbiManagementOptions {
+export function createNewbiOperations(db: PrismaClient, deploymentPlugins: NewbiConnectionStore) {
   const newbiReaderDb = scopedNewbiDatabase(db, 'reader')
   const newbiExecutorDb = scopedNewbiDatabase(db, 'executor')
-  return {
+  const operations: Required<Pick<NewbiManagementOptions, 'identifyConnector' | 'pollConnector' | 'readConnectorThread' | 'sendConnector'>> = {
     readConnectorThread: (target, preview) => readSavedNewbiThread(newbiReaderDb, deploymentPlugins, target, preview),
     sendConnector: async (id, retry) => {
       const host = await openSavedNewbiExecutor(newbiExecutorDb, deploymentPlugins, id, AbortSignal.timeout(7000))
@@ -35,4 +35,5 @@ export function createNewbiOperations(db: PrismaClient, deploymentPlugins: Newbi
       return current && identifyNewbiAccount(current.connection, current.beforeRequest)
     },
   }
+  return operations
 }

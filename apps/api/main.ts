@@ -17,6 +17,7 @@ import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, readPluginStatus, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { readPluginRelease } from '../plugin-releases.js'
 import { createAutoReviewer } from '../auto-review.js'
+import { createDiscussionAssessor } from '../discussion-assessment.js'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
 
 const config = loadConfig()
@@ -72,11 +73,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
     createNewbiManagement(managementDb, newbi, {
       ...createNewbiOperations(db, newbi),
       reviewReply,
-      assessDiscussion: async (input, profile, attribution, capture) => (await withHostedModel(async (model) => {
-        if (!model.selectDiscussion || !model.hostedProvider || !model.hostedModel) return
-        const name = `${model.hostedProvider}/${model.hostedModel}`
-        return model.selectDiscussion(input, AbortSignal.timeout(8000), attribution, (prompt) => capture(prompt, name))
-      }, profile)) ?? undefined,
+      assessDiscussion: createDiscussionAssessor(withHostedModel),
       reportConnectorOperation: (service, succeeded) =>
         reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
     }),

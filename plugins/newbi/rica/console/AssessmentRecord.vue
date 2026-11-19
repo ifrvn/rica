@@ -14,7 +14,7 @@ const assessmentReasons: Partial<Record<string, string>> = {
 </script>
 
 <template>
-  <p>{{ item.identity }} · {{ participationLabels[item.participation] }} · 仅评估</p>
+  <p>{{ item.identity }} · {{ participationLabels[item.participation] }} · {{ item.origin === 'BACKGROUND' ? '后台只读评估' : '管理员发起评估' }}</p>
   <p v-if="item.result.status !== 'PENDING'">
     <strong v-if="assessmentReasons[item.result.reason]">{{ assessmentReasons[item.result.reason] }} · </strong>{{ item.result.note }}
   </p>

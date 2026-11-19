@@ -1,4 +1,6 @@
 export { connectNewbiSettings } from './rica/deployment/settings.js'
 export { createNewbiManagement } from './rica/management/routes.js'
 export { createNewbiOperations } from './rica/management/operations.js'
+export { startNewbiBackground } from './rica/management/background.js'
+export type { AssessDiscussion } from './rica/persistence/assessments.js'
 export { newbiRetentionSweep } from './rica/persistence/retention.js'

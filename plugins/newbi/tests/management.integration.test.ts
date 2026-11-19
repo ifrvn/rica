@@ -18,6 +18,7 @@ import { actorId } from '../../../apps/api/admin-auth.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../../../apps/api/app.js'
 import { createNewbiManagement, type NewbiManagementOptions } from '../rica/management/routes.js'
+import { assessNewbiBackground } from '../rica/management/background.js'
 import { connectNewbiSettings } from '../rica/deployment/settings.js'
 import { createManagementApp } from '../../../apps/api/management.js'
 import { sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
@@ -435,6 +436,78 @@ test('Newbi learns corroborated author slang and isolates it across authors and 
   assert.deepEqual((await assess(firstAccount.id, 20, '博主甲')).glossaryUsed, [])
   await sweepRuntimeRetention(owner)
   assert.equal(await owner.newbiAuthorTerm.count({ where: { accountId: firstAccount.id } }), 0)
+})
+
+test('Newbi background assessments coalesce concurrent reads, respect deployment changes, and never create proposals', async () => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-background') })
+  assert.equal(created.status, 201)
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const identityId = await activeIdentity({}, characterId)
+  const endpoint = 'http://127.0.0.1:55001/agent-api/v1'
+  const agentId = randomUUID()
+  const { id: accountId } = await owner.platformAccount.create({ data: { characterId, identityId, status: 'ACTIVE',
+    platform: 'newbi', instanceKey: endpoint, remoteAccountId: agentId } })
+  const discussion = randomUUID()
+  const secondDiscussion = randomUUID()
+  const comment = { id: randomUUID(), author: { id: 10, username: '提问者' }, content: '活动几点开始？', replyToCommentId: null }
+  const ready = new Date(Date.now() - 60_000)
+  const seed = (seq: string, postId: string, receivedAt: Date, occurredAt = ready) =>
+    owner.newbiEvent.create({ data: { accountId, seq, postId, commentId: comment.id, type: 'POST_REPLIED', receivedAt, occurredAt } })
+  await seed('9', discussion, ready)
+  await seed('10', discussion, new Date())
+  await seed('11', randomUUID(), ready, new Date(0))
+  let enabled = false
+  let polls = 0
+  let calls = 0
+  const operations: Parameters<typeof assessNewbiBackground>[2] = {
+    async pollConnector(id) {
+      assert.equal(id, accountId)
+      polls++
+      const next = new Date(Date.now() + 60_000)
+      await owner.newbiEventCheckpoint.create({ data: { accountId, nextPollAt: next } })
+      return { status: 'READ', nextAt: next.toISOString(), historyLost: false, saved: 0 }
+    },
+    async readConnectorThread({ postId }) {
+      assert.ok(postId === discussion || postId === secondDiscussion)
+      return { post: { title: '活动安排', content: '讨论活动时间', isLocked: false }, comments: [comment], nextCursor: null }
+    },
+    async assessDiscussion(_input, _profile, _attribution, capture) {
+      calls++
+      await capture('Fixture background system prompt', 'fixture/glossary')
+      if (calls === 2) enabled = false
+      return { status: 'SUGGEST_REPLY', commentId: comment.id, reason: 'DIRECT_QUESTION', note: '对方询问活动时间。' }
+    },
+  }
+  const step = () => assessNewbiBackground(management, async () => enabled ? endpoint : undefined, operations, () => assert.fail('Unexpected poll error'))
+  await owner.newbiCredential.create({ data: { endpoint, agentId, credential: 'nbi_agent_' + 'x'.repeat(43) } })
+  try {
+    await step()
+    assert.equal(polls, 0)
+    enabled = true
+    await step()
+    assert.equal(polls, 1)
+    assert.equal(calls, 0)
+    await owner.newbiEvent.update({ where: { accountId_seq: { accountId, seq: '10' } }, data: { receivedAt: ready } })
+    await Promise.all([step(), step()])
+    await step()
+    assert.equal(calls, 1)
+    const row = await owner.newbiDiscussionAssessment.findFirstOrThrow({ where: { accountId, postId: discussion } })
+    assert.equal(row.triggerSeq, '10')
+    const detail = await request('GET', characterPath(characterId) + '/newbi/assessments/' + row.id)
+    assert.equal(detail.body.origin, 'BACKGROUND')
+    assert.equal(detail.body.result.status, 'SUGGEST_REPLY')
+    assert.equal(detail.body.systemPrompt, 'Fixture background system prompt')
+    assert.equal(await owner.managementAudit.count({ where: { characterId, targetId: row.id, operation: 'newbi.discussion.assess.auto' } }), 1)
+
+    await seed('12', secondDiscussion, ready)
+    await step()
+    const blocked = await owner.newbiDiscussionAssessment.findFirstOrThrow({ where: { accountId, postId: secondDiscussion } })
+    assert.equal((await request('GET', characterPath(characterId) + '/newbi/assessments/' + blocked.id)).body.result.reason, 'BACKGROUND_DISABLED')
+    assert.equal(await owner.newbiReply.count({ where: { characterId } }), 0)
+  } finally {
+    await owner.newbiCredential.delete({ where: { endpoint_agentId: { endpoint, agentId } } })
+  }
 })
 
 test('Newbi auto-approval requires a confirmed prior reply in the same discussion and never sends on creation', async () => {

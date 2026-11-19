@@ -31,6 +31,7 @@ const labels: Record<string, string> = {
   'auto-review.update': '修改自动审批设置', 'action.auto-approve': 'AI 批准模拟回复',
   'newbi.reply.auto-approve': 'AI 批准 Newbi 回复',
   'newbi.discussion.assess': '评估 Newbi 讨论',
+  'newbi.discussion.assess.auto': '后台评估 Newbi 讨论',
   'simulation.resolve': '模拟对账', 'outbox.retry': '恢复隔离事件',
   'simulation.executing': '领取模拟执行许可', 'simulation.simulated': '模拟执行完成',
   'simulation.blocked': '模拟执行被拦截', 'simulation.reconciling': '模拟发送结果待核对',
@@ -114,7 +115,7 @@ onMounted(() => { void load() })
               @click="emit('openRun', item.run!.id)">查看运行</UiButton>
             <UiButton v-if="reviewFor(item)" size="small" variant="quiet"
               @click="openProposal(item)">查看平台提案</UiButton>
-            <UiButton v-if="item.operation === 'newbi.discussion.assess'" size="small" variant="quiet"
+            <UiButton v-if="item.operation === 'newbi.discussion.assess' || item.operation === 'newbi.discussion.assess.auto'" size="small" variant="quiet"
               @click="emit('assessment', 'newbi', item.targetId)">查看讨论评估</UiButton>
           </div>
         </div>

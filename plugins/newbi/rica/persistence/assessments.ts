@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import { identityProfile } from '@ricajs/contracts/management'
 import { discussionSelection, type DiscussionSelectionInput } from '@ricajs/contracts/discussion-selection'
@@ -12,22 +13,25 @@ const retentionMs = 30 * 86_400_000
 type Result = Exclude<z.infer<typeof newbiAssessmentResult>, { status: 'PENDING' }>
 type Thread = z.infer<typeof newbiAssessmentThread>
 type DiscussionTarget = { accountId: string; agentId: string; endpoint: string; postId: string }
+type AssessmentScope = Scope | { characterId: string; background: true }
 type AssessDiscussion = (input: DiscussionSelectionInput, profile: string | undefined, attribution: ModelAttribution,
   capture: (prompt: string, model: string) => Promise<void>) => Promise<unknown>
 
 const unavailable = (reason: Extract<Result, { status: 'UNAVAILABLE' }>['reason'], note: string): Result => ({ status: 'UNAVAILABLE', reason, note })
 const timedOut = unavailable('TIMED_OUT', '评估超时，请重新评估讨论。')
 const contextChanged = unavailable('CONTEXT_CHANGED', '评估期间账号绑定或身份配置发生变化。')
+const backgroundDisabled = unavailable('BACKGROUND_DISABLED', '评估期间后台开关、外部模型或 Newbi 接入点发生变化。')
 
 const learnedTerms = { select: authorTermSelect, orderBy: { term: 'asc' as const } }
 
 function assessmentView(row: NewbiDiscussionAssessment & { learnedTerms: Prisma.NewbiAuthorTermGetPayload<typeof learnedTerms>[] }, now = Date.now()) {
   return newbiAssessmentView.parse({ ...row, createdAt: row.createdAt.toISOString(), finishedAt: row.finishedAt?.toISOString() ?? null,
+    origin: row.triggerSeq === null ? 'ADMIN' : 'BACKGROUND',
     glossaryUsed: row.glossaryUsed ?? [], glossaryLearned: row.learnedTerms.map((term) => ({ ...term, version: 1 })),
     result: row.result ?? (now - row.createdAt.getTime() >= leaseMs ? timedOut : { status: 'PENDING' }) })
 }
 
-async function boundAccount(tx: Prisma.TransactionClient, scope: Scope, id: string) {
+async function boundAccount(tx: Prisma.TransactionClient, scope: Pick<Scope, 'characterId'>, id: string) {
   const account = await tx.platformAccount.findFirst({
     where: { id, characterId: scope.characterId, platform: 'newbi' },
     select: { id: true, remoteAccountId: true, instanceKey: true, status: true, bindingVersion: true, identityId: true,
@@ -47,10 +51,10 @@ function matches(row: NewbiDiscussionAssessment, account: Awaited<ReturnType<typ
     && row.authEpoch === account.identity.character.authEpoch
 }
 
-async function lockAssessmentScope(tx: Prisma.TransactionClient, scope: Scope) {
-  await authorize(tx, scope)
+async function lockAssessmentScope(tx: Prisma.TransactionClient, scope: AssessmentScope) {
+  if ('actor' in scope) await authorize(tx, scope)
   await lockCharacter(tx, scope.characterId)
-  await authorize(tx, scope)
+  if ('actor' in scope) await authorize(tx, scope)
 }
 
 export async function claimNewbiAssessment(tx: Prisma.TransactionClient, scope: Scope, accountId: string, postId: string) {
@@ -58,7 +62,13 @@ export async function claimNewbiAssessment(tx: Prisma.TransactionClient, scope: 
   if (!active(account)) throw new ManagementError(409, 'STATE_CONFLICT', 'Newbi account is inactive')
   const event = await tx.newbiEvent.findFirst({ where: { accountId, postId, occurredAt: { gt: new Date(Date.now() - retentionMs) } }, select: { seq: true } })
   if (!event) throw new ManagementError(404, 'NOT_FOUND', 'Newbi discussion has no current event')
-  const binding = { characterId: scope.characterId, accountId, postId, identityId: account.identityId,
+  return createAssessment(tx, scope.characterId, account, postId)
+}
+
+async function createAssessment(tx: Prisma.TransactionClient, characterId: string,
+  account: Awaited<ReturnType<typeof boundAccount>>, postId: string, triggerSeq?: string) {
+  const accountId = account.id
+  const binding = { characterId, accountId, postId, identityId: account.identityId,
     bindingVersion: account.bindingVersion, authEpoch: account.identity.character.authEpoch }
   // The management command holds the character lock while reserving an attempt.
   const pending = await tx.newbiDiscussionAssessment.findFirst({ where: { ...binding, result: { equals: Prisma.DbNull },
@@ -66,10 +76,57 @@ export async function claimNewbiAssessment(tx: Prisma.TransactionClient, scope: 
   if (pending) return { id: pending.id, status: 'PENDING' }
   const profile = identityProfile.pick({ displayName: true, participation: true, writingPrompt: true }).strip()
     .parse(account.identity.activeProfile?.roleProfile ?? {})
-  const row = await tx.newbiDiscussionAssessment.create({ data: { ...binding,
+  const row = await tx.newbiDiscussionAssessment.create({ data: { ...binding, triggerSeq,
     identity: profile.displayName ?? account.identity.slug,
     participation: resolveParticipation(profile.participation, profile.writingPrompt) }, select: { id: true } })
   return { id: row.id, status: 'STARTED' }
+}
+
+export type BackgroundDiscussion = { characterId: string; accountId: string; postId: string; seq: string }
+
+export function backgroundDiscussions(endpoint: string, target?: Pick<BackgroundDiscussion, 'accountId' | 'postId'>) {
+  const filter = target ? Prisma.sql`AND a.id = ${target.accountId}::uuid AND e.post_id = ${target.postId}::uuid` : Prisma.empty
+  return Prisma.sql`
+    WITH latest AS (
+      SELECT DISTINCT ON (e.account_id, e.post_id) a.character_id, e.account_id, e.post_id, e.seq, e.received_at
+      FROM public.newbi_events e
+      JOIN public.platform_accounts a ON a.id = e.account_id
+      JOIN public.identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)
+      JOIN public.characters c ON c.id = a.character_id
+      WHERE a.platform = 'newbi' AND a.instance_key = ${endpoint}
+        AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'
+        AND e.received_at > statement_timestamp() - interval '1 hour'
+        AND e.occurred_at > statement_timestamp() - interval '1 hour'
+        AND e.occurred_at <= statement_timestamp() + interval '1 minute'
+        AND e.comment_id IS NOT NULL ${filter}
+      ORDER BY e.account_id, e.post_id, e.received_at DESC, e.occurred_at DESC, length(e.seq) DESC, e.seq DESC
+    )
+    SELECT e.character_id AS "characterId", e.account_id AS "accountId", e.post_id AS "postId", e.seq
+    FROM latest e
+    WHERE e.received_at <= statement_timestamp() - interval '30 seconds'
+      AND NOT EXISTS (
+        SELECT 1 FROM public.newbi_discussion_assessments r
+        WHERE r.account_id = e.account_id AND r.post_id = e.post_id
+          AND (r.created_at >= e.received_at OR r.created_at > statement_timestamp() - interval '5 minutes')
+      )
+    ORDER BY e.received_at ASC, e.account_id, e.post_id
+    LIMIT 4
+  `
+}
+
+export async function claimBackgroundAssessment(db: PrismaClient, endpoint: string, target: BackgroundDiscussion) {
+  const { characterId, accountId, postId } = target
+  return db.$transaction(async (tx) => {
+    await lockCharacter(tx, characterId)
+    const [latest] = await tx.$queryRaw<BackgroundDiscussion[]>(backgroundDiscussions(endpoint, target))
+    if (latest?.seq !== target.seq || latest.characterId !== characterId) return
+    const account = await boundAccount(tx, { characterId }, accountId)
+    const assessment = await createAssessment(tx, characterId, account, postId, target.seq)
+    if (assessment.status !== 'STARTED') return
+    await tx.managementAudit.create({ data: { characterId, actorId: 'system:newbi-background', operation: 'newbi.discussion.assess.auto',
+      targetId: assessment.id, requestId: assessment.id, digest: createHash('sha256').update(JSON.stringify({ accountId, postId, seq: target.seq })).digest('hex') } })
+    return assessment.id
+  })
 }
 
 export async function listNewbiAssessments(db: PrismaClient, scope: Scope, accountId: string, postId: string) {
@@ -110,17 +167,18 @@ export function newbiAssessmentActivity(characterId: string) {
   `
 }
 
-export async function runNewbiAssessment(db: PrismaClient, scope: Scope, id: string,
+export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScope, id: string,
   readThread: ((target: DiscussionTarget) => Promise<Thread | undefined>) | undefined,
   assess: AssessDiscussion | undefined, requireConnector: (endpoint: string) => Promise<void>,
 ) {
   const where = { id, characterId: scope.characterId }
   const initial = await db.$transaction(async (tx) => {
-    await authorize(tx, scope)
+    if ('actor' in scope) await authorize(tx, scope)
     const row = await tx.newbiDiscussionAssessment.findUniqueOrThrow({ where })
     const account = await boundAccount(tx, scope, row.accountId)
     const [events, receipts] = await Promise.all([
-      tx.newbiEvent.findMany({ where: { accountId: row.accountId, postId: row.postId, occurredAt: { gt: new Date(Date.now() - retentionMs) } },
+      tx.newbiEvent.findMany({ where: { accountId: row.accountId, postId: row.postId, occurredAt: { gt: new Date(Date.now() - retentionMs) },
+        ...('background' in scope ? { receivedAt: { lte: row.createdAt } } : {}) },
         orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 20, select: { commentId: true, type: true } }),
       tx.newbiReply.findMany({ where: { characterId: scope.characterId, accountId: row.accountId, postId: row.postId,
         status: 'SENT', remoteCommentId: { not: null } }, orderBy: { createdAt: 'desc' }, take: 50, select: { remoteCommentId: true } }),
@@ -176,6 +234,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: Scope, id: str
     }
     const selection = await assess?.(input, profile.draftModelProfile,
       { characterId: row.characterId, identityId: row.identityId, platform: 'newbi' }, async (systemPrompt, model) => {
+        if ('background' in scope) await requireConnector(account.instanceKey)
         await db.$transaction(async (tx) => {
           await lockAssessmentScope(tx, scope)
           if (!matches(row, await boundAccount(tx, scope, row.accountId))) throw new Error('Assessment binding changed')
@@ -202,14 +261,16 @@ export async function runNewbiAssessment(db: PrismaClient, scope: Scope, id: str
   }
 
   const result = await evaluate()
+  const enabled = !('background' in scope) || await requireConnector(account.instanceKey).then(() => true, () => false)
   await db.$transaction(async (tx) => {
     await lockAssessmentScope(tx, scope)
     const current = await boundAccount(tx, scope, row.accountId)
     const valid = Date.now() - row.createdAt.getTime() < leaseMs
     const unchanged = matches(row, current)
+    const completed = !valid ? timedOut : !enabled ? backgroundDisabled : unchanged ? result : contextChanged
     const { count } = await tx.newbiDiscussionAssessment.updateMany({ where: { ...where, result: { equals: Prisma.DbNull } },
-      data: { result: !valid ? timedOut : unchanged ? result : contextChanged, finishedAt: new Date() } })
-    if (count && valid && unchanged && learning) await saveAuthorTerms(tx, row, learning.authorKey, learning.candidates, cutoff)
+      data: { result: completed, finishedAt: new Date() } })
+    if (count && valid && enabled && unchanged && learning) await saveAuthorTerms(tx, row, learning.authorKey, learning.candidates, cutoff)
   })
 }
 

@@ -68,13 +68,14 @@ export const newbiAssessmentThread = newbiThreadView.extend({
 export const newbiAssessmentResult = z.discriminatedUnion('status', [
   discussionSelection.options[0].extend({ target: z.object({ author: z.string(), excerpt: z.string() }) }),
   discussionSelection.options[1].extend({ reason: z.enum(['ALREADY_ANSWERED','LOW_VALUE','OUT_OF_SCOPE','INSUFFICIENT_CONTEXT','THREAD_LOCKED']) }),
-  z.object({ status: z.literal('UNAVAILABLE'), reason: z.enum(['THREAD_UNAVAILABLE','MODEL_UNAVAILABLE','INVALID_SELECTION', 'CONTEXT_CHANGED','TIMED_OUT']), note: z.string() }),
+  z.object({ status: z.literal('UNAVAILABLE'), reason: z.enum(['THREAD_UNAVAILABLE','MODEL_UNAVAILABLE','INVALID_SELECTION', 'CONTEXT_CHANGED','TIMED_OUT','BACKGROUND_DISABLED']), note: z.string() }),
   z.object({ status: z.literal('PENDING') }),
 ])
 export const newbiAssessmentView = z.object({
   id: resourceId, accountId: resourceId, postId: resourceId, identity: z.string(), participation: participationLevel,
   createdAt: z.iso.datetime(), finishedAt: z.iso.datetime().nullable(), model: z.string().nullable(),
   systemPrompt: z.string().nullable(), result: newbiAssessmentResult,
+  origin: z.enum(['ADMIN', 'BACKGROUND']),
   glossaryUsed: z.array(glossaryReference),
   glossaryLearned: z.array(glossaryReference.extend({ sourceComments: z.array(resourceId).length(3) })),
 })

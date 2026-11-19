@@ -10,6 +10,8 @@ import { modelSettingsDirectory } from '@ricajs/runtime/settings-directory'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { createAutoReviewer } from '../auto-review.js'
+import { createDiscussionAssessor } from '../discussion-assessment.js'
+import { connectNewbiSettings, createNewbiOperations, startNewbiBackground } from '@ricajs/plugin-newbi'
 
 async function main() {
   const config = loadConfig()
@@ -64,14 +66,31 @@ async function main() {
   }
 
   observation = startPluginHeartbeat(config.redisUrl, 'worker', [...platforms.plugins, selected.metadata], platforms.source)
+  const newbi = connectNewbiSettings(plugins.readConfiguration)
+  const backgroundEndpoint = async () => await plugins.isEnabled(hostedModelsPluginId) ? newbi.readBackground() : undefined
+  const backgroundDb = createDatabase(config.databaseUrl, 'rica_admin_api')
+  const { pollConnector, readConnectorThread } = createNewbiOperations(usageDb, {
+    async openNewbi(credential, endpoint) {
+      const current = await backgroundEndpoint()
+      if (!current || (endpoint && current !== endpoint)) return
+      const opened = await newbi.openNewbi(credential, current)
+      return opened && { ...opened, async beforeRequest() {
+        await opened.beforeRequest()
+        if (await backgroundEndpoint() !== current) throw new Error('Newbi background configuration changed')
+      } }
+    },
+  })
+  const assessDiscussion = createDiscussionAssessor(async (assess, profile) => assess((await getModel(profile)).implementation))
+  const stopBackground = startNewbiBackground(backgroundDb, backgroundEndpoint, { pollConnector, readConnectorThread, assessDiscussion },
+    () => console.error(JSON.stringify({ service: 'worker', event: 'newbi_background_failed' })))
   async function shutdown() {
     observation?.stop()
     try {
-      await worker.close()
+      await Promise.all([worker.close(), stopBackground()])
     } catch {
       process.exitCode = 1
     } finally {
-      await Promise.all([selected.stop(), platforms.stop(), usageDb.$disconnect()])
+      await Promise.all([selected.stop(), platforms.stop(), usageDb.$disconnect(), backgroundDb.$disconnect()])
     }
   }
   process.once('SIGINT', shutdown)

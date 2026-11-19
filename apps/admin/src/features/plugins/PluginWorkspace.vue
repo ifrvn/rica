@@ -117,11 +117,6 @@ function update(id: DeploymentPluginId, data: unknown) {
   })
 }
 
-function saveSettings(id: DeploymentPluginId, value: string) {
-  const change = cards[id].settingsChange?.(value)
-  if (change) update(id, change)
-}
-
 function changeStage(id: DeploymentPluginId) {
   const stage = deployment.value?.plugins[id]
   if (stage) update(id, { action: operations[stage], id })
@@ -250,7 +245,7 @@ function changeStage(id: DeploymentPluginId) {
         <component v-if="canConfigureModel && editing === id && deployment.plugins[id] === 'ENABLED'"
           :is="cards[id].editor" :id="'plugin-config-' + id" class="plugin-config"
           v-bind="cards[id].editorProps(deployment, canStartSimulation)" :busy="busy"
-          @expired="expired" @close="toggleEditor(id)" @save="saveSettings(id, $event)"
+          @expired="expired" @close="toggleEditor(id)" @save="update(id, $event)"
           @saved="refresh" @simulate="emit('simulate')" />
       </article>
     </template>
