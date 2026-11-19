@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { z } from '@hono/zod-openapi'
-import { reviewTarget, simulationReviewContext, type ActionView, type actionDecision } from '../contracts/review.js'
+import { reviewTarget, simulationReviewContext, type ActionView, type actionDecision, type ChatReplyStop } from '../contracts/review.js'
 import { simulationFollowUp } from '../contracts/follow-up.js'
 import { recordRunModelCall } from './model-calls.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
@@ -30,6 +30,7 @@ type Proposal = {
   proposerId: string | null
   expiresAt: Date
   expired: boolean
+  chatStop: ChatReplyStop | null
   followUp: unknown
   reviewerId: string | null
   autoReviewHandoff: unknown
@@ -40,9 +41,9 @@ type Proposal = {
 }
 
 function skipSimulationReview(proposal: Proposal, target: ActionView['target']): AutoReviewHandoff | undefined {
-  if (target.audience !== 'PUBLIC') return { status: 'SKIPPED', reason: '私密回复须由人工审核。' }
-  if (proposal.crossPlatformDuplicate) return { status: 'SKIPPED', reason: '回复与其他平台的内容相似，请核对是否重复。' }
-  if (proposal.followUp) return { status: 'SKIPPED', reason: '回复附带拟登记的计划或承诺，须由人工一并审核。' }
+  if (target.audience !== 'PUBLIC') return { status: 'SKIPPED', category: 'POLICY', reason: '私密回复须由人工审核。' }
+  if (proposal.crossPlatformDuplicate) return { status: 'SKIPPED', category: 'POLICY', reason: '回复与其他平台的内容相似，请核对是否重复。' }
+  if (proposal.followUp) return { status: 'SKIPPED', category: 'POLICY', reason: '历史提案附带后续事项，须由人工核对。' }
 }
 
 function notFound(): never {
@@ -61,18 +62,21 @@ async function proposalRows(
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
       a.proposer_id AS "proposerId", a.expires_at AS "expiresAt",
       a.expires_at <= statement_timestamp() AS expired,
-      r.state, r.state_version AS version, approval.reviewer_id AS "reviewerId",
+      r.state, r.state_version AS version, approval.reviewer_id AS "reviewerId", chat.stop AS "chatStop",
       approval.decision, approval.created_at AS "reviewedAt", approval.reason AS "reviewReason",
       COALESCE(r.state = 'WAITING_APPROVAL' AND a.auto_review_until > statement_timestamp()
-        AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL AND c.auto_review_enabled, false) AS "autoReviewPending"
+        AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL AND c.auto_review_enabled
+        AND chat.stop IS NULL, false) AS "autoReviewPending"
     FROM public.action_proposals a
     JOIN public.agent_runs r ON (r.character_id, r.id) = (a.character_id, a.run_id)
     JOIN public.characters c ON c.id = a.character_id
     LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
+    CROSS JOIN LATERAL (SELECT CASE WHEN r.state_reason::text IN ('CHAT_REPEAT','CHAT_MOVED_ON') THEN r.state_reason::text
+      WHEN r.state IN ('WAITING_APPROVAL','READY') THEN public.rica_chat_reply_stop(r.id) END AS stop OFFSET 0) chat
     WHERE a.character_id = ${characterId}::uuid
       AND (${actionId}::uuid IS NULL OR a.id = ${actionId}::uuid)
       AND (${actionId}::uuid IS NOT NULL OR CASE ${status}
-        WHEN 'WAITING' THEN r.state = 'WAITING_APPROVAL'
+        WHEN 'WAITING' THEN r.state = 'WAITING_APPROVAL' AND chat.stop IS NULL
         WHEN 'HISTORY' THEN approval.action_id IS NOT NULL
         ELSE approval.decision::text = ${status} END)
       AND (${cursor}::uuid IS NULL OR (coalesce(approval.created_at, a.created_at), a.id) < (
@@ -91,6 +95,7 @@ async function inspect(tx: Prisma.TransactionClient, characterId: string, propos
   if (proposal.state !== 'WAITING_APPROVAL' && proposal.state !== 'READY') {
     return { target, state: proposal.state, content: null }
   }
+  if (proposal.chatStop) return { target, state: 'CANCELED' as const, content: null }
   if (proposal.expired) return { target, state: 'EXPIRED' as const, content: null }
   if (proposal.policyVersion !== simulationReviewPolicyVersion
     || !matchesSimulationAdapter(proposal, resolveAdapter(target.platform))) {
@@ -127,6 +132,7 @@ export async function listReviewActions(
         id: row.id, runId: row.runId, mode: 'SIMULATION', kind: 'REPLY',
         target, state, version: row.version, expiresAt: row.expiresAt.toISOString(),
         reviewDigest: row.reviewDigest,
+        chatStop: row.chatStop,
         autoApproved: row.reviewerId === autoReviewerId,
         autoReviewPending: row.autoReviewPending && state === 'WAITING_APPROVAL',
         review: row.decision && row.reviewedAt ? { decision: row.decision, at: row.reviewedAt.toISOString(),
@@ -165,7 +171,7 @@ export async function autoReviewSimulation(
     ? await review(settings, { platform: target.platform, draft: content, discussion },
       { characterId, identityId: target.identityId, platform: target.platform },
       (prompt, model) => recordRunModelCall(db, proposal.runId, 'REVIEW', model, prompt))
-    : { status: 'SKIPPED', reason: '该角色未启用自动审批。' } as const
+    : { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' } as const
 
   await db.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
@@ -176,7 +182,7 @@ export async function autoReviewSimulation(
     if ((await inspect(tx, characterId, current, resolveAdapter)).content !== content) return
     if (!policyMatches || outcome.status !== 'APPROVE') {
       const handoff = settings.enabled && !policyMatches
-        ? { status: 'SKIPPED', reason: '审核期间自动审批设置已更改。' } : outcome
+        ? { status: 'SKIPPED', category: 'POLICY', reason: '审核期间自动审批设置已更改。' } : outcome
       await tx.$executeRaw`
         UPDATE public.action_proposals SET auto_review_handoff = ${JSON.stringify(handoff)}::jsonb
         WHERE character_id = ${characterId}::uuid AND id = ${actionId}::uuid

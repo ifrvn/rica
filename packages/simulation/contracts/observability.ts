@@ -5,6 +5,7 @@ import { maxSimulatedTextLength } from './platforms.js'
 import { autoReviewHandoff } from '@ricajs/contracts/auto-review'
 import { participationLevel, replyDecision } from '@ricajs/contracts/model-provider'
 import { glossaryMeaning, glossaryReference, glossaryTone } from '@ricajs/contracts/glossary'
+import { chatReplyStop } from './review.js'
 
 const timestamp = z.iso.datetime({ offset: true })
 const consoleMessage = {
@@ -59,6 +60,7 @@ export const runReplayView = z.object({
   bindingVersion: z.number().int(), authEpoch: z.number().int(),
   occurredAt: timestamp, createdAt: timestamp, contextTimezone: z.string().nullable(),
   chatId: resourceId.nullable(),
+  chatStop: chatReplyStop.nullable(),
   autoReviewPending: z.boolean(),
   autoApproved: z.boolean(),
   autoReviewHandoff: autoReviewHandoff.nullable(),

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiDialog, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
+import { autoReviewHandoffLabel } from '@ricajs/contracts/auto-review'
 import type { newbiReviewView, newbiReplySummary, newbiSendView, newbiThreadView } from '../management/contracts.js'
 import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
@@ -342,7 +342,7 @@ onMounted(() => { void list() })
         </template>
         <p v-else-if="reply.status === 'WAITING'">当前无法预览正文，暂不能审批。</p>
         <UiAlert v-if="reply.autoReviewHandoff" tone="warning">
-          <strong>{{ autoReviewHandoffLabels[reply.autoReviewHandoff.status] }}</strong>
+          <strong>{{ autoReviewHandoffLabel(reply.autoReviewHandoff) }}</strong>
           <p>{{ reply.autoReviewHandoff.reason }}</p>
           <small v-if="reply.autoReviewHandoff.model">审核模型 {{ reply.autoReviewHandoff.model }}</small>
         </UiAlert>

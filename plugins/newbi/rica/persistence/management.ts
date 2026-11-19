@@ -112,7 +112,7 @@ export async function autoReviewNewbiReply(
     if (!current?.content) return
     if (!settings.enabled) {
       await tx.newbiReply.updateMany({ where: { id, characterId, status: 'WAITING', content: { not: null } },
-        data: { autoReviewHandoff: { status: 'SKIPPED', reason: '该角色未启用自动审批。' } } })
+        data: { autoReviewHandoff: { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' } } })
       return
     }
     const account = await boundAccount(tx, characterId, current.accountId)
@@ -128,7 +128,7 @@ export async function autoReviewNewbiReply(
     })
     if (!prior?.remoteCommentId) {
       await tx.newbiReply.updateMany({ where: { id, characterId, status: 'WAITING', content: { not: null } },
-        data: { autoReviewHandoff: { status: 'SKIPPED', reason: '此账号在该帖暂无已确认发送的回复，首次互动须由人工审核。' } } })
+        data: { autoReviewHandoff: { status: 'SKIPPED', category: 'POLICY', reason: '此账号在该帖暂无已确认发送的回复，首次互动须由人工审核。' } } })
       return
     }
     await tx.newbiReply.update({ where: { id }, data: { autoReviewVersion: settings.version }, select: { id: true } })
@@ -139,13 +139,13 @@ export async function autoReviewNewbiReply(
 
   async function evaluate(current: NonNullable<typeof reply>, policy: AutoReviewSettings): Promise<AutoReviewOutcome> {
     const thread = await requireConnector(current.endpoint).then(() => readThread(current)).catch(() => undefined)
-    if (!thread) return { status: 'UNAVAILABLE', reason: '无法读取 Newbi 帖子和评论，未能完成审核。' }
-    if (thread.post.isLocked) return { status: 'SKIPPED', reason: 'Newbi 帖子已锁定。' }
+    if (!thread) return { status: 'UNAVAILABLE', category: 'CONTEXT', reason: '无法读取 Newbi 帖子和评论，未能完成审核。' }
+    if (thread.post.isLocked) return { status: 'SKIPPED', category: 'POLICY', reason: 'Newbi 帖子已锁定。' }
     if (!thread.comments.some(({ id }) => id === current.previousCommentId)) {
-      return { status: 'SKIPPED', reason: '当前讨论中无法确认此账号此前的回复。' }
+      return { status: 'SKIPPED', category: 'CONTEXT', reason: '当前讨论中无法确认此账号此前的回复。' }
     }
     if (thread.comments.some(({ content }) => content.trim() === current.content.trim())) {
-      return { status: 'SKIPPED', reason: '讨论中已有相同内容的评论，请核对是否重复。' }
+      return { status: 'SKIPPED', category: 'POLICY', reason: '讨论中已有相同内容的评论，请核对是否重复。' }
     }
     const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
       comments: thread.comments.map(({ content }) => content) })
@@ -164,7 +164,7 @@ export async function autoReviewNewbiReply(
   await db.$transaction(async (tx) => {
     const policyMatches = await lockAutoReview(tx, characterId, settings.version)
     if (!policyMatches || outcome.status !== 'APPROVE') {
-      const handoff = !policyMatches ? { status: 'SKIPPED', reason: '审核期间自动审批设置已更改。' } : outcome
+      const handoff = !policyMatches ? { status: 'SKIPPED', category: 'POLICY', reason: '审核期间自动审批设置已更改。' } : outcome
       await tx.newbiReply.updateMany({
         where: { id, characterId, status: 'WAITING', executorKey, reviewDigest: reply.reviewDigest, content: reply.content },
         data: { autoReviewHandoff: handoff },

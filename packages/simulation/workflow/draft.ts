@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { reviewTarget } from '../contracts/review.js'
+import { reviewTarget, type ChatReplyStop } from '../contracts/review.js'
 import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
@@ -16,6 +16,7 @@ import type { RunContinuity } from '@ricajs/contracts/run-continuity'
 import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from '@ricajs/persistence/run-context'
 import { simulationWritingContext } from '../contracts/observability.js'
 import { recordRunModelCall } from './model-calls.js'
+import { readChatReplyStop } from './chat-review.js'
 import { glossaryReferences, learningExamples, matchChatGlossary, readChatGlossary, saveChatTerms, sourcesForTerms,
   type GlossarySnapshot } from './glossary.js'
 
@@ -24,6 +25,7 @@ type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
 
 const decisionRequest = { purpose: 'DECISION_SUPPORT' } as const
 type ParticipationDecision = ReplyDecision & { participation: Participation; glossary: GlossarySnapshot }
+type DraftSkipReason = 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY' | ChatReplyStop
 
 async function readEvidence(
   tx: Prisma.TransactionClient, runId: string, request: MemoryRequest,
@@ -79,7 +81,7 @@ async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
   provider: ModelProvider, signal: AbortSignal, observe?: {
     model: string
-    skip: (reason: 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY') => void
+    skip: (reason: DraftSkipReason) => void
     decision: (decision: ParticipationDecision) => void
     learned: (terms: ReturnType<typeof sourcesForTerms>) => void
   },
@@ -142,6 +144,13 @@ async function buildSimulatedDraft(
   }
 
   const writing = await db.$transaction(async (tx) => {
+    if (decisionInput.conversation) {
+      const stop = await readChatReplyStop(tx, runId, decision.reason)
+      if (stop) {
+        observe?.skip(stop)
+        return null
+      }
+    }
     const evidence = await readEvidence(tx, runId, writingRequest)
     if (!evidence) return null
     const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null; corePrompt: string | null }[]>`
@@ -218,7 +227,7 @@ export async function processSimulatedDraft(
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
       ...(attempt ? { generation: attempt.generation, attempts: attempt.ticket } : {}) },
     include: {
-      run: { include: { inboundEvent: { select: { adapterId: true, adapterVersion: true } } } },
+      run: { include: { inboundEvent: { select: { adapterId: true, adapterVersion: true, consoleSpeakerId: true } } } },
     },
   })
   const run = event?.run
@@ -236,9 +245,10 @@ export async function processSimulatedDraft(
     const { messageText } = await tx.inboundEvent.findUniqueOrThrow({
       where: { id: run.inboundEventId }, select: { messageText: true },
     })
-    return { scope, text: messageText, platform, adapter }
+    const stop = inbound.consoleSpeakerId ? await readChatReplyStop(tx, run.id) : null
+    return { scope, text: messageText, platform, adapter, stop }
   })
-  const scope = input?.scope
+  const scope = input?.stop ? undefined : input?.scope
   const request: WritingRequest | null = scope?.channel === 'PRIVATE'
     ? { purpose: 'PRIVATE_REPLY' }
     : scope?.channel === 'PUBLIC' && scope.conversation_id
@@ -263,10 +273,10 @@ export async function processSimulatedDraft(
   // Stay within the 30-second outbox lease. Model calls run outside the write transaction.
   const signal = AbortSignal.timeout(model.implementation.hostedModel ? 20_000 : 5_000)
   const text = input?.text ?? null
-  let skipReason: 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY' = 'DRAFT_UNAVAILABLE'
+  let skipReason: DraftSkipReason = input?.stop ?? 'DRAFT_UNAVAILABLE'
   let participationDecision: ParticipationDecision | undefined
   let learnedTerms: ReturnType<typeof sourcesForTerms> = []
-  const candidate = request && text !== null
+  const candidate = request && text !== null && !input?.stop
     ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal, {
       model: `${modelId}/${modelVersion}`,
       skip: reason => { skipReason = reason },
@@ -287,7 +297,10 @@ export async function processSimulatedDraft(
     let actionId: string | undefined
     if (run.state === 'CONTEXT_READY') {
       await saveChatTerms(tx, run.id, learnedTerms)
-      const accepted = candidate && request && await recheckDraft(tx, run.id, request, candidate)
+      const checked = candidate && request && await recheckDraft(tx, run.id, request, candidate)
+      const stop = checked && inbound.consoleSpeakerId ? await readChatReplyStop(tx, run.id, participationDecision?.reason) : null
+      if (stop) skipReason = stop
+      const accepted = checked && !stop
       const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; crossPlatformDuplicate: boolean }[]>`
         SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
           public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
@@ -342,7 +355,8 @@ export async function processSimulatedDraft(
       const { count } = await tx.agentRun.updateMany({
         where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
         data: {
-          state: proposed ? 'WAITING_APPROVAL' : skipReason === 'MODEL_NO_REPLY' ? 'SKIPPED' : 'CANCELED',
+          state: proposed ? 'WAITING_APPROVAL'
+            : ['MODEL_NO_REPLY', 'CHAT_REPEAT', 'CHAT_MOVED_ON'].includes(skipReason) ? 'SKIPPED' : 'CANCELED',
           stateReason: proposed ? null : skipReason,
           participationDecision,
           stateVersion: { increment: 1 },

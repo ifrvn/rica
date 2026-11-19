@@ -100,14 +100,15 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
       SELECT public.rica_replay_run_with_time(${scope.characterId}::uuid, ${runId}::uuid) ||
         jsonb_build_object(
           'chatId', public.rica_console_chat_for_run(${scope.characterId}::uuid, ${runId}::uuid),
+          'chatStop', chat.stop,
           'autoReviewPending', COALESCE(a.auto_review_until > statement_timestamp()
             AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL
-            AND r.state = 'WAITING_APPROVAL' AND c.auto_review_enabled, false),
+            AND r.state = 'WAITING_APPROVAL' AND c.auto_review_enabled AND chat.stop IS NULL, false),
           'autoApproved', COALESCE(approval.reviewer_id = ${autoReviewerId}, false),
           'autoReviewHandoff', CASE WHEN r.state = 'WAITING_APPROVAL' AND a.auto_review_handoff IS NOT NULL
             AND a.proposer_id IS DISTINCT FROM ${scope.actor.id}
             AND public.rica_review_payload(a.character_id,a.id) IS NOT NULL THEN a.auto_review_handoff END,
-          'executionWait', CASE WHEN r.state = 'READY' THEN public.rica_simulation_execution_wait(a.character_id,a.id) END,
+          'executionWait', CASE WHEN r.state = 'READY' AND chat.stop IS NULL THEN public.rica_simulation_execution_wait(a.character_id,a.id) END,
           'transcript', public.rica_console_simulation_transcript(${scope.characterId}::uuid, ${runId}::uuid),
           'systemPrompts', public.rica_run_system_prompts(${scope.characterId}::uuid, ${runId}::uuid),
           'participationDecision', (SELECT participation_decision FROM public.agent_runs
@@ -120,6 +121,7 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
       LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
       LEFT JOIN public.agent_runs r ON (r.character_id,r.id) = (a.character_id,a.run_id)
       LEFT JOIN public.characters c ON c.id = a.character_id
+      CROSS JOIN LATERAL (SELECT CASE WHEN r.state IN ('WAITING_APPROVAL','READY') THEN public.rica_chat_reply_stop(r.id) END AS stop OFFSET 0) chat
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
     return runReplayView.parse(row.view)

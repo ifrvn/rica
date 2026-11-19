@@ -21,6 +21,7 @@ export type AutoReviewView = z.infer<typeof autoReviewView>
 export type PublicReplyReview = Readonly<{ platform: string; draft: string; discussion: string }>
 export const autoReviewHandoff = z.object({
   status: z.enum(['REVIEW', 'SKIPPED', 'UNAVAILABLE', 'UNKNOWN']),
+  category: z.enum(['POLICY', 'CONTEXT', 'MODEL', 'RISK']).optional(),
   reason: z.string().trim().min(1).max(240).regex(/^[^\p{Cc}]+$/u),
   model: z.string().optional(),
 })
@@ -34,6 +35,14 @@ export const autoReviewHandoffLabels = {
   REVIEW: 'AI 建议人工复审', SKIPPED: '未进行 AI 审核', UNAVAILABLE: 'AI 审核未完成',
   UNKNOWN: '自动审批结果未记录',
 } satisfies Record<AutoReviewHandoff['status'], string>
+
+const handoffCategoryLabels = {
+  POLICY: '策略要求人工核对', CONTEXT: '审核上下文不足', MODEL: '审核模型未能完成', RISK: 'AI 建议人工复审',
+} satisfies Record<NonNullable<AutoReviewHandoff['category']>, string>
+
+export function autoReviewHandoffLabel(handoff: AutoReviewHandoff) {
+  return handoff.category ? handoffCategoryLabels[handoff.category] : autoReviewHandoffLabels[handoff.status]
+}
 
 export const missingAutoReviewHandoff = {
   status: 'UNKNOWN', reason: '此提案暂无可用的自动审批结果，请人工核对。',

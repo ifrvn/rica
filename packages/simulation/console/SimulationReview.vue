@@ -2,7 +2,8 @@
 import { nextTick, ref, watch } from 'vue'
 import { UiAlert, UiBadge, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
 import { focusRecord, formatTime } from '@ricajs/console-shared/console-data'
-import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
+import { autoReviewHandoffLabel } from '@ricajs/contracts/auto-review'
+import { chatReplyStopLabels } from '../contracts/review.js'
 import type { ActionView } from '../contracts/review.js'
 
 const props = defineProps<{
@@ -111,6 +112,7 @@ function statusTone(state: ActionView['state']) {
           <div v-if="selected.review"><dt>审批理由</dt><dd style="white-space: pre-wrap">{{ selected.review.reason || '当时未填写' }}</dd></div>
         </dl>
         <UiAlert v-if="selected.autoReviewPending" tone="info">AI 审核中，结果会自动更新。</UiAlert>
+        <UiAlert v-if="selected.chatStop" tone="info">{{ chatReplyStopLabels[selected.chatStop] }}</UiAlert>
         <UiAlert v-if="!selected.autoReviewHandoff && selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
           此回复与其他平台的内容相似，请核对后再审批。
         </UiAlert>
@@ -155,7 +157,7 @@ function statusTone(state: ActionView['state']) {
         </template>
         <p v-else-if="selected.state === 'WAITING_APPROVAL'">当前无法预览正文，暂不能审批。</p>
         <UiAlert v-if="selected.content && selected.autoReviewHandoff && selected.state === 'WAITING_APPROVAL'" tone="warning">
-          <strong>{{ autoReviewHandoffLabels[selected.autoReviewHandoff.status] }}</strong>
+          <strong>{{ autoReviewHandoffLabel(selected.autoReviewHandoff) }}</strong>
           <p>{{ selected.autoReviewHandoff.reason }}</p>
           <small v-if="selected.autoReviewHandoff.model">审核模型 {{ selected.autoReviewHandoff.model }}</small>
         </UiAlert>

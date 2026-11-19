@@ -77,6 +77,8 @@ enum RunStateReason {
   PROPOSAL_EXPIRED
   MODEL_BUDGET_EXHAUSTED
   MODEL_NO_REPLY
+  CHAT_REPEAT
+  CHAT_MOVED_ON
 }
 
 model Character {

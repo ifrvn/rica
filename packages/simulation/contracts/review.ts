@@ -28,12 +28,19 @@ export const simulationReviewContext = z.object({
 export const actionReviewQuery = listQuery.extend({
   status: z.enum(['WAITING', 'HISTORY', 'APPROVE', 'REJECT']).optional(),
 })
+export const chatReplyStop = z.enum(['CHAT_REPEAT', 'CHAT_MOVED_ON'])
+export type ChatReplyStop = z.infer<typeof chatReplyStop>
+export const chatReplyStopLabels = {
+  CHAT_REPEAT: '同一群员近期发过相同消息，已有回复或待处理提案。',
+  CHAT_MOVED_ON: '这条接话已错过时机。',
+} satisfies Record<ChatReplyStop, string>
 export const actionView = z.object({
   id: z.uuid(), runId: z.uuid(), mode: z.literal('SIMULATION'), kind: z.literal('REPLY'),
   state: z.enum(['WAITING_APPROVAL', 'READY', 'REJECTED', 'CANCELED', 'EXPIRED', 'EXECUTING', 'RECONCILING', 'SIMULATED', 'BLOCKED']),
   version: z.number().int(), target: reviewTarget,
   expiresAt: z.iso.datetime(), reviewDigest: z.string(),
   riskCodes: z.array(z.string()), content: z.string().nullable(),
+  chatStop: chatReplyStop.nullable(),
   messageContext: simulationReviewContext.nullable(),
   autoApproved: z.boolean(),
   autoReviewPending: z.boolean(),

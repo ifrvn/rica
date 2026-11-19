@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref, type Ref } from 'vue'
 import type { Page } from '@ricajs/console-shared/console-data'
-import { request } from '@ricajs/console-shared/request'
+import { request, RequestError } from '@ricajs/console-shared/request'
 import type { ActionView } from '../contracts/review.js'
 
 type Decision = 'APPROVE' | 'REJECT'
@@ -49,7 +49,7 @@ export function useSimulationReview({ characterId, reviewStatus, busy, notice, r
       await fetchQueue(current, append)
       const preview = selected.value
       if (current === revision() && !append && preview?.state === 'WAITING_APPROVAL'
-        && !actions.value.some(({ id }) => id === preview.id)) selected.value = { ...preview, content: null }
+        && !actions.value.some(({ id }) => id === preview.id)) await fetchAction(preview.id, current)
     }, current)
   }
   async function fetchAction(id: string, current: number) {
@@ -81,7 +81,13 @@ export function useSimulationReview({ characterId, reviewStatus, busy, notice, r
             'Idempotency-Key': key },
           body: JSON.stringify(data),
         },
-      )
+      ).catch(async (cause: unknown) => {
+        if (cause instanceof RequestError && (cause.code === 'STALE_REVIEW' || cause.status === 412) && current === revision()) {
+          await fetchAction(proposal.id, current)
+          await fetchQueue(current)
+        }
+        throw cause
+      })
       if (current !== revision()) return
       actions.value = actions.value.filter(({ id }) => id !== proposal.id)
       selected.value = { ...proposal, content: null, state: outcome.status, version: outcome.version,

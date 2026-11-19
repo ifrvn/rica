@@ -1,6 +1,7 @@
 import { reviewTarget } from '../contracts/review.js'
 import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import { simulationReviewPolicyVersion } from './review.js'
+import { readChatReplyStop } from './chat-review.js'
 import type { Prisma, PrismaClient, RunStateReason } from '@ricajs/persistence/prisma'
 
 const permitDurationMs = 30_000
@@ -93,7 +94,7 @@ export async function reserveSimulation(db: PrismaClient, actionId: string, reso
       return false
     }
     const blocked = !matchesSimulationAdapter(action, resolveAdapter(target.platform)) ? 'ADAPTER_MISMATCH'
-      : !payload?.allowed ? 'PAYLOAD_INVALID' : null
+      : !payload?.allowed ? (await readChatReplyStop(tx, action.runId)) ?? 'PAYLOAD_INVALID' : null
     if (blocked) {
       await transition(tx, action, 'BLOCKED', blocked)
       return false

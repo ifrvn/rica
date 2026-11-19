@@ -8,8 +8,9 @@ import SimulationReconciliation from './SimulationReconciliation.vue'
 import SimulationChat from './SimulationChat.vue'
 import { simulationAccounts } from './simulation-accounts.js'
 import { formatTime, readAll } from '@ricajs/console-shared/console-data'
-import { autoReviewHandoffLabels } from '@ricajs/contracts/auto-review'
+import { autoReviewHandoffLabel } from '@ricajs/contracts/auto-review'
 import type { ReconciliationView } from '../contracts/review.js'
+import { chatReplyStopLabels } from '../contracts/review.js'
 import { runFilterKeys } from './run-filters.js'
 import { request, RequestError } from '@ricajs/console-shared/request'
 
@@ -56,12 +57,14 @@ const stoppedReasons: Record<string, string> = {
   PROPOSAL_EXPIRED: '提案已过有效期。',
   MODEL_BUDGET_EXHAUSTED: '角色当日模型预算不足，已跳过模型调用。',
   MODEL_NO_REPLY: '此身份选择旁听。',
+  ...chatReplyStopLabels,
 }
 const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }
 const decisionLabels = { DIRECT_REQUEST: '收到直接提问或点名', RELEVANT_TOPIC: '话题适合此身份回应',
   SOCIAL_OPENING: '适合自然接话', ALREADY_ADDRESSED: '话题已回应或重复', BYSTANDER: '适合旁听', UNCLEAR: '对话意图不明确' }
 const modelStage = { DECISION: '参与判断', WRITING: '写作', REVIEW: 'AI 审核' }
-const stopReason = computed(() => selected.value?.stateReason ? stoppedReasons[selected.value.stateReason] : undefined)
+const stopReason = computed(() => stoppedReasons[selected.value?.stateReason ?? selected.value?.chatStop ?? ''])
+const awaitingHuman = computed(() => selected.value?.state === 'WAITING_APPROVAL' && !selected.value.chatStop)
 const modelName = computed(() => [selected.value?.draft?.modelId, selected.value?.draft?.modelVersion].filter(Boolean).join(' · '))
 function accountName(id: string, platform?: string) {
   const account = accounts.value.find((item) => item.id === id)
@@ -363,7 +366,7 @@ onMounted(() => {
       <section v-if="previewId" class="console-card run-detail" aria-labelledby="run-detail-heading">
         <div class="console-section-heading">
           <h3 id="run-detail-heading" ref="detailHeading" tabindex="-1">模拟运行详情</h3>
-          <UiBadge v-if="selected" :tone="stateTone(selected.state)">{{ stateName(selected.state) }}</UiBadge>
+          <UiBadge v-if="selected" :tone="stateTone(selected.state)">{{ selected.chatStop ? '不再待处理' : stateName(selected.state) }}</UiBadge>
           <div v-if="!wide" class="run-actions">
             <UiButton size="small" variant="quiet" :disabled="busy || loadingDetail" @click="refresh">刷新运行</UiButton>
             <UiButton size="small" variant="quiet" @click="returnToChat">返回群聊</UiButton>
@@ -377,9 +380,9 @@ onMounted(() => {
           <div class="run-actions">
             <span v-if="trackingRun" class="run-muted">自动更新中</span>
             <UiButton v-if="canReview && selected.proposal && !selected.autoReviewPending" size="small"
-              :tone="selected.state === 'WAITING_APPROVAL' ? 'primary' : 'default'"
-              :variant="selected.state !== 'WAITING_APPROVAL' ? 'soft' : 'solid'" @click="openReview">
-              {{ selected.state === 'WAITING_APPROVAL' ? '前往审批' : selected.proposal.reviewDecision ? '查看审批记录' : '查看提案' }}
+              :tone="awaitingHuman ? 'primary' : 'default'"
+              :variant="awaitingHuman ? 'solid' : 'soft'" @click="openReview">
+              {{ awaitingHuman ? '前往审批' : selected.proposal.reviewDecision ? '查看审批记录' : '查看提案' }}
             </UiButton>
             <UiButton size="small" variant="quiet" @click="emit('audit', selected.id)">查看相关审计</UiButton>
             <UiButton v-if="canStart && selected.state === 'SIMULATED' && selected.proposal?.receiptAt"
@@ -388,14 +391,14 @@ onMounted(() => {
           <UiAlert v-if="selected.autoReviewPending && selected.state === 'WAITING_APPROVAL'" tone="info" title="AI 审核中">
             审核完成后会自动更新；需要人工复审时可从这里进入审批。
           </UiAlert>
-          <UiAlert v-else-if="selected.state === 'WAITING_APPROVAL'" tone="info"
+          <UiAlert v-else-if="awaitingHuman" tone="info"
             :title="canReview ? '草稿已生成，等待人工审批' : '此提案需要审批权限'">
             <p v-if="selected.autoReviewHandoff">
-              {{ autoReviewHandoffLabels[selected.autoReviewHandoff.status] }} · {{ selected.autoReviewHandoff.reason }}
+              {{ autoReviewHandoffLabel(selected.autoReviewHandoff) }} · {{ selected.autoReviewHandoff.reason }}
             </p>
             {{ canReview ? '点击「前往审批」即可查看拟回复正文，并决定是否批准。' : '请联系当前角色的管理员处理这次模拟提案。' }}
           </UiAlert>
-          <UiAlert v-if="selected.state === 'READY'" tone="info"
+          <UiAlert v-if="selected.state === 'READY' && !selected.chatStop" tone="info"
             :title="selected.autoApproved ? 'AI 已批准，等待模拟执行器' : '已批准，等待模拟执行器'">
             <template v-if="selected.executionWait">
               <p>{{ waitReasons[selected.executionWait.reason] }}</p>
@@ -412,7 +415,8 @@ onMounted(() => {
           <UiAlert v-else-if="selected.state === 'EXECUTING'" tone="info" title="已领取许可，正在等待模拟回执">
             回执写入后，这条运行会显示「模拟完成」。
           </UiAlert>
-          <UiAlert v-if="stopReason && selected.state !== 'SKIPPED'" tone="warning">{{ stopReason }}</UiAlert>
+          <UiAlert v-if="stopReason && selected.stateReason !== 'MODEL_NO_REPLY'"
+            :tone="selected.state === 'SKIPPED' ? 'info' : 'warning'">{{ stopReason }}</UiAlert>
           <dl class="run-meta">
             <div><dt>身份</dt><dd>{{ identityName(selected.identityId) }}</dd></div>
             <div><dt>平台账号</dt><dd>{{ accountName(selected.accountId) }}</dd></div>

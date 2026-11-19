@@ -800,10 +800,11 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
     const invalid = await inspect(first.action.id)
     assert.equal(invalid.body.state, 'WAITING_APPROVAL')
     assert.equal(invalid.body.autoReviewHandoff.status, 'UNAVAILABLE')
+    assert.equal(invalid.body.autoReviewHandoff.category, 'MODEL')
     verdict = { status: 'REVIEW', reason: '回复含有未核实的事实。' }
     await attempt(first)
     assert.deepEqual((await inspect(first.action.id)).body.autoReviewHandoff, {
-      status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
+      status: 'REVIEW', category: 'RISK', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
     })
     const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
     assert.equal(queue.body.items.find(({ id }: { id: string }) => id === first.action.id).autoReviewHandoff, null)
@@ -3632,6 +3633,81 @@ test('console simulation runs use an isolated conversation, one approval and one
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
   }
+})
+
+test('group reply review drops exact repeats and stale social openings while keeping direct requests', async (t) => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-chat-review') })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const root = characterPath(characterId)
+  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { slug: 'chat-reviewer', roleProfile: {} } })
+  assert.equal(identity.status, 201)
+  await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
+  const account = await owner.platformAccount.create({ data: {
+    characterId, identityId: identity.body.id, status: 'ACTIVE', platform: 'mock-a',
+    instanceKey: 'chat-review-fixture', remoteAccountId: randomUUID(),
+  } })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  const executor = simulationDatabase()
+  t.after(() => Promise.all([runtime.$disconnect(), executor.$disconnect()]))
+  const chatId = randomUUID()
+  let decisions = 0
+  const decline = { action: 'NO_OP', reason: 'BYSTANDER' }
+  const direct = { action: 'REPLY', reason: 'DIRECT_REQUEST' }
+  const social = { action: 'REPLY', reason: 'SOCIAL_OPENING' }
+  const read = async (id: string) => (await request('GET', root + '/runs/' + id + '/replay')).body
+  const send = async (speaker: string, message: string, decision: typeof direct, room = chatId) => {
+    const accepted = await request('POST', root + '/runs', { key: randomUUID(), data: { accountId: account.id, chatId: room, speaker, message } })
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.body))
+    const runId: string = accepted.body.id
+    const queued = await owner.outboxEvent.findFirstOrThrow({ where: { runId, type: runQueuedEvent } })
+    await prepareSimulatedRun(runtime, queued.eventId)
+    const draft = await owner.outboxEvent.findFirstOrThrow({ where: { runId, type: draftQueuedEvent } })
+    await processSimulatedDraft(runtime, draft.eventId, simulationPlatforms.resolveAdapter, {
+      ...localSimulationModel, implementation: {
+        ...localSimulationModel.implementation, async decide() { decisions++; return decision },
+      },
+    })
+    return read(runId)
+  }
+  const inspect = (id: string) => request('GET', root + '/actions/' + id)
+  const approve = (id: string, preview: Awaited<ReturnType<typeof inspect>>) => request('POST', root + '/actions/' + id + '/decisions', {
+    key: randomUUID(), ifMatch: preview.headers.get('etag')!,
+    data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest },
+  })
+
+  const addressed = await send('林', '@角色 方案几点开始？', direct)
+  const duplicate = await send('林', '@角色　方案几点开始？', direct)
+  assert.equal(duplicate.state, 'SKIPPED')
+  assert.equal(duplicate.stateReason, 'CHAT_REPEAT')
+  assert.equal(duplicate.proposal, null)
+  assert.equal(decisions, 1)
+  assert.equal((await send('林', '@角色　方案几点开始？', direct, randomUUID())).state, 'WAITING_APPROVAL')
+
+  const queued = await send('林', '这张图太有趣了', social)
+  const queuedPreview = await inspect(queued.proposal.id)
+  const sweepTarget = await send('周', '我也觉得这个梗很好笑', social)
+  const ready = await send('林', '这张图值得收藏', social)
+  const readyPreview = await inspect(ready.proposal.id)
+  assert.equal((await approve(ready.proposal.id, readyPreview)).body.status, 'READY')
+  for (const [speaker, message] of [['周', '有人看了下一组照片吗'], ['林', '下一组是黑白片'],
+    ['周', '我更喜欢街拍'], ['林', '这一页还有三张']]) await send(speaker, message, decline)
+
+  const waiting = (await request('GET', root + '/actions')).body.items
+  assert.ok(waiting.some(({ id }: { id: string }) => id === addressed.proposal.id))
+  assert.ok(!waiting.some(({ id }: { id: string }) => id === queued.proposal.id || id === sweepTarget.proposal.id))
+  assert.equal((await inspect(queued.proposal.id)).body.chatStop, 'CHAT_MOVED_ON')
+  assert.equal((await read(queued.id)).chatStop, 'CHAT_MOVED_ON')
+  assert.equal((await approve(queued.proposal.id, queuedPreview)).status, 409)
+  assert.equal((await read(queued.id)).stateReason, 'CHAT_MOVED_ON')
+  await sweepSimulationRetention(runtime)
+  assert.equal((await read(sweepTarget.id)).state, 'CANCELED')
+  assert.equal((await read(sweepTarget.id)).stateReason, 'CHAT_MOVED_ON')
+  await executeSimulation(executor, ready.proposal.id, simulationPlatforms.resolveAdapter)
+  assert.equal((await read(ready.id)).stateReason, 'CHAT_MOVED_ON')
+  assert.equal(await owner.simulationReceipt.count({ where: { actionId: ready.proposal.id } }), 0)
 })
 
 test('group glossary requires independent examples, stays in its room, and obeys versions and source removal', async (t) => {
