@@ -20,7 +20,7 @@ import { createAutoReviewer } from '../auto-review.js'
 import { createDiscussionAssessor } from '../discussion-assessment.js'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import { loadPackageManagement } from '../package-plugins.js'
-import { packageManagementRoute } from './package-management.js'
+import { packageManagementPlugins } from './package-management.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
@@ -87,7 +87,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
       isEnabled: () => deploymentPlugins.isEnabled(hostedModelsPluginId),
     }),
-    ...packageManagement.plugins.map((plugin) => packageManagementRoute(managementDb, plugin)),
+    ...packageManagementPlugins(managementDb, packageManagement),
   ],
 }) : undefined
 

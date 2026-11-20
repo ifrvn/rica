@@ -176,7 +176,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
 
   const accountHooks = plugins.flatMap(({ account, accountFields }) => {
     if (!account) return []
-    const fields = z.object(accountFields ?? {})
+    const fields = z.object({ pluginProfile: schema.accountView.shape.pluginProfile, ...accountFields })
     return [{ ...account, async profiles(...args: Parameters<typeof account.profiles>) {
       const project = await account.profiles(...args)
       return (row: Parameters<typeof project>[0]) => fields.parse(project(row))

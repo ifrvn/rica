@@ -5,6 +5,7 @@ import { authorize, ManagementError, type Scope } from '@ricajs/persistence/mana
 import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import type { PackageActivityView } from '../package-plugins.js'
+import { packageObject } from './package-database.js'
 
 const cursorSchema = z.tuple([z.iso.datetime(), resourceId, runActivityKind, z.string()])
 
@@ -34,8 +35,7 @@ export async function listRunActivity(db: PrismaClient, scope: Scope, query: z.i
   }
   if (query.kind !== 'SIMULATION') {
     for (const source of activityViews) {
-      // PostgreSQL does not support binding identifiers. Quote each name separately.
-      const relation = Prisma.raw([source.schema, source.view].map(name => '"' + name.replaceAll('"', '""') + '"').join('.'))
+      const relation = packageObject(source.schema, source.view)
       sources.push(Prisma.sql`
         SELECT v.id, v.kind, ${'plugin:' + source.id}::text AS platform,
           v.identity, v.account, v.account_id, v.state, v.created_at

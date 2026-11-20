@@ -22,6 +22,7 @@ import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { loadPackageManagement } from '../apps/package-plugins.js'
+import { packageManagementPlugins } from '../apps/api/package-management.js'
 import { createAutoReviewer } from '../apps/auto-review.js'
 import { deriveMemory, revokeMemoryAccess } from '@ricajs/persistence/memory'
 import { reviewTarget } from '@ricajs/simulation/contracts/review'
@@ -4005,4 +4006,106 @@ test('collaborative plans preserve identity bindings, schedule each simulator on
   } finally {
     await runtime.$disconnect()
   }
+})
+
+test('external account operations share the host transaction and enforce account scope', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-account-package-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await owner.$executeRaw`CREATE SCHEMA rica_plugin_account_fixture`
+  t.after(() => owner.$executeRaw`DROP SCHEMA rica_plugin_account_fixture CASCADE`)
+  await owner.$executeRaw`CREATE TABLE rica_plugin_account_fixture.entries (
+    character_id uuid NOT NULL, account_id uuid PRIMARY KEY, label text NOT NULL
+  )`
+  await owner.$executeRaw`CREATE VIEW rica_plugin_account_fixture.account_profiles AS
+    SELECT character_id, account_id, jsonb_build_object('label', label) AS profile FROM rica_plugin_account_fixture.entries`
+  await owner.$executeRaw`CREATE FUNCTION rica_plugin_account_fixture.register_account(uuid, uuid, text, text, jsonb)
+    RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+      BEGIN
+        INSERT INTO rica_plugin_account_fixture.entries VALUES ($1, $2, $5->>'label');
+        RETURN $5->>'label' <> 'Reject';
+      END $$`
+  await owner.$executeRaw`CREATE FUNCTION rica_plugin_account_fixture.remove_account(uuid, uuid, text, text, jsonb)
+    RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+      WITH deleted AS (DELETE FROM rica_plugin_account_fixture.entries WHERE character_id = $1 AND account_id = $2 RETURNING 1)
+      SELECT EXISTS (SELECT FROM deleted)
+    $$`
+  await owner.$executeRaw`CREATE FUNCTION rica_plugin_account_fixture.verify_resume(uuid, uuid, text, text, jsonb)
+    RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+      SELECT EXISTS (SELECT FROM rica_plugin_account_fixture.entries WHERE character_id = $1 AND account_id = $2 AND label = 'Allowed')
+    $$`
+  await owner.$executeRaw`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA rica_plugin_account_fixture FROM PUBLIC`
+  await owner.$executeRaw`GRANT USAGE ON SCHEMA rica_plugin_account_fixture TO rica_admin_api`
+  await owner.$executeRaw`GRANT SELECT ON rica_plugin_account_fixture.account_profiles TO rica_admin_api`
+  await owner.$executeRaw`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA rica_plugin_account_fixture TO rica_admin_api`
+
+  const manifest = join(directory, 'plugins.json')
+  const plugin = join(directory, 'node_modules', 'rica-account-fixture')
+  await mkdir(plugin, { recursive: true })
+  await Promise.all([
+    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ id: 'account-fixture', package: 'rica-account-fixture', version: '1.0.0',
+      database: { migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv: 'RICA_PLUGIN_FIXTURE_RUNTIME_URL' } }] })),
+    writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'rica-account-fixture', version: '1.0.0', type: 'module',
+      exports: { './package.json': './package.json', './rica': './plugin.js' } })),
+    writeFile(join(plugin, 'plugin.js'), `export const ricaPlugin = { id: 'account-fixture', sdkVersion: 1,
+      accounts: { register: 'register_account', profiles: 'account_profiles', remove: 'remove_account', verifyResume: 'verify_resume' },
+      management() { return { read(request, { readAccounts }) { return readAccounts(request.query.map(([, id]) => id)) } } }
+    }`),
+  ])
+  const fixtureUrl = new URL(config.databaseUrl)
+  fixtureUrl.searchParams.set('schema', 'rica_plugin_account_fixture')
+  const runtimeVariable = 'RICA_PLUGIN_FIXTURE_RUNTIME_URL'
+  const previous = process.env[runtimeVariable]
+  process.env[runtimeVariable] = fixtureUrl.href
+  const host = await loadPackageManagement(manifest).finally(() => {
+    if (previous === undefined) delete process.env[runtimeVariable]
+    else process.env[runtimeVariable] = previous
+  })
+  t.after(() => host.stop())
+  const target = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
+    db: management, origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: () => undefined,
+    plugins: packageManagementPlugins(management, host),
+    authenticate: async (req) => {
+      const subject = req.headers.get('Cookie')?.replace('fixture-session=', '')
+      return subject ? { issuer, subject, id: actorId(issuer, subject) } : null
+    },
+  }))
+  assert.equal((await request('GET', '/openapi.json', { target })).status, 200)
+  const pool = (characterId: string) => characterPath(characterId) + '/account-pool'
+  const register = (characterId: string, actor: string, key: string, label: string) => request('POST', pool(characterId), {
+    target, actor, key, data: { platform: 'account-fixture', instanceKey: 'fixture', remoteAccountId: key, data: { label } },
+  })
+  const rejected = await register(a, 'admin-a', 'external-registration', 'Reject')
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body))
+  assert.equal(rejected.body.error.code, 'PLUGIN_ACCOUNT_REJECTED')
+  assert.equal(await owner.platformAccountRegistration.count({ where: { platform: 'account-fixture' } }), 0)
+  assert.deepEqual(await owner.$queryRaw`SELECT label FROM rica_plugin_account_fixture.entries`, [])
+
+  const local = await register(a, 'admin-a', 'external-registration', 'Allowed')
+  const foreign = await register(b, 'admin-b', 'foreign-registration', 'Blocked')
+  assert.equal(local.status, 201, JSON.stringify(local.body))
+  assert.equal(foreign.status, 201, JSON.stringify(foreign.body))
+  assert.equal((await register(a, 'admin-a', 'external-registration', 'Allowed')).body.id, local.body.id)
+  const list = await request('GET', pool(a), { target })
+  assert.deepEqual(list.body.items.filter((row: { platform: string }) => row.platform === 'account-fixture').map((row: { pluginProfile: unknown }) => row.pluginProfile), [{ label: 'Allowed' }])
+
+  for (const [characterId, actor, registrationId] of [[a, 'admin-a', local.body.id], [b, 'admin-b', foreign.body.id]]) {
+    const identity = await request('POST', characterPath(characterId) + '/identities', { actor, key: 'external-account-identity',
+      data: { slug: 'external-account-fixture', roleProfile: {} } })
+    assert.equal(identity.status, 201, JSON.stringify(identity.body))
+    const bound = await request('POST', pool(characterId) + '/associations', { target, actor, key: 'external-account-association',
+      data: { registrationId, identityId: identity.body.id } })
+    assert.equal(bound.status, 201, JSON.stringify(bound.body))
+    const resume = await request('POST', characterPath(characterId) + '/controls', { target, actor, key: 'external-account-resume',
+      data: { scope: 'ACCOUNT', scopeId: registrationId, operation: 'RESUME' } })
+    assert.equal(resume.status, characterId === a ? 200 : 409, JSON.stringify(resume.body))
+  }
+  const batchPath = characterPath(a) + '/plugins/account-fixture/accounts?id=' + [local.body.id, foreign.body.id, accountA].join('&id=')
+  const accounts = await request('GET', batchPath, { target })
+  assert.equal(accounts.status, 200)
+  assert.deepEqual(accounts.body.map((row: { id: string; status: string }) => [row.id, row.status]), [[local.body.id, 'ACTIVE']])
+  assert.equal((await request('GET', batchPath, { target, actor: 'admin-b' })).status, 404)
+  const removable = await register(a, 'admin-a', 'removable-registration', 'Allowed')
+  const removed = await request('DELETE', pool(a) + '/' + removable.body.id, { target, key: 'external-account-remove' })
+  assert.equal(removed.status, 200, JSON.stringify(removed.body))
+  assert.deepEqual(await owner.$queryRaw`SELECT account_id FROM rica_plugin_account_fixture.entries WHERE account_id = ${removable.body.id}::uuid`, [])
 })

@@ -190,18 +190,18 @@ export async function updateIdentity(
 
 type AccountRegistration = Pick<Prisma.PlatformAccountRegistrationUncheckedCreateInput, 'platform' | 'instanceKey' | 'remoteAccountId'>
 
-type PlatformAccountRef = { platform: string; instanceKey: string; remoteAccountId: string }
+type PlatformAccountRef = { id: string; platform: string; instanceKey: string; remoteAccountId: string }
 export type PlatformAccountHooks = {
   platform: string
-  profiles(tx: Tx, accounts: PlatformAccountRef[]): Promise<(account: PlatformAccountRef) => object>
-  remove(tx: Tx, account: PlatformAccountRef): Promise<void>
-  verifyResume(tx: Tx, account: PlatformAccountRef): Promise<void>
+  profiles(tx: Tx, accounts: PlatformAccountRef[], characterId: string): Promise<(account: PlatformAccountRef) => object>
+  remove(tx: Tx, account: PlatformAccountRef, characterId: string): Promise<void>
+  verifyResume(tx: Tx, account: PlatformAccountRef, characterId: string): Promise<void>
 }
 
-async function accountProfiles(tx: Tx, accounts: PlatformAccountRef[], hooks: readonly PlatformAccountHooks[]) {
+async function accountProfiles(tx: Tx, accounts: PlatformAccountRef[], hooks: readonly PlatformAccountHooks[], characterId: string) {
   const profiles = new Map(await Promise.all(hooks.map(async ({ platform, profiles }) => {
     const owned = accounts.filter((account) => account.platform === platform)
-    return [platform, owned.length ? await profiles(tx, owned) : undefined] as const
+    return [platform, owned.length ? await profiles(tx, owned, characterId) : undefined] as const
   })))
   return (account: PlatformAccountRef) => profiles.get(account.platform)?.(account)
 }
@@ -239,7 +239,7 @@ export async function removeAccountRegistration(tx: Tx, scope: Scope, id: string
   if (!registration) unavailable()
   const removed = await tx.platformAccountRegistration.deleteMany({ where: { id, characterId: scope.characterId, boundAt: null } })
   if (!removed.count) throw new ManagementError(409, 'ACCOUNT_ALREADY_BOUND', 'Platform account already associated')
-  await hooks.find(({ platform }) => platform === registration.platform)?.remove(tx, registration)
+  await hooks.find(({ platform }) => platform === registration.platform)?.remove(tx, registration, scope.characterId)
   return { id }
 }
 
@@ -258,7 +258,7 @@ export async function listAccountPool(db: PrismaClient, scope: Scope, page: Page
     const rows = await tx.platformAccountRegistration.findMany({
       ...args, where, select: { id: true, platform: true, instanceKey: true, remoteAccountId: true },
     })
-    const profile = await accountProfiles(tx, rows, hooks)
+    const profile = await accountProfiles(tx, rows, hooks, scope.characterId)
     return makePage(rows, page, (row) => ({ ...profile(row), ...row }))
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -278,7 +278,7 @@ export async function control(tx: Tx, scope: Scope, input: Input<typeof contract
       if (!connector) {
         throw new ManagementError(409, 'STATE_CONFLICT', 'Account must complete platform authorization')
       }
-      await connector.verifyResume(tx, account)
+      await connector.verifyResume(tx, { id, ...account }, characterId)
     }
     // Pausing a reauthentication or pending account must not make it eligible for activation.
     if (operation === 'PAUSE' && account.status !== 'ACTIVE' && account.status !== 'PAUSED') {
@@ -458,7 +458,7 @@ export async function listAccounts(db: PrismaClient, scope: Scope, page: Page, h
       ...args, where,
       select: { id: true, identityId: true, platform: true, instanceKey: true, remoteAccountId: true, status: true, bindingVersion: true, createdAt: true },
     })
-    const profile = await accountProfiles(tx, rows, hooks)
+    const profile = await accountProfiles(tx, rows, hooks, scope.characterId)
     return makePage(rows, page, (row) => {
       const { bindingVersion, createdAt: _, remoteAccountId: __, ...view } = row
       return { ...profile(row), ...view, version: bindingVersion }

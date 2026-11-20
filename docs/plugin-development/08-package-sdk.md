@@ -2,15 +2,15 @@
 
 Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Worker、迁移任务和前端构建的共同输入。新版 SDK 按能力独立演进，公共签名使用可序列化的数据，插件各自管理 Prisma schema 和生成的 Client。
 
-当前实现覆盖部署清单加载、只读管理接口、Worker 生命周期、独立 Prisma 迁移和统一活动分页。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
+当前实现覆盖部署清单加载、只读管理接口、Worker 生命周期、独立 Prisma 迁移、统一活动分页和账号接入。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
 
 ```json
 {"version": 1, "plugins": [{"id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0", "config": {"label": "Acme"}}]}
 ```
 
-包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`worker` 或 `activity` 其中一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
+包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`worker`、`activity` 或 `accounts` 其中一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
 
-`management(config, context)` 可异步创建实例，返回 `read(request)` 和可选的 `stop()`。`read` 接收角色 ID、调用者 ID、插件内路径和保留重复项的查询参数，返回 JSON 值。宿主只转发已通过权限校验的 GET 请求。插件写查询时仍应使用已授权的 `characterId` 筛选插件数据。
+`management(config, context)` 可异步创建实例，返回 `read(request, services)` 和可选的 `stop()`。`request` 包含角色 ID、调用者 ID、插件内路径和保留重复项的查询参数。`read` 返回 JSON，宿主只转发已通过权限校验的 GET 请求。插件查询自己的数据库时仍应使用已授权的 `characterId` 筛选数据。
 
 ### Worker 生命周期
 
@@ -41,6 +41,24 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 | `created_at` | `timestamptz`，保留微秒 |
 
 每条记录引用当前 Rica 角色的已绑定账号。同一插件在一个角色下的 `(created_at, id, kind)` 必须唯一。宿主验证账号归属后，与其他活动来源统一排序和分页，并将来源标记为 `plugin:<id>`。授予 `rica_admin_api` 插件 schema 的 `USAGE` 和该视图的 `SELECT` 即可，插件可通过视图只公开摘要字段。控制台目前展示外部插件的摘要，详情随插件 UI 接入提供。
+
+### 账号接入和事务
+
+有 `accounts` 能力的包以插件 ID 作为平台名。账号池复用宿主的会话、权限、审计和幂等逻辑。登记使用 `POST /v1/characters/{characterId}/account-pool`，提交 `platform`、`instanceKey`、`remoteAccountId` 和可选 JSON `data`。关联账号仍使用账号池的 `associations` 路由。控制台表单可在后续 UI 扩展中接入。
+
+```ts
+accounts: {
+  register: 'register_account',
+  profiles: 'account_profiles',
+  remove: 'remove_account',
+  verifyResume: 'verify_resume',
+}
+```
+
+- `register` 必填。`register`、`remove` 和 `verifyResume` 指向宿主数据库中插件 schema 下的函数。签名为 `(character_id uuid, account_id uuid, instance_key text, remote_account_id text, data jsonb) RETURNS boolean`。登记使用宿主生成的 ID，关联后沿用此 ID。删除和恢复的 `data` 为 JSON `null`。
+- 宿主在同一事务中调用声明的函数，传入已授权的角色和账号。函数返回 `true` 才继续提交，返回 `false` 或抛出错误会回滚宿主和插件的写入。仅向 `rica_admin_api` 授予 schema 的 `USAGE` 和指定函数的 `EXECUTE`。如使用 `SECURITY DEFINER`，设定固定的 `search_path`、限定对象名，并撤销 `PUBLIC` 执行权限。事务函数处理本地数据库变更，外部请求无法随数据库回滚。
+- `remove` 可选，省略时仅删除宿主的未绑定登记。省略 `verifyResume` 时，宿主拒绝激活该平台账号。可选的 `profiles` 声明只读视图，提供 `character_id uuid`、`account_id uuid`、`profile jsonb`，每个账号最多一行。宿主分页后批量查视图，并通过 `pluginProfile` 返回公开资料。
+- `services.readAccounts(ids)` 供已声明 `accounts` 的插件在管理 `read` 回调中使用。每次最多 100 个 UUID，只返回当前角色在该插件平台下的已绑定账号，字段包含身份、远端标识、状态和绑定版本。每次查询重新检查调用者的角色访问权限。
 
 ## 部署和生命周期
 

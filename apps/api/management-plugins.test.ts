@@ -32,7 +32,10 @@ test('an installed package exposes scoped reads only at its pinned version', asy
     writeFile(join(pluginDirectory, 'plugin.js'), `
       import { writeFile } from 'node:fs/promises'
       export const ricaPlugin = { id: 'acme', sdkVersion: 1, async management(config) {
-        return { async read(request) { return { name: config.name, ...request } },
+        return { async read(request, { readAccounts }) {
+          if (request.path === '/host-accounts') return readAccounts([])
+          return { name: config.name, ...request }
+        },
           stop() { return writeFile(config.stopped, '') } }
       } }
     `),
@@ -50,6 +53,7 @@ test('an installed package exposes scoped reads only at its pinned version', asy
     const path = `/characters/${characterId}/plugins/acme/records?tag=a&tag=b`
     assert.equal((await app.request(path)).status, 401)
     assert.equal((await app.request(path.replace(characterId, '10000000-0000-4000-8000-000000000002'), { headers })).status, 404)
+    assert.equal((await app.request(`/characters/${characterId}/plugins/acme/host-accounts`, { headers })).status, 403)
     const result = await app.request(path, { headers })
     assert.equal(result.status, 200)
     assert.deepEqual(await result.json(), { characterId, actorId: 'operator', path: '/records',

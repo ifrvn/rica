@@ -8,8 +8,21 @@ export type PluginReadRequest = Readonly<{
 }>
 
 export type PluginManagement = Readonly<{
-  read(request: PluginReadRequest): Promise<PluginJson>
+  read(request: PluginReadRequest, services: PluginReadServices): Promise<PluginJson>
   stop?(): void | Promise<void>
+}>
+
+export type PluginAccount = Readonly<{
+  id: string
+  identityId: string
+  instanceKey: string
+  remoteAccountId: string
+  status: string
+  bindingVersion: number
+}>
+
+export type PluginReadServices = Readonly<{
+  readAccounts(ids: readonly string[]): Promise<PluginAccount[]>
 }>
 
 export type PluginContext = Readonly<{ databaseUrl?: string }>
@@ -24,9 +37,19 @@ export type PluginWorker = Readonly<{
 type ManagementFactory = (config: PluginJson, context: PluginContext) => PluginManagement | Promise<PluginManagement>
 type WorkerFactory = (config: PluginJson, context: PluginWorkerContext) => PluginWorker
 export type PluginActivity = Readonly<{ view: string }>
+export type PluginAccounts = Readonly<{
+  register: string
+  profiles?: string
+  remove?: string
+  verifyResume?: string
+}>
 
-export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1 } & (
-  { management: ManagementFactory; worker?: WorkerFactory; activity?: PluginActivity } |
-  { management?: ManagementFactory; worker: WorkerFactory; activity?: PluginActivity } |
-  { management?: ManagementFactory; worker?: WorkerFactory; activity: PluginActivity }
-)>
+type Capabilities = {
+  management: ManagementFactory
+  worker: WorkerFactory
+  activity: PluginActivity
+  accounts: PluginAccounts
+}
+type DeclaredCapability = { [K in keyof Capabilities]: Pick<Capabilities, K> }[keyof Capabilities]
+
+export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1 } & Partial<Capabilities> & DeclaredCapability>

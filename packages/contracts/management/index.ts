@@ -80,6 +80,7 @@ export const accountBindingInput = z.strictObject({ registrationId: resourceId, 
 export const accountRegistrationView = z.strictObject({
   id: resourceId, platform: z.string(),
   instanceKey: z.string(), remoteAccountId: z.string(),
+  pluginProfile: z.record(z.string(), z.unknown()).optional(),
 })
 export const automationEligibilityView = z.object({
   accountId: resourceId, identityId: resourceId, bindingVersion: z.number().int(),
@@ -226,6 +227,7 @@ export const identityView = z.object({
 export const accountView = z.object({
   id: z.uuid(), identityId: z.uuid(), platform: z.string(), instanceKey: z.string(),
   status: z.string(), version: z.number().int(),
+  pluginProfile: z.record(z.string(), z.unknown()).optional(),
 })
 export const memoryView = z.object({
   id: z.uuid(), identityId: z.uuid().nullable(), accountId: z.uuid().nullable(),

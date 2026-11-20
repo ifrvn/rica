@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { startPluginHost, type PluginDefinition, type PluginHostError } from '@ricajs/plugin-host'
-import type { PluginManagement, RicaPlugin } from '@ricajs/plugin-host/sdk'
+import type { PluginAccounts, PluginManagement, RicaPlugin } from '@ricajs/plugin-host/sdk'
 
 const pluginId = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(50)
 const packageName = z.string().regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/).max(214)
@@ -18,9 +18,14 @@ const manifestSchema = z.strictObject({
   })),
 })
 const packageIdentity = z.object({ name: packageName, version })
-const activityView = z.strictObject({ view: z.string().regex(/^[a-z][a-z0-9_]{0,62}$/) })
+const identifier = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/)
+const activityView = z.strictObject({ view: identifier })
+const accountOperations = z.strictObject({
+  register: identifier, profiles: identifier.optional(), remove: identifier.optional(), verifyResume: identifier.optional(),
+})
 
 export type PackageActivityView = Readonly<{ id: string; schema: string; view: string }>
+export type PackageAccounts = Readonly<{ id: string; schema: string; operations: PluginAccounts }>
 
 export async function readPackagePlugins(manifestPath: string | undefined) {
   if (!manifestPath) return []
@@ -75,7 +80,7 @@ async function readPackageModules(manifestPath: string | undefined) {
   for (const entry of await readPackagePlugins(manifestPath)) {
     const { ricaPlugin }: { ricaPlugin?: RicaPlugin } = await import(pathToFileURL(entry.resolveExport('/rica')).href)
     if (ricaPlugin?.id !== entry.id || ricaPlugin.sdkVersion !== 1 ||
-        (ricaPlugin.management === undefined && ricaPlugin.worker === undefined && ricaPlugin.activity === undefined) ||
+        (ricaPlugin.management === undefined && ricaPlugin.worker === undefined && ricaPlugin.activity === undefined && ricaPlugin.accounts === undefined) ||
         (ricaPlugin.management !== undefined && typeof ricaPlugin.management !== 'function') ||
         (ricaPlugin.worker !== undefined && typeof ricaPlugin.worker !== 'function')) {
       throw new Error('Unsupported Rica plugin SDK or capabilities: ' + entry.id)
@@ -84,7 +89,11 @@ async function readPackageModules(manifestPath: string | undefined) {
     if (!activity.success || (activity.data && !entry.database)) {
       throw new Error('Invalid Rica plugin activity view: ' + entry.id)
     }
-    modules.push({ entry, ricaPlugin, activity: activity.data })
+    const accounts = accountOperations.optional().safeParse(ricaPlugin.accounts)
+    if (!accounts.success || (accounts.data && !entry.database)) {
+      throw new Error('Invalid Rica plugin account operations: ' + entry.id)
+    }
+    modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data })
   }
   return modules
 }
@@ -92,8 +101,10 @@ async function readPackageModules(manifestPath: string | undefined) {
 export async function loadPackageManagement(manifestPath: string | undefined) {
   const definitions: PluginDefinition<PluginManagement>[] = []
   const activityViews: PackageActivityView[] = []
-  for (const { entry, ricaPlugin, activity } of await readPackageModules(manifestPath)) {
+  const accountPlugins: PackageAccounts[] = []
+  for (const { entry, ricaPlugin, activity, accounts } of await readPackageModules(manifestPath)) {
     if (activity) activityViews.push({ id: entry.id, schema: packageSchema(entry.id), view: activity.view })
+    if (accounts) accountPlugins.push({ id: entry.id, schema: packageSchema(entry.id), operations: accounts })
     const createManagement = ricaPlugin.management
     if (!createManagement) continue
     const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
@@ -102,7 +113,7 @@ export async function loadPackageManagement(manifestPath: string | undefined) {
       create() {
         let management: PluginManagement | undefined
         return {
-          implementation: { read: (request) => management!.read(request) },
+          implementation: { read: (request, services) => management!.read(request, services) },
           async start() {
             management = await createManagement(entry.config, { databaseUrl })
             if (typeof management?.read !== 'function' || (management.stop !== undefined && typeof management.stop !== 'function')) {
@@ -115,7 +126,7 @@ export async function loadPackageManagement(manifestPath: string | undefined) {
     })
   }
   const host = await startPluginHost('package-management', definitions, definitions.map(({ id }) => ({ id })))
-  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, stop: host.stop }
+  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, accountPlugins, stop: host.stop }
 }
 
 export async function startPackageWorkers(manifestPath: string | undefined, shutdown: AbortSignal,
