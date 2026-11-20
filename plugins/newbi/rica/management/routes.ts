@@ -323,7 +323,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
         SELECT r.id, 'PROPOSAL'::text AS kind, a.platform,
           coalesce(v.role_profile->>'displayName', i.slug) AS identity,
           coalesce(nullif(c.username, ''), a.remote_account_id) AS account, r.account_id, r.status AS state, r.created_at
-        FROM public.newbi_replies r
+        FROM rica_plugin_newbi.replies r
         JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
         JOIN public.identities i ON (i.character_id, i.id) = (r.character_id, r.identity_id)
         LEFT JOIN public.identity_versions v ON (v.character_id, v.identity_id, v.version) = (i.character_id, i.id, i.active_version)

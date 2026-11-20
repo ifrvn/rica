@@ -121,7 +121,7 @@ after(async () => {
       } })
       await tx.managementAudit.deleteMany({ where })
       await tx.managementMembership.deleteMany({ where })
-      await tx.newbiReply.deleteMany({ where })
+      await tx.$executeRaw`DELETE FROM rica_plugin_newbi.replies WHERE character_id = ANY(ARRAY[${Prisma.join(characterIds)}]::uuid[])`
       await tx.agentRun.deleteMany({ where })
       await tx.inboundEvent.deleteMany({ where })
       await tx.platformAccount.deleteMany({ where })
@@ -427,7 +427,10 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
   assert.equal((await history())[0].result.reason, 'CONTEXT_CHANGED')
   assert.equal(calls, 4)
   assert.equal(sends, 0)
-  assert.equal(await owner.newbiReply.count({ where: { characterId, accountId: account.id } }), 0)
+  const [{ count }] = await owner.$queryRaw<[{ count: number }]>`
+    SELECT count(*)::integer AS count FROM rica_plugin_newbi.replies
+    WHERE character_id = ${characterId}::uuid AND account_id = ${account.id}::uuid`
+  assert.equal(count, 0)
 
   const assessmentPath = '/newbi/assessments/' + completed.body.id
   const detail = await request('GET', characterPath(characterId) + assessmentPath, { target })
@@ -666,7 +669,9 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
       WHERE account_id = ${accountId}::uuid AND post_id = ${secondDiscussion}::uuid`
     assert.ok(blocked)
     assert.equal((await request('GET', characterPath(characterId) + '/newbi/assessments/' + blocked.id)).body.result.reason, 'BACKGROUND_DISABLED')
-    assert.equal(await owner.newbiReply.count({ where: { characterId } }), 0)
+    const [{ count }] = await owner.$queryRaw<[{ count: number }]>`
+      SELECT count(*)::integer AS count FROM rica_plugin_newbi.replies WHERE character_id = ${characterId}::uuid`
+    assert.equal(count, 0)
   } finally {
     await owner.$executeRaw`DELETE FROM rica_plugin_newbi.credentials WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
   }
@@ -729,8 +734,9 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   })
   assert.equal(human.status, 200)
   assert.equal((await inspect(first.body.id)).body.reviewRecord.reason, '已核对帖子。')
-  await owner.newbiReply.update({ where: { id: first.body.id },
-    data: { status: 'SENT', attempts: 1, remoteCommentId: previousComment.id } })
+  await owner.$executeRaw`
+    UPDATE rica_plugin_newbi.replies SET status = 'SENT', attempts = 1, remote_comment_id = ${previousComment.id}::uuid
+    WHERE id = ${first.body.id}::uuid`
 
   const key = randomUUID()
   const second = await propose('Routine follow-up', key)
@@ -754,8 +760,10 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   assert.deepEqual(manual.body.autoReviewHandoff, {
     status: 'REVIEW', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
   })
-  await owner.newbiReply.update({ where: { id: escalated.body.id }, data: { content: null } })
-  assert.equal((await owner.newbiReply.findUniqueOrThrow({ where: { id: escalated.body.id } })).autoReviewHandoff, null)
+  const [{ handoff: clearedHandoff }] = await owner.$queryRaw<[{ handoff: unknown }]>`
+    UPDATE rica_plugin_newbi.replies SET content = NULL WHERE id = ${escalated.body.id}::uuid
+    RETURNING auto_review_handoff AS handoff`
+  assert.equal(clearedHandoff, null)
   assert.equal((await inspect(escalated.body.id)).body.reviewPrompt, null)
 
   locked = true
@@ -911,7 +919,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.equal((await denied.decide('REJECT')).status, 200)
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, denied.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 0)
-    await assert.rejects(executor.newbiReply.count(), /permission denied/i)
+    await assert.rejects(executor.$queryRaw`SELECT count(*) FROM rica_plugin_newbi.replies`, /permission denied/i)
 
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
     const threadPath = approved.path + '/thread'
@@ -947,16 +955,22 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.deepEqual(Object.keys(waitingQueue.body.items[0]).sort(), ['agentId', 'createdAt', 'id', 'identity', 'postId', 'status'])
     assert.equal((await request('GET', queuePath, { actor: 'admin-b' })).status, 404)
     assert.equal((await request('GET', queuePath + '?status=WAITING&cursor=' + denied.id)).status, 422)
+    const [newer, older] = [approved.id, denied.id].sort()
+    await owner.$executeRaw`
+      UPDATE rica_plugin_newbi.replies
+      SET created_at = date_trunc('milliseconds', statement_timestamp()) +
+        CASE WHEN id = ${newer}::uuid THEN interval '2 microseconds' ELSE interval '1 microsecond' END
+      WHERE id IN (${newer}::uuid, ${older}::uuid)`
     const firstPage = await request('GET', queuePath + '?limit=1')
     assert.equal(firstPage.body.items.length, 1)
-    assert.equal(firstPage.body.nextCursor, firstPage.body.items[0].id)
+    assert.equal(firstPage.body.items[0].id, newer)
+    assert.equal(firstPage.body.nextCursor, newer)
     const secondPage = await request('GET', queuePath + '?limit=1&cursor=' + firstPage.body.nextCursor)
-    assert.deepEqual([...firstPage.body.items, ...secondPage.body.items].map((item: { id: string }) => item.id).sort(),
-      [approved.id, denied.id].sort())
+    assert.deepEqual(secondPage.body.items.map((item: { id: string }) => item.id), [older])
     assert.equal(secondPage.body.nextCursor, null)
     assert.equal((await approved.decide('APPROVE', 'admin-a')).status, 403)
     await assert.rejects(management.$executeRaw`
-      UPDATE public.newbi_replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid
+      UPDATE rica_plugin_newbi.replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid
     `, /Approval must bind the reply executor/)
     assert.equal((await approved.decide('APPROVE')).status, 200)
     assert.equal((await sendFromConsole(approved.path, 'nonmember')).status, 404)
@@ -971,11 +985,12 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       SELECT public.rica_claim_newbi_reply(${approved.id}::uuid,false,${agentId}::uuid,${endpoint},${nextExecutor}) AS claim
     `
     assert.equal(foreignClaim.claim, null)
-    await owner.newbiReply.update({ where: { id: approved.id }, data: { content: approved.content + '\n\nAI 披露：AI role' } })
+    await owner.$executeRaw`
+      UPDATE rica_plugin_newbi.replies SET content = ${approved.content + '\n\nAI 披露：AI role'} WHERE id = ${approved.id}::uuid`
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, approved.id), { status: 'UNAVAILABLE' })
     assert.equal(reads, readCount)
     assert.equal(writes, 0)
-    await owner.newbiReply.update({ where: { id: approved.id }, data: { content: approved.content } })
+    await owner.$executeRaw`UPDATE rica_plugin_newbi.replies SET content = ${approved.content} WHERE id = ${approved.id}::uuid`
     currentAgent = randomUUID()
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, approved.id), { status: 'UNAVAILABLE' })
     assert.equal(writes, 0)
@@ -1069,7 +1084,8 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       { status: 'UNAVAILABLE', retryNotBefore: preview.retryNotBefore })
     assert.equal(writes, 3)
     preflightLimit = false
-    const passCooldown = () => owner.newbiReply.update({ where: { id: limited.id }, data: { retryNotBefore: new Date(0) } })
+    const passCooldown = () => owner.$executeRaw`
+      UPDATE rica_plugin_newbi.replies SET retry_not_before = ${new Date(0)} WHERE id = ${limited.id}::uuid`
     await passCooldown()
     writeFailure = 'LIMIT'
     const rateLimited = await executeNewbiReply(executor, client, executorKey, limited.id)

@@ -14,6 +14,19 @@ const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 function missing(): never { throw new ManagementError(404, 'NOT_FOUND', 'Newbi pilot resource not found') }
 function conflict(): never { throw new ManagementError(409, 'STATE_CONFLICT', 'Newbi reply is no longer eligible') }
 
+type ReplyBinding = { accountId: string; bindingVersion: number; authEpoch: number; expiresAt: Date }
+type ReplySummary = { id: string; status: string; postId: string; createdAt: Date; agentId: string; identity: string }
+type ReplyDetail = ReplySummary & {
+  accountId: string; identityId: string; endpoint: string; content: string | null; reviewDigest: string; executorKey: string
+  reviewerId: string | null; autoReviewHandoff: unknown; reviewRecord: unknown; reviewPrompt: unknown
+  attempts: number; remoteCommentId: string | null; expiresAt: Date; retryNotBefore: Date | null
+  leaseUntil: Date | null; closureReason: string | null
+}
+
+const replyAccount = Prisma.sql`
+  JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
+  JOIN public.identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)`
+
 export async function bindNewbiAccount(tx: Prisma.TransactionClient, scope: Scope, input: z.infer<typeof newbiAccountInput> & { endpoint: string; agentId: string }) {
   const { id } = await registerAccount(tx, scope, { platform: 'newbi', instanceKey: input.endpoint, remoteAccountId: input.agentId })
   return associateAccount(tx, scope, { registrationId: id, identityId: input.identityId })
@@ -49,42 +62,55 @@ export async function createNewbiReply(
     character.authEpoch, input.postId, content, executorKey,
   ])).digest('hex')
   const [clock] = await tx.$queryRaw<{ expires: Date }[]>`SELECT clock_timestamp()+interval '24 hours' AS expires`
-  await tx.newbiReply.create({
-    data: { id, characterId: scope.characterId, identityId: identity.id, accountId: account.id,
-      authEpoch: character.authEpoch, bindingVersion: account.bindingVersion, postId: input.postId,
-      content, reviewDigest, executorKey, proposerId: scope.actor.id, expiresAt: clock.expires },
-  })
+  await tx.$executeRaw`
+    INSERT INTO rica_plugin_newbi.replies
+      (id, character_id, identity_id, account_id, auth_epoch, binding_version, post_id, content, review_digest, executor_key, proposer_id, expires_at)
+    VALUES (${id}::uuid, ${scope.characterId}::uuid, ${identity.id}::uuid, ${account.id}::uuid, ${character.authEpoch},
+      ${account.bindingVersion}, ${input.postId}::uuid, ${content}, ${reviewDigest}, ${executorKey}, ${scope.actor.id}, ${clock.expires})`
   return { id, status: 'WAITING' }
 }
 
 export async function listNewbiReplies(db: PrismaClient, scope: Scope, page: Page, { status, accountId }: z.infer<typeof newbiReplyQuery>) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
-    const where = { characterId: scope.characterId, status, accountId }
-    const args = await pageArgs(page, (id) => tx.newbiReply.findFirst({ where: { ...where, id }, select: { id: true } }))
-    const rows = await tx.newbiReply.findMany({
-      ...args, where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      select: { id: true, status: true, postId: true, createdAt: true,
-        account: { select: { remoteAccountId: true, identity: { select: { slug: true } } } } },
+    const filter = Prisma.sql`r.character_id = ${scope.characterId}::uuid
+      ${status ? Prisma.sql`AND r.status = ${status}` : Prisma.empty}
+      ${accountId ? Prisma.sql`AND r.account_id = ${accountId}::uuid` : Prisma.empty}`
+    const { take } = await pageArgs(page, async (id) => {
+      const [row] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT r.id FROM rica_plugin_newbi.replies r WHERE r.id = ${id}::uuid AND ${filter}`
+      return row
     })
-    return makePage(rows, page, ({ account, createdAt, ...reply }) => newbiReplySummary.parse({
-      ...reply, identity: account.identity.slug, agentId: account.remoteAccountId, createdAt: createdAt.toISOString(),
-    }))
+    // Keep the cursor timestamp in PostgreSQL so sub-millisecond ordering survives pagination.
+    const after = page.cursor ? Prisma.sql`AND (r.created_at, r.id) < (
+      SELECT created_at, id FROM rica_plugin_newbi.replies WHERE id = ${page.cursor}::uuid)` : Prisma.empty
+    const rows = await tx.$queryRaw<ReplySummary[]>`
+      SELECT r.id, r.status, r.post_id AS "postId", r.created_at AS "createdAt", a.remote_account_id AS "agentId", i.slug AS identity
+      FROM rica_plugin_newbi.replies r ${replyAccount}
+      WHERE ${filter} ${after}
+      ORDER BY r.created_at DESC, r.id DESC LIMIT ${take}`
+    return makePage(rows, page, ({ createdAt, ...reply }) => newbiReplySummary.parse({ ...reply, createdAt: createdAt.toISOString() }))
   }, { isolationLevel: 'RepeatableRead' })
 }
 
 export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
-    const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId },
-      include: { account: { select: { instanceKey: true, remoteAccountId: true, identity: { select: { slug: true } } } } } })
+    const [reply] = await tx.$queryRaw<ReplyDetail[]>`
+      SELECT r.id, r.account_id AS "accountId", r.identity_id AS "identityId", i.slug AS identity,
+        a.remote_account_id AS "agentId", a.instance_key AS endpoint, r.post_id AS "postId", r.content, r.review_digest AS "reviewDigest",
+        r.status, r.executor_key AS "executorKey", r.reviewer_id AS "reviewerId", r.auto_review_handoff AS "autoReviewHandoff",
+        r.review_record AS "reviewRecord", r.review_prompt AS "reviewPrompt", r.attempts, r.remote_comment_id AS "remoteCommentId",
+        r.created_at AS "createdAt", r.expires_at AS "expiresAt", r.retry_not_before AS "retryNotBefore",
+        r.lease_until AS "leaseUntil", r.closure_reason AS "closureReason"
+      FROM rica_plugin_newbi.replies r ${replyAccount}
+      WHERE r.id = ${id}::uuid AND r.character_id = ${scope.characterId}::uuid`
     if (!reply) missing()
     const canPreview = reply.status === 'WAITING' && reply.executorKey === executorKey && reply.content
     const reviewer = reply.reviewerId && reply.reviewerId !== autoReviewerId
       ? await tx.adminUser.findUnique({ where: { actorId: reply.reviewerId }, select: { username: true } }) : null
     return newbiReplyView.parse({
-      ...reply, identity: reply.account.identity.slug, agentId: reply.account.remoteAccountId,
-      endpoint: reply.account.instanceKey, expiresAt: reply.expiresAt.toISOString(),
+      ...reply, expiresAt: reply.expiresAt.toISOString(),
       content: reply.status === 'WAITING' && reply.executorKey !== executorKey ? null : reply.content,
       autoApproved: reply.reviewerId === autoReviewerId,
       reviewerName: reviewer?.username ?? null,
@@ -104,34 +130,43 @@ export async function autoReviewNewbiReply(
 ) {
   const settings = await readAutoReviewSettings(db, characterId)
   if (!settings) return
+  const waiting = Prisma.sql`id = ${id}::uuid AND character_id = ${characterId}::uuid AND status = 'WAITING'`
+
+  async function skipReview(tx: Prisma.TransactionClient, reason: string) {
+    const handoff = JSON.stringify({ status: 'SKIPPED', category: 'POLICY', reason })
+    await tx.$executeRaw`
+      UPDATE rica_plugin_newbi.replies SET auto_review_handoff = ${handoff}::jsonb
+      WHERE ${waiting} AND content IS NOT NULL`
+  }
+
   const reply = await db.$transaction(async (tx) => {
     if (settings.enabled && !await lockAutoReview(tx, characterId, settings.version)) return
-    const current = await tx.newbiReply.findFirst({
-      where: { id, characterId, status: 'WAITING', executorKey, autoReviewVersion: null },
-    })
+    const [current] = await tx.$queryRaw<(ReplyBinding & { identityId: string; postId: string; content: string | null; reviewDigest: string })[]>`
+      SELECT account_id AS "accountId", identity_id AS "identityId", binding_version AS "bindingVersion", auth_epoch AS "authEpoch",
+        expires_at AS "expiresAt", post_id AS "postId", content, review_digest AS "reviewDigest"
+      FROM rica_plugin_newbi.replies
+      WHERE ${waiting} AND executor_key = ${executorKey} AND auto_review_version IS NULL`
     if (!current?.content) return
     if (!settings.enabled) {
-      await tx.newbiReply.updateMany({ where: { id, characterId, status: 'WAITING', content: { not: null } },
-        data: { autoReviewHandoff: { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' } } })
+      await skipReview(tx, '该角色未启用自动审批。')
       return
     }
     const account = await boundAccount(tx, characterId, current.accountId)
     if (!account || account.status !== 'ACTIVE' || account.identity.status !== 'ACTIVE'
       || account.bindingVersion !== current.bindingVersion || account.identity.character.authEpoch !== current.authEpoch
       || current.expiresAt <= new Date()) return
-    const prior = await tx.newbiReply.findFirst({
-      where: {
-        characterId, accountId: current.accountId, postId: current.postId,
-        bindingVersion: current.bindingVersion, status: 'SENT',
-      },
-      select: { remoteCommentId: true }, orderBy: { createdAt: 'desc' },
-    })
+    const [prior] = await tx.$queryRaw<{ remoteCommentId: string }[]>`
+      SELECT remote_comment_id AS "remoteCommentId" FROM rica_plugin_newbi.replies
+      WHERE character_id = ${characterId}::uuid AND account_id = ${current.accountId}::uuid AND post_id = ${current.postId}::uuid
+        AND binding_version = ${current.bindingVersion} AND status = 'SENT'
+      ORDER BY created_at DESC LIMIT 1`
     if (!prior?.remoteCommentId) {
-      await tx.newbiReply.updateMany({ where: { id, characterId, status: 'WAITING', content: { not: null } },
-        data: { autoReviewHandoff: { status: 'SKIPPED', category: 'POLICY', reason: '此账号在该帖暂无已确认发送的回复，首次互动须由人工审核。' } } })
+      await skipReview(tx, '此账号在该帖暂无已确认发送的回复，首次互动须由人工审核。')
       return
     }
-    await tx.newbiReply.update({ where: { id }, data: { autoReviewVersion: settings.version }, select: { id: true } })
+    await tx.$executeRaw`
+      UPDATE rica_plugin_newbi.replies SET auto_review_version = ${settings.version}
+      WHERE id = ${id}::uuid AND character_id = ${characterId}::uuid`
     return { ...current, content: current.content, endpoint: account.instanceKey,
       agentId: account.remoteAccountId, previousCommentId: prior.remoteCommentId }
   })
@@ -151,11 +186,11 @@ export async function autoReviewNewbiReply(
       comments: thread.comments.map(({ content }) => content) })
     return review(policy, { platform: 'newbi', draft: current.content, discussion },
       { characterId, identityId: current.identityId, platform: 'newbi' }, async (systemPrompt, model) => {
-        const { count } = await db.newbiReply.updateMany({
-          where: { id, characterId, status: 'WAITING', reviewDigest: current.reviewDigest, autoReviewVersion: policy.version,
-            reviewPrompt: { equals: Prisma.DbNull } },
-          data: { reviewPrompt: { model, systemPrompt, at: new Date().toISOString(), policyVersion: policy.version } },
-        })
+        const prompt = JSON.stringify({ model, systemPrompt, at: new Date().toISOString(), policyVersion: policy.version })
+        const count = await db.$executeRaw`
+          UPDATE rica_plugin_newbi.replies SET review_prompt = ${prompt}::jsonb
+          WHERE ${waiting} AND review_digest = ${current.reviewDigest}
+            AND auto_review_version = ${policy.version} AND review_prompt IS NULL`
         if (!count) throw new Error('Newbi proposal no longer accepts a model call')
       })
   }
@@ -165,10 +200,9 @@ export async function autoReviewNewbiReply(
     const policyMatches = await lockAutoReview(tx, characterId, settings.version)
     if (!policyMatches || outcome.status !== 'APPROVE') {
       const handoff = !policyMatches ? { status: 'SKIPPED', category: 'POLICY', reason: '审核期间自动审批设置已更改。' } : outcome
-      await tx.newbiReply.updateMany({
-        where: { id, characterId, status: 'WAITING', executorKey, reviewDigest: reply.reviewDigest, content: reply.content },
-        data: { autoReviewHandoff: handoff },
-      })
+      await tx.$executeRaw`
+        UPDATE rica_plugin_newbi.replies SET auto_review_handoff = ${JSON.stringify(handoff)}::jsonb
+        WHERE ${waiting} AND executor_key = ${executorKey} AND review_digest = ${reply.reviewDigest} AND content = ${reply.content}`
       return
     }
     await decideReply(tx, characterId, autoReviewerId, id,
@@ -194,7 +228,11 @@ async function decideReply(
   requireConnector: (endpoint: string) => Promise<void>,
   autoReview?: { model: string; policyVersion: number },
 ) {
-  const reply = await tx.newbiReply.findFirst({ where: { id, characterId } })
+  const target = Prisma.sql`id = ${id}::uuid AND character_id = ${characterId}::uuid`
+  const [reply] = await tx.$queryRaw<(ReplyBinding & { proposerId: string; status: string; executorKey: string; reviewDigest: string })[]>`
+    SELECT account_id AS "accountId", binding_version AS "bindingVersion", auth_epoch AS "authEpoch", expires_at AS "expiresAt",
+      proposer_id AS "proposerId", status, executor_key AS "executorKey", review_digest AS "reviewDigest"
+    FROM rica_plugin_newbi.replies WHERE ${target}`
   if (!reply) missing()
   if (reply.proposerId === reviewerId) denyPermission()
   if (reply.status !== 'WAITING' || reply.executorKey !== executorKey || reply.reviewDigest !== input.reviewDigest) conflict()
@@ -206,17 +244,19 @@ async function decideReply(
   if (reply.expiresAt <= clock.now) conflict()
   if (input.decision === 'APPROVE') await requireConnector(account.instanceKey)
   const status = input.decision === 'APPROVE' ? 'READY' : 'REJECTED'
-  const { count } = await tx.newbiReply.updateMany({
-    where: { id, status: 'WAITING', executorKey },
-    data: { status, reviewerId, approvedExecutorKey: status === 'READY' ? executorKey : null,
-      reviewRecord: { decision: input.decision, at: clock.now.toISOString(), reviewerId, reason: input.reason ?? null, ...autoReview } },
-  })
+  const reviewRecord = JSON.stringify({ decision: input.decision, at: clock.now.toISOString(), reviewerId, reason: input.reason ?? null, ...autoReview })
+  const count = await tx.$executeRaw`
+    UPDATE rica_plugin_newbi.replies
+    SET status = ${status}, reviewer_id = ${reviewerId}, approved_executor_key = ${status === 'READY' ? executorKey : null},
+      review_record = ${reviewRecord}::jsonb
+    WHERE ${target} AND status = 'WAITING' AND executor_key = ${executorKey}`
   if (count !== 1) conflict()
   return { id, status }
 }
 
 export async function closeNewbiReply(tx: Prisma.TransactionClient, scope: Scope, id: string, input: z.infer<typeof newbiClosureInput>) {
-  const reply = await tx.newbiReply.findFirst({ where: { id, characterId: scope.characterId }, select: { id: true } })
+  const [reply] = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM rica_plugin_newbi.replies WHERE id = ${id}::uuid AND character_id = ${scope.characterId}::uuid`
   if (!reply) missing()
   const [result] = await tx.$queryRaw<{ closed: boolean }[]>`
     SELECT public.rica_close_newbi_reply(${id}::uuid, ${scope.characterId}::uuid, ${input.reason}) AS closed
@@ -256,8 +296,7 @@ export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) 
 }
 
 export async function readNewbiConnections(db: PrismaClient, characterId: string, endpoint: string) {
-  const account = { characterId, platform: 'newbi', instanceKey: endpoint }
-  const [[active], confirmed, unknown] = await Promise.all([
+  const [[active], [deliveries]] = await Promise.all([
     db.$queryRaw<{ activeAccounts: number; readFailures: number; lastReadAt: Date | null }[]>`
       SELECT count(*)::integer AS "activeAccounts", count(p.read_error)::integer AS "readFailures",
         max(p.last_succeeded_at) AS "lastReadAt"
@@ -267,21 +306,24 @@ export async function readNewbiConnections(db: PrismaClient, characterId: string
       LEFT JOIN rica_plugin_newbi.event_checkpoints p ON p.account_id = a.id
       WHERE a.character_id = ${characterId}::uuid AND a.platform = 'newbi' AND a.instance_key = ${endpoint}
         AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'`,
-    db.newbiReply.findFirst({ where: { characterId, status: 'SENT', account }, select: { id: true } }),
-    db.newbiReply.findFirst({ where: { characterId, status: 'UNKNOWN', account }, select: { id: true } }),
+    db.$queryRaw<[{ hasReceipt: boolean; hasUnknown: boolean }]>`
+      SELECT
+        EXISTS (SELECT 1 FROM rica_plugin_newbi.replies r JOIN public.platform_accounts a ON a.id = r.account_id
+          WHERE r.character_id = ${characterId}::uuid AND a.platform = 'newbi' AND a.instance_key = ${endpoint}
+            AND r.status = 'SENT') AS "hasReceipt",
+        EXISTS (SELECT 1 FROM rica_plugin_newbi.replies r JOIN public.platform_accounts a ON a.id = r.account_id
+          WHERE r.character_id = ${characterId}::uuid AND a.platform = 'newbi' AND a.instance_key = ${endpoint}
+            AND r.status = 'UNKNOWN') AS "hasUnknown"`,
   ])
-  return { ...active, lastReadAt: active.lastReadAt?.toISOString() ?? null,
-    hasReceipt: !!confirmed, hasUnknown: !!unknown }
+  return { ...active, ...deliveries, lastReadAt: active.lastReadAt?.toISOString() ?? null }
 }
 
 export async function readPendingDeliveries(db: PrismaClient, characterId: string) {
-  const counts = await db.newbiReply.groupBy({
-    by: ['status'], where: { characterId, status: { in: ['IN_FLIGHT', 'UNKNOWN'] } }, _count: true,
-  })
-  return {
-    inFlight: counts.find(({ status }) => status === 'IN_FLIGHT')?._count ?? 0,
-    unknown: counts.find(({ status }) => status === 'UNKNOWN')?._count ?? 0,
-  }
+  const [counts] = await db.$queryRaw<[{ inFlight: number; unknown: number }]>`
+    SELECT (count(*) FILTER (WHERE status = 'IN_FLIGHT'))::integer AS "inFlight",
+      (count(*) FILTER (WHERE status = 'UNKNOWN'))::integer AS "unknown"
+    FROM rica_plugin_newbi.replies WHERE character_id = ${characterId}::uuid AND status IN ('IN_FLIGHT', 'UNKNOWN')`
+  return counts
 }
 
 export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: (endpoint: string, agentId: string) => Promise<boolean>) {

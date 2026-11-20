@@ -230,8 +230,11 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
         WHERE account_id = ${row.accountId}::uuid AND post_id = ${row.postId}::uuid
           AND occurred_at > ${new Date(Date.now() - retentionMs)} ${received}
         ORDER BY occurred_at DESC, seq DESC LIMIT 20`,
-      tx.newbiReply.findMany({ where: { characterId: scope.characterId, accountId: row.accountId, postId: row.postId,
-        status: 'SENT', remoteCommentId: { not: null } }, orderBy: { createdAt: 'desc' }, take: 50, select: { remoteCommentId: true } }),
+      tx.$queryRaw<{ remoteCommentId: string }[]>`
+        SELECT remote_comment_id AS "remoteCommentId" FROM rica_plugin_newbi.replies
+        WHERE character_id = ${scope.characterId}::uuid AND account_id = ${row.accountId}::uuid AND post_id = ${row.postId}::uuid
+          AND status = 'SENT' AND remote_comment_id IS NOT NULL
+        ORDER BY created_at DESC LIMIT 50`,
     ])
     return { row, account, events, receipts }
   }, { isolationLevel: 'RepeatableRead' })

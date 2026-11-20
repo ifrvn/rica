@@ -8,6 +8,8 @@ Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在
 
 讨论评估和词库分别写入 `rica_plugin_newbi.discussion_assessments`、`rica_plugin_newbi.author_terms` 和 `rica_plugin_newbi.section_glossary_samples`。评估结果和本轮词库证据在同一事务中提交。保留期任务通过受限函数清理超过 30 天的评估，来源评估删除时级联清理词库证据。
 
+回复提案、审核记录、发送状态和回执存放在 `rica_plugin_newbi.replies`。管理端在宿主授权事务中写入提案和审批，发送端通过受限函数领取和确认发送。升级时协调数据库迁移和 API、Worker 发布，旧版 API 仍会访问迁移前的表路径。
+
 ## Newbi 服务端装配 API
 
 下表描述 Newbi 包的具体调用接口。开发其他平台时，用自己的连接配置和协议实现相应能力。通用宿主接入通过 [ManagementPlugin](../../../docs/plugin-development/03-management.md#managementplugin) 完成。
