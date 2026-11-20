@@ -229,12 +229,20 @@ export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) 
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
     const account = await tx.platformAccount.findFirst({ where: { id, characterId: scope.characterId, platform: 'newbi' },
-      select: { remoteAccountId: true, newbiCheckpoint: { select: { nextPollAt: true, historyLostCount: true, lastHistoryLostAt: true, lastSucceededAt: true, readError: true } },
-        newbiEvents: { orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 50,
-          select: { seq: true, type: true, postId: true, commentId: true, occurredAt: true } } },
+      select: { remoteAccountId: true },
     })
     if (!account) missing()
-    const checkpoint = account.newbiCheckpoint
+    const [[checkpoint], events] = await Promise.all([
+      tx.$queryRaw<{ nextPollAt: Date; historyLostCount: number; lastHistoryLostAt: Date | null;
+        lastSucceededAt: Date | null; readError: string | null }[]>`
+        SELECT next_poll_at AS "nextPollAt", history_lost_count AS "historyLostCount", last_history_lost_at AS "lastHistoryLostAt",
+          last_succeeded_at AS "lastSucceededAt", read_error AS "readError"
+        FROM rica_plugin_newbi.event_checkpoints WHERE account_id = ${id}::uuid`,
+      tx.$queryRaw<{ seq: string; type: string; postId: string; commentId: string | null; occurredAt: Date }[]>`
+        SELECT seq, type, post_id AS "postId", comment_id AS "commentId", occurred_at AS "occurredAt"
+        FROM rica_plugin_newbi.events WHERE account_id = ${id}::uuid
+        ORDER BY occurred_at DESC, seq DESC LIMIT 50`,
+    ])
     return newbiInboxView.parse({
       agentId: account.remoteAccountId,
       lastSucceededAt: checkpoint?.lastSucceededAt?.toISOString() ?? null,
@@ -242,29 +250,27 @@ export async function getNewbiInbox(db: PrismaClient, scope: Scope, id: string) 
       nextPollAt: checkpoint?.nextPollAt.toISOString() ?? null,
       historyLostCount: checkpoint?.historyLostCount ?? 0,
       lastHistoryLostAt: checkpoint?.lastHistoryLostAt?.toISOString() ?? null,
-      items: account.newbiEvents.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })),
+      items: events.map(({ occurredAt, ...event }) => ({ ...event, occurredAt: occurredAt.toISOString() })),
     })
   }, { isolationLevel: 'RepeatableRead' })
 }
 
 export async function readNewbiConnections(db: PrismaClient, characterId: string, endpoint: string) {
   const account = { characterId, platform: 'newbi', instanceKey: endpoint }
-  const [active, confirmed, unknown] = await Promise.all([
-    db.platformAccount.findMany({
-      where: { ...account, status: 'ACTIVE', identity: { status: 'ACTIVE', character: { status: 'ACTIVE' } } },
-      select: { newbiCheckpoint: { select: { lastSucceededAt: true, readError: true } } },
-    }),
+  const [[active], confirmed, unknown] = await Promise.all([
+    db.$queryRaw<{ activeAccounts: number; readFailures: number; lastReadAt: Date | null }[]>`
+      SELECT count(*)::integer AS "activeAccounts", count(p.read_error)::integer AS "readFailures",
+        max(p.last_succeeded_at) AS "lastReadAt"
+      FROM public.platform_accounts a
+      JOIN public.identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)
+      JOIN public.characters c ON c.id = a.character_id
+      LEFT JOIN rica_plugin_newbi.event_checkpoints p ON p.account_id = a.id
+      WHERE a.character_id = ${characterId}::uuid AND a.platform = 'newbi' AND a.instance_key = ${endpoint}
+        AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'`,
     db.newbiReply.findFirst({ where: { characterId, status: 'SENT', account }, select: { id: true } }),
     db.newbiReply.findFirst({ where: { characterId, status: 'UNKNOWN', account }, select: { id: true } }),
   ])
-  let lastReadAt: Date | null = null
-  let readFailures = 0
-  for (const { newbiCheckpoint } of active) {
-    if (newbiCheckpoint?.readError) readFailures++
-    const succeeded = newbiCheckpoint?.lastSucceededAt
-    if (succeeded && (!lastReadAt || succeeded > lastReadAt)) lastReadAt = succeeded
-  }
-  return { activeAccounts: active.length, readFailures, lastReadAt: lastReadAt?.toISOString() ?? null,
+  return { ...active, lastReadAt: active.lastReadAt?.toISOString() ?? null,
     hasReceipt: !!confirmed, hasUnknown: !!unknown }
 }
 

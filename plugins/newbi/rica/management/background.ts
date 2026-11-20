@@ -16,7 +16,7 @@ export async function assessNewbiBackground(db: PrismaClient, readEndpoint: () =
     JOIN public.identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)
     JOIN public.characters c ON c.id = a.character_id
     JOIN rica_plugin_newbi.account_profiles k ON k.endpoint = a.instance_key AND k.agent_id::text = a.remote_account_id
-    LEFT JOIN public.newbi_event_checkpoints p ON p.account_id = a.id
+    LEFT JOIN rica_plugin_newbi.event_checkpoints p ON p.account_id = a.id
     WHERE a.platform = 'newbi' AND a.instance_key = ${endpoint}
       AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'
       AND (p.next_poll_at IS NULL OR p.next_poll_at <= statement_timestamp())

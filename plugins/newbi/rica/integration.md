@@ -4,6 +4,8 @@ Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在
 
 账号凭据保存在 `rica_plugin_newbi.credentials`。账号列表、运行活动和后台候选查询使用 `rica_plugin_newbi.account_profiles`，视图只返回接入点、Agent ID 和公开资料。凭据写入使用宿主的账号事务。读取和发送角色分别通过各自的受限数据库函数取用凭据。内置 Newbi 随宿主迁移移动原有记录。部署时停止旧版服务，执行 `rica migrate` 后启动同一发布版本的 API 和 Worker。
 
+轮询写入 `rica_plugin_newbi.events` 和 `rica_plugin_newbi.event_checkpoints`。两个表随宿主发布迁移，保留账号外键、事件去重键和轮询进度。读取组件通过受限函数领取和提交事件页，管理端读取事件摘要及检查点状态，游标和租约由轮询函数使用。
+
 ## Newbi 服务端装配 API
 
 下表描述 Newbi 包的具体调用接口。开发其他平台时，用自己的连接配置和协议实现相应能力。通用宿主接入通过 [ManagementPlugin](../../../docs/plugin-development/03-management.md#managementplugin) 完成。

@@ -23,6 +23,7 @@ import { connectNewbiSettings } from '../rica/deployment/settings.js'
 import { createManagementApp } from '../../../apps/api/management.js'
 import { sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
 import { createDatabase } from '@ricajs/persistence/client'
+import { Prisma } from '@ricajs/persistence/prisma'
 import { loadConfig } from '@ricajs/runtime/config'
 import { createDeploymentPluginStore } from '../../../apps/deployment-plugins.js'
 import { readPluginStatus, reportPluginResult } from '../../../apps/plugin-observation.js'
@@ -147,6 +148,15 @@ async function credentialCount(endpoint: string, agentId: string) {
   return row.count
 }
 
+function seedNewbiEvents(...events: { accountId: string; seq: string; type: string; postId: string;
+  commentId?: string | null; occurredAt: Date; receivedAt?: Date }[]) {
+  return owner.$executeRaw`
+    INSERT INTO rica_plugin_newbi.events (account_id, seq, type, post_id, comment_id, occurred_at, received_at)
+    VALUES ${Prisma.join(events.map(event => Prisma.sql`(${event.accountId}::uuid, ${event.seq}, ${event.type},
+      ${event.postId}::uuid, ${event.commentId ?? null}::uuid, ${event.occurredAt},
+      coalesce(${event.receivedAt ?? null}::timestamptz, clock_timestamp()))`))}`
+}
+
 function runtimeUrl() {
   const url = new URL(config.databaseUrl)
   url.searchParams.set('options', '-c role=rica_runtime')
@@ -169,19 +179,22 @@ test('Newbi database permissions are scoped to each host operation', async () =>
     await tx.$executeRaw`SET LOCAL SESSION AUTHORIZATION rica_runtime`
     const grants = () => tx.$queryRaw`
       SELECT has_function_privilege('public.rica_claim_newbi_event_page(uuid,text)', 'EXECUTE') AS reader,
+        has_function_privilege('public.rica_finish_newbi_event_page(uuid,uuid,integer,integer,jsonb,integer,text)', 'EXECUTE') AS "finishPage",
+        has_function_privilege('public.rica_sweep_newbi_events()', 'EXECUTE') AS "sweepEvents",
         has_function_privilege('public.rica_claim_newbi_reply(uuid,boolean,uuid,text,text)', 'EXECUTE') AS sender,
         has_function_privilege('public.rica_newbi_poll_connection(uuid)', 'EXECUTE') AS "readConnection",
         has_function_privilege('public.rica_newbi_send_connection(uuid)', 'EXECUTE') AS "sendConnection",
         has_schema_privilege('rica_plugin_newbi', 'USAGE') AS "credentialSchema"
     `
-    const unscoped = { reader: false, sender: false, readConnection: false, sendConnection: false, credentialSchema: false }
-    assert.deepEqual(await grants(), [unscoped])
+    const unscoped = { reader: false, finishPage: false, sweepEvents: false, sender: false,
+      readConnection: false, sendConnection: false, credentialSchema: false }
+    assert.deepEqual(await grants(), [{ ...unscoped, sweepEvents: true }])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
-    assert.deepEqual(await grants(), [{ ...unscoped, reader: true, readConnection: true }])
+    assert.deepEqual(await grants(), [{ ...unscoped, reader: true, finishPage: true, readConnection: true }])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
     assert.deepEqual(await grants(), [{ ...unscoped, sender: true, sendConnection: true }])
     await tx.$executeRaw`RESET ROLE`
-    assert.deepEqual(await grants(), [unscoped])
+    assert.deepEqual(await grants(), [{ ...unscoped, sweepEvents: true }])
   })
 })
 
@@ -285,10 +298,10 @@ test('Newbi installation gates new proposals and approvals while preserving revi
   await change({ action: 'ENABLE', id: 'newbi' }, 1)
   await change({ action: 'CONFIGURE_NEWBI', endpoint }, 2)
   const checkedAt = new Date(await databaseNow())
-  await owner.newbiEventCheckpoint.upsert({
-    where: { accountId }, create: { accountId, lastSucceededAt: checkedAt, readError: 'RATE_LIMITED' },
-    update: { lastSucceededAt: checkedAt, readError: 'RATE_LIMITED' },
-  })
+  await owner.$executeRaw`
+    INSERT INTO rica_plugin_newbi.event_checkpoints (account_id, last_succeeded_at, read_error)
+    VALUES (${accountId}::uuid, ${checkedAt}, 'RATE_LIMITED')
+    ON CONFLICT (account_id) DO UPDATE SET last_succeeded_at = EXCLUDED.last_succeeded_at, read_error = EXCLUDED.read_error`
   const connectionStatus = (id: string, actor: string) => request('GET', characterPath(id) + '/plugins', { target, actor })
   const observed = await connectionStatus(characterId, 'admin-a')
   assert.equal(observed.status, 200, JSON.stringify(observed.body))
@@ -335,10 +348,10 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
   const question = { id: randomUUID(), author: { id: 12, username: '提问者' }, content: '请问活动的开始时间？', replyToCommentId: null }
   const answered = { ...question, id: randomUUID(), content: '之前的活动在哪里？' }
   const own = { id: randomUUID(), author: { id: agentId, username: 'fixture-agent' }, content: '在社区活动室。', replyToCommentId: answered.id }
-  await owner.newbiEvent.createMany({ data: [
+  await seedNewbiEvents(
     { accountId: account.id, seq: '1', type: 'POST_REPLIED', postId, commentId: answered.id, occurredAt: new Date() },
     { accountId: account.id, seq: '2', type: 'AGENT_MENTIONED', postId, commentId: question.id, occurredAt: new Date() },
-  ] })
+  )
   const started = Promise.withResolvers<void>()
   const resume = Promise.withResolvers<void>()
   let calls = 0
@@ -486,8 +499,8 @@ test('Newbi learns corroborated author slang and isolates it across authors and 
     const postId = randomUUID()
     threads.set(postId, { post: { title: '交作业讨论', content: '大家最近在做什么？', isLocked: false,
       author: { id: authorId, username } }, comments: examples, nextCursor: null })
-    await owner.newbiEvent.create({ data: { accountId, seq: String(threads.size), type: 'POST_REPLIED', postId,
-      commentId: examples[0].id, occurredAt: new Date() } })
+    await seedNewbiEvents({ accountId, seq: String(threads.size), type: 'POST_REPLIED', postId,
+      commentId: examples[0].id, occurredAt: new Date() })
     const base = characterPath(characterId) + '/newbi'
     const started = await request('POST', base + `/accounts/${accountId}/discussions/${postId}/assessments`, { target, key: randomUUID() })
     assert.equal(started.status, 201, JSON.stringify(started.body))
@@ -541,8 +554,8 @@ test('Newbi section slang requires separate post authors and keeps author meanin
     }))
     threads.set(postId, { post: { title: '交作业讨论', content: meaning ?? '新开讨论', isLocked: false, sectionId,
       author: { id: author, username: '帖子作者' } }, comments, nextCursor: null })
-    await owner.newbiEvent.create({ data: { accountId, seq: String(threads.size), type: 'POST_REPLIED', postId,
-      commentId: comments[0]!.id, occurredAt: new Date() } })
+    await seedNewbiEvents({ accountId, seq: String(threads.size), type: 'POST_REPLIED', postId,
+      commentId: comments[0]!.id, occurredAt: new Date() })
     const base = characterPath(characterId) + '/newbi'
     const started = await request('POST', base + `/accounts/${accountId}/discussions/${postId}/assessments`, { target, key: randomUUID() })
     assert.equal(started.status, 201, JSON.stringify(started.body))
@@ -590,7 +603,7 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
   const comment = { id: randomUUID(), author: { id: 10, username: '提问者' }, content: '活动几点开始？', replyToCommentId: null }
   const ready = new Date(Date.now() - 60_000)
   const seed = (seq: string, postId: string, receivedAt: Date, occurredAt = ready) =>
-    owner.newbiEvent.create({ data: { accountId, seq, postId, commentId: comment.id, type: 'POST_REPLIED', receivedAt, occurredAt } })
+    seedNewbiEvents({ accountId, seq, postId, commentId: comment.id, type: 'POST_REPLIED', receivedAt, occurredAt })
   await seed('9', discussion, ready)
   await seed('10', discussion, new Date())
   await seed('11', randomUUID(), ready, new Date(0))
@@ -602,7 +615,8 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
       assert.equal(id, accountId)
       polls++
       const next = new Date(Date.now() + 60_000)
-      await owner.newbiEventCheckpoint.create({ data: { accountId, nextPollAt: next } })
+      await owner.$executeRaw`
+        INSERT INTO rica_plugin_newbi.event_checkpoints (account_id, next_poll_at) VALUES (${accountId}::uuid, ${next})`
       return { status: 'READ', nextAt: next.toISOString(), historyLost: false, saved: 0 }
     },
     async readConnectorThread({ postId }) {
@@ -627,7 +641,8 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
     await step()
     assert.equal(polls, 1)
     assert.equal(calls, 0)
-    await owner.newbiEvent.update({ where: { accountId_seq: { accountId, seq: '10' } }, data: { receivedAt: ready } })
+    await owner.$executeRaw`
+      UPDATE rica_plugin_newbi.events SET received_at = ${ready} WHERE account_id = ${accountId}::uuid AND seq = '10'`
     await Promise.all([step(), step()])
     await step()
     assert.equal(calls, 1)
@@ -1229,8 +1244,21 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const reader = host.plugin.implementation
     assert.equal('comment' in reader, false)
     const poll = () => pollNewbiEvents(db, reader, accountId)
-    const account = () => owner.newbiEventCheckpoint.findUniqueOrThrow({ where: { accountId } })
-    const dueNow = () => owner.newbiEventCheckpoint.update({ where: { accountId }, data: { nextPollAt: new Date(0) } })
+    async function account() {
+      const [checkpoint] = await owner.$queryRaw<{ cursor: string | null; nextPollAt: Date; lastSucceededAt: Date | null;
+        historyLostCount: number }[]>`
+        SELECT cursor, next_poll_at AS "nextPollAt", last_succeeded_at AS "lastSucceededAt", history_lost_count AS "historyLostCount"
+        FROM rica_plugin_newbi.event_checkpoints WHERE account_id = ${accountId}::uuid`
+      assert.ok(checkpoint)
+      return checkpoint
+    }
+    const dueNow = () => owner.$executeRaw`
+      UPDATE rica_plugin_newbi.event_checkpoints SET next_poll_at = ${new Date(0)} WHERE account_id = ${accountId}::uuid`
+    async function eventCount() {
+      const [result] = await owner.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::integer AS count FROM rica_plugin_newbi.events WHERE account_id = ${accountId}::uuid`
+      return result.count
+    }
     const control = (operation: 'PAUSE' | 'RESUME') => request('POST', character + '/controls', { key: randomUUID(),
       data: { scope: 'ACCOUNT', scopeId: accountId, operation, reason: 'Event polling fixture' } })
     const inbox = '/newbi/accounts/' + accountId + '/events'
@@ -1315,10 +1343,10 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(Date.parse(firstInbox.body.lastSucceededAt), caughtUp.lastSucceededAt?.getTime())
 
     assert.equal(JSON.stringify(firstInbox.body).includes(secret), false)
-    await assert.rejects(management.$queryRaw`SELECT cursor FROM public.newbi_event_checkpoints`, /permission denied/i)
+    await assert.rejects(management.$queryRaw`SELECT cursor FROM rica_plugin_newbi.event_checkpoints`, /permission denied/i)
     assert.equal((await request('GET', character + inbox, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(b) + inbox, { actor: 'admin-b' })).status, 404)
-    await assert.rejects(db.newbiEvent.count(), /permission denied/i)
+    await assert.rejects(db.$queryRaw`SELECT 1 FROM rica_plugin_newbi.events LIMIT 0`, /permission denied/i)
     await assert.rejects(db.$queryRaw`SELECT public.rica_claim_newbi_reply(null,false,null,null,null)`, /permission denied/i)
 
     await dueNow()
@@ -1368,12 +1396,12 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     releasePage()
     assert.deepEqual(await pending, { status: 'STOPPED' })
     assert.equal((await account()).cursor, 'after-reset')
-    assert.equal(await owner.newbiEvent.count({ where: { accountId } }), 2)
+    assert.equal(await eventCount(), 2)
     assert.equal(writes, 0)
 
-    await owner.newbiEvent.updateMany({ where: { accountId }, data: { occurredAt: new Date(0) } })
+    await owner.$executeRaw`UPDATE rica_plugin_newbi.events SET occurred_at = ${new Date(0)} WHERE account_id = ${accountId}::uuid`
     await sweepRuntimeRetention(runtime)
-    assert.equal(await owner.newbiEvent.count({ where: { accountId } }), 0)
+    assert.equal(await eventCount(), 0)
     assert.equal((await account()).historyLostCount, 1)
     const callsBeforeStop = calls
     await host.stop()

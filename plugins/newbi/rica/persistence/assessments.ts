@@ -65,7 +65,10 @@ async function lockAssessmentScope(tx: Prisma.TransactionClient, scope: Assessme
 export async function claimNewbiAssessment(tx: Prisma.TransactionClient, scope: Scope, accountId: string, postId: string) {
   const account = await boundAccount(tx, scope, accountId)
   if (!active(account)) throw new ManagementError(409, 'STATE_CONFLICT', 'Newbi account is inactive')
-  const event = await tx.newbiEvent.findFirst({ where: { accountId, postId, occurredAt: { gt: new Date(Date.now() - retentionMs) } }, select: { seq: true } })
+  const [event] = await tx.$queryRaw<{ seq: string }[]>`
+    SELECT seq FROM rica_plugin_newbi.events
+    WHERE account_id = ${accountId}::uuid AND post_id = ${postId}::uuid AND occurred_at > ${new Date(Date.now() - retentionMs)}
+    LIMIT 1`
   if (!event) throw new ManagementError(404, 'NOT_FOUND', 'Newbi discussion has no current event')
   return createAssessment(tx, scope.characterId, account, postId)
 }
@@ -94,7 +97,7 @@ export function backgroundDiscussions(endpoint: string, target?: Pick<Background
   return Prisma.sql`
     WITH latest AS (
       SELECT DISTINCT ON (e.account_id, e.post_id) a.character_id, e.account_id, e.post_id, e.seq, e.received_at
-      FROM public.newbi_events e
+      FROM rica_plugin_newbi.events e
       JOIN public.platform_accounts a ON a.id = e.account_id
       JOIN public.identities i ON (i.character_id, i.id) = (a.character_id, a.identity_id)
       JOIN public.characters c ON c.id = a.character_id
@@ -181,10 +184,13 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     if ('actor' in scope) await authorize(tx, scope)
     const row = await tx.newbiDiscussionAssessment.findUniqueOrThrow({ where })
     const account = await boundAccount(tx, scope, row.accountId)
+    const received = 'background' in scope ? Prisma.sql`AND received_at <= ${row.createdAt}` : Prisma.empty
     const [events, receipts] = await Promise.all([
-      tx.newbiEvent.findMany({ where: { accountId: row.accountId, postId: row.postId, occurredAt: { gt: new Date(Date.now() - retentionMs) },
-        ...('background' in scope ? { receivedAt: { lte: row.createdAt } } : {}) },
-        orderBy: [{ occurredAt: 'desc' }, { seq: 'desc' }], take: 20, select: { commentId: true, type: true } }),
+      tx.$queryRaw<{ commentId: string | null; type: string }[]>`
+        SELECT comment_id AS "commentId", type FROM rica_plugin_newbi.events
+        WHERE account_id = ${row.accountId}::uuid AND post_id = ${row.postId}::uuid
+          AND occurred_at > ${new Date(Date.now() - retentionMs)} ${received}
+        ORDER BY occurred_at DESC, seq DESC LIMIT 20`,
       tx.newbiReply.findMany({ where: { characterId: scope.characterId, accountId: row.accountId, postId: row.postId,
         status: 'SENT', remoteCommentId: { not: null } }, orderBy: { createdAt: 'desc' }, take: 50, select: { remoteCommentId: true } }),
     ])
