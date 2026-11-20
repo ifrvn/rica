@@ -200,11 +200,13 @@ test('Newbi database permissions are scoped to each host operation', async () =>
         has_schema_privilege('rica_plugin_newbi', 'USAGE') AS "pluginSchema",
         has_table_privilege((SELECT oid FROM pg_class WHERE relnamespace = 'rica_plugin_newbi'::regnamespace AND relname = 'credentials'),
           'SELECT') AS "credentialRead",
+        pg_has_role((SELECT relowner FROM pg_class WHERE relnamespace = 'rica_plugin_newbi'::regnamespace AND relname = 'credentials'),
+          'MEMBER') AS "ownsPluginData",
         EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace AND proname = 'sweep_retention'
           AND has_function_privilege(oid, 'EXECUTE')) AS "packageSweep"
     `
     const unscoped = { reader: false, finishPage: false, sweepEvents: false, sender: false,
-      readConnection: false, sendConnection: false, pluginSchema: false, credentialRead: false, packageSweep: false }
+      readConnection: false, sendConnection: false, pluginSchema: false, credentialRead: false, ownsPluginData: false, packageSweep: false }
     const runtime = { ...unscoped, sweepEvents: true, pluginSchema: true, packageSweep: installed }
     assert.deepEqual(await grants(), [runtime])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
