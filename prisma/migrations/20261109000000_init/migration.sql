@@ -627,82 +627,6 @@ $$;
 
 
 --
--- Name: rica_claim_newbi_event_page(uuid, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_claim_newbi_event_page(account uuid, endpoint text) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE
-  binding record;
-  checkpoint public.newbi_event_checkpoints%ROWTYPE;
-  stamp timestamptz;
-BEGIN
-  PERFORM c.id FROM public.platform_accounts a JOIN public.characters c ON c.id = a.character_id
-  WHERE a.id = account FOR UPDATE OF c;
-
-  SELECT a.remote_account_id,a.binding_version,c.auth_epoch INTO binding
-  FROM public.platform_accounts a JOIN public.characters c ON c.id = a.character_id
-  JOIN public.identities i ON (i.character_id,i.id) = (a.character_id,a.identity_id)
-  WHERE a.id = account AND a.platform = 'newbi' AND a.instance_key = endpoint
-    AND a.status = 'ACTIVE' AND c.status = 'ACTIVE' AND i.status = 'ACTIVE';
-  IF NOT FOUND THEN RETURN NULL; END IF;
-
-  INSERT INTO public.newbi_event_checkpoints(account_id) VALUES (account) ON CONFLICT DO NOTHING;
-  SELECT * INTO STRICT checkpoint FROM public.newbi_event_checkpoints WHERE account_id = account FOR UPDATE;
-  stamp := clock_timestamp();
-  IF greatest(checkpoint.next_poll_at,checkpoint.lease_until) > stamp THEN
-    RETURN jsonb_build_object('nextAt',greatest(checkpoint.next_poll_at,checkpoint.lease_until));
-  END IF;
-
-  UPDATE public.newbi_event_checkpoints SET ticket = gen_random_uuid(),lease_until = stamp+interval '30 seconds'
-  WHERE account_id = account RETURNING * INTO checkpoint;
-  RETURN jsonb_build_object('ticket',checkpoint.ticket,'cursor',checkpoint.cursor,'agentId',binding.remote_account_id,
-    'bindingVersion',binding.binding_version,'authEpoch',binding.auth_epoch);
-END
-$$;
-
-
---
--- Name: rica_claim_newbi_reply(uuid, boolean, uuid, text, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_claim_newbi_reply(reply uuid, allow_retry boolean, agent uuid, endpoint text, executor text) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE claimed public.newbi_replies%ROWTYPE;
-BEGIN
-  PERFORM c.id FROM public.characters c JOIN public.newbi_replies r ON r.character_id = c.id
-    WHERE r.id = reply FOR UPDATE OF c;
-  UPDATE public.newbi_replies r SET status = 'IN_FLIGHT',attempts = attempts+1,
-    lease_until = least(r.expires_at,clock_timestamp()+interval '30 seconds')
-  FROM public.platform_accounts a,public.identities i,public.characters c
-  WHERE r.id = reply AND public.rica_newbi_reply_matches_executor(r,executor)
-    AND a.id = r.account_id AND (i.character_id,i.id) = (r.character_id,r.identity_id)
-    AND c.id = r.character_id AND a.platform = 'newbi' AND a.instance_key = endpoint
-    AND a.remote_account_id = agent::text AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'
-    AND (r.auth_epoch,r.binding_version) = (c.auth_epoch,a.binding_version)
-    AND NOT EXISTS (
-      SELECT 1 FROM public.newbi_replies other
-      WHERE other.account_id = r.account_id AND other.id <> r.id AND other.status IN ('IN_FLIGHT','UNKNOWN')
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM public.newbi_replies other
-      WHERE other.account_id = r.account_id AND other.retry_not_before > clock_timestamp()
-    )
-    AND r.content IS NOT NULL AND r.attempts < 3 AND r.expires_at > clock_timestamp()+interval '10 seconds'
-    AND (r.status = 'READY' OR (allow_retry AND (r.status = 'UNKNOWN'
-      OR (r.status = 'IN_FLIGHT' AND r.lease_until <= clock_timestamp()))))
-  RETURNING r.* INTO claimed;
-  IF NOT FOUND THEN RETURN NULL; END IF;
-  RETURN jsonb_build_object('id',claimed.id,'postId',claimed.post_id,'content',claimed.content,'attempt',claimed.attempts);
-END
-$$;
-
-
---
 -- Name: rica_clear_stale_draft_content(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -715,25 +639,6 @@ BEGIN
   WHERE character_id = NEW.id AND content IS NOT NULL;
   RETURN NULL;
 END;
-$$;
-
-
---
--- Name: rica_close_newbi_reply(uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_close_newbi_reply(reply uuid, owner_character uuid, reason text) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-BEGIN
-  UPDATE public.newbi_replies SET status = 'CLOSED',closure_reason = reason,lease_until = NULL
-  WHERE id = reply AND character_id = owner_character AND (
-    status = 'UNKNOWN' OR (status = 'IN_FLIGHT' AND lease_until <= clock_timestamp()
-      AND (attempts >= 3 OR expires_at <= clock_timestamp()))
-  );
-  RETURN FOUND;
-END
 $$;
 
 
@@ -950,74 +855,6 @@ $$;
 
 
 --
--- Name: rica_finish_newbi_event_page(uuid, uuid, integer, integer, jsonb, integer); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_finish_newbi_event_page(account uuid, claim_ticket uuid, version integer, epoch integer, page jsonb, delay_seconds integer) RETURNS jsonb
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE
-  saved int := 0;
-  lost boolean := coalesce((page->>'historyLost')::boolean,false);
-  stamp timestamptz;
-  due timestamptz;
-BEGIN
-  -- Management takes the same character lock before changing authorization or binding.
-  PERFORM c.id FROM public.platform_accounts a JOIN public.characters c ON c.id = a.character_id
-  WHERE a.id = account FOR UPDATE OF c;
-  PERFORM 1 FROM public.platform_accounts a JOIN public.characters c ON c.id = a.character_id
-  JOIN public.identities i ON (i.character_id,i.id) = (a.character_id,a.identity_id)
-  WHERE a.id = account AND a.platform = 'newbi' AND a.binding_version = version AND c.auth_epoch = epoch
-    AND a.status = 'ACTIVE' AND c.status = 'ACTIVE' AND i.status = 'ACTIVE';
-  IF NOT FOUND THEN RETURN NULL; END IF;
-
-  stamp := clock_timestamp();
-  UPDATE public.newbi_event_checkpoints SET
-    cursor = coalesce(page->>'nextCursor',cursor),
-    history_lost_count = history_lost_count+lost::int,
-    last_history_lost_at = CASE WHEN lost THEN stamp ELSE last_history_lost_at END,
-    next_poll_at = stamp+make_interval(secs => greatest(delay_seconds,0)),
-    ticket = NULL,lease_until = NULL
-  WHERE account_id = account AND ticket = claim_ticket AND lease_until > stamp
-  RETURNING next_poll_at INTO due;
-  IF NOT FOUND THEN RETURN NULL; END IF;
-
-  INSERT INTO public.newbi_events(account_id,seq,type,post_id,comment_id,occurred_at)
-  SELECT account,item.seq,item.type,item."postId",item."commentId",item."createdAt"
-  FROM jsonb_to_recordset(page->'items') AS item(
-    seq text,type text,"postId" uuid,"commentId" uuid,"createdAt" timestamptz)
-  ON CONFLICT (account_id,seq) DO NOTHING;
-  GET DIAGNOSTICS saved = ROW_COUNT;
-  RETURN jsonb_build_object('nextAt',due,'saved',saved,'historyLost',lost);
-END
-$$;
-
-
---
--- Name: rica_finish_newbi_reply(uuid, integer, uuid, integer, boolean); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_finish_newbi_reply(reply uuid, ticket integer, remote_comment uuid, retry_seconds integer, post_locked boolean) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-BEGIN
-  IF ticket IS NULL THEN RETURN false; END IF;
-  UPDATE public.newbi_replies SET status = CASE
-      WHEN remote_comment IS NOT NULL THEN 'SENT'
-      WHEN post_locked AND ticket = 1 THEN 'CLOSED'
-      ELSE 'UNKNOWN' END,
-    remote_comment_id = remote_comment,lease_until = NULL,
-    retry_not_before = CASE WHEN retry_seconds > 0 THEN greatest(retry_not_before,
-      clock_timestamp()+make_interval(secs => retry_seconds)) ELSE retry_not_before END
-  WHERE id = reply AND attempts = ticket AND status = 'IN_FLIGHT';
-  RETURN FOUND;
-END
-$$;
-
-
---
 -- Name: rica_fold_identity_state(double precision[], double precision, public."InboundKind", jsonb); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1125,33 +962,6 @@ CREATE FUNCTION public.rica_goal_json(g public.goal_versions) RETURNS jsonb
     'title',g.title,'status',CASE WHEN g.due_at <= statement_timestamp() AND g.status IN ('DRAFT','ACTIVE','PAUSED')
       THEN 'EXPIRED' ELSE g.status END,
     'priority',g.priority,'budget',g.budget,'dueAt',g.due_at,'nextStep',g.next_step,'createdAt',g.created_at)
-$$;
-
-
---
--- Name: rica_guard_newbi_reply_executor(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_guard_newbi_reply_executor() RETURNS trigger
-    LANGUAGE plpgsql
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW.status <> 'WAITING' OR NEW.approved_executor_key IS NOT NULL THEN
-      RAISE EXCEPTION 'A current executor binding is required for new replies' USING ERRCODE = '23514';
-    END IF;
-  ELSE
-    IF NEW.executor_key IS DISTINCT FROM OLD.executor_key THEN
-      RAISE EXCEPTION 'The reply executor binding is immutable' USING ERRCODE = '23514';
-    END IF;
-    IF (NEW.status = 'READY' OR NEW.approved_executor_key IS DISTINCT FROM OLD.approved_executor_key)
-      AND NOT (OLD.status = 'WAITING' AND NEW.status = 'READY' AND NEW.approved_executor_key IS NOT NULL) THEN
-      RAISE EXCEPTION 'Approval must bind the reply executor' USING ERRCODE = '23514';
-    END IF;
-  END IF;
-  RETURN NEW;
-END
 $$;
 
 
@@ -1405,105 +1215,6 @@ CREATE FUNCTION public.rica_memory_scope() RETURNS TABLE(character_id uuid, iden
   SELECT * FROM jsonb_to_record(NULLIF(current_setting('rica.memory_scope', true), '')::jsonb)
     AS scope(character_id uuid, identity_id uuid, account_id uuid,
              conversation_id uuid, contact_id uuid, channel text, purpose text, audience text)
-$$;
-
-
---
--- Name: rica_newbi_execution_target(uuid, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_newbi_execution_target(reply uuid, executor text) RETURNS jsonb
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-  SELECT jsonb_build_object('agentId',a.remote_account_id,'endpoint',a.instance_key,'postId',r.post_id,
-    'status',r.status,'attempts',r.attempts,'leaseUntil',r.lease_until,'retryNotBefore',(
-      SELECT max(other.retry_not_before) FROM public.newbi_replies other WHERE other.account_id = r.account_id
-    ))
-  FROM public.newbi_replies r JOIN public.platform_accounts a ON a.id = r.account_id
-  JOIN public.identities i ON (i.character_id,i.id) = (r.character_id,r.identity_id)
-  JOIN public.characters c ON c.id = r.character_id
-  WHERE r.id = reply AND public.rica_newbi_reply_matches_executor(r,executor)
-    AND r.status IN ('READY','IN_FLIGHT','UNKNOWN') AND r.expires_at > statement_timestamp()
-    AND a.platform = 'newbi' AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND c.status = 'ACTIVE'
-    AND (r.auth_epoch,r.binding_version) = (c.auth_epoch,a.binding_version)
-$$;
-
-
---
--- Name: newbi_replies; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.newbi_replies (
-    id uuid NOT NULL,
-    character_id uuid NOT NULL,
-    identity_id uuid NOT NULL,
-    account_id uuid NOT NULL,
-    auth_epoch integer NOT NULL,
-    binding_version integer NOT NULL,
-    post_id uuid NOT NULL,
-    content text,
-    review_digest character varying(64) NOT NULL,
-    proposer_id text NOT NULL,
-    reviewer_id text,
-    status text DEFAULT 'WAITING'::text NOT NULL,
-    attempts integer DEFAULT 0 NOT NULL,
-    lease_until timestamp with time zone,
-    remote_comment_id uuid,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    retry_not_before timestamp with time zone,
-    closure_reason character varying(240),
-    executor_key text NOT NULL,
-    approved_executor_key text,
-    CONSTRAINT newbi_replies_attempts_check CHECK (((attempts >= 0) AND (attempts <= 3))),
-    CONSTRAINT newbi_replies_check CHECK (((status = 'SENT'::text) = (remote_comment_id IS NOT NULL))),
-    CONSTRAINT newbi_replies_check1 CHECK (((status = 'IN_FLIGHT'::text) = (lease_until IS NOT NULL))),
-    CONSTRAINT newbi_replies_check2 CHECK (((status = 'WAITING'::text) = (reviewer_id IS NULL))),
-    CONSTRAINT newbi_replies_check3 CHECK (((reviewer_id IS NULL) OR (reviewer_id <> proposer_id))),
-    CONSTRAINT newbi_replies_closure_reason_check CHECK (((closure_reason IS NULL) OR ((status = 'CLOSED'::text) AND (length(btrim((closure_reason)::text)) > 0)))),
-    CONSTRAINT newbi_replies_content_check CHECK (((content IS NULL) OR ((char_length(btrim(content)) >= 1) AND (char_length(btrim(content)) <= 4000)))),
-    CONSTRAINT newbi_replies_executor_approval_check CHECK (((approved_executor_key IS NULL) OR (executor_key = approved_executor_key))),
-    CONSTRAINT newbi_replies_review_digest_check CHECK (((review_digest)::text ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT newbi_replies_status_check CHECK ((status = ANY (ARRAY['WAITING'::text, 'READY'::text, 'REJECTED'::text, 'IN_FLIGHT'::text, 'UNKNOWN'::text, 'SENT'::text, 'CLOSED'::text])))
-);
-
-
---
--- Name: rica_newbi_reply_matches_executor(public.newbi_replies, text); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_newbi_reply_matches_executor(r public.newbi_replies, executor text) RETURNS boolean
-    LANGUAGE sql IMMUTABLE
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-  SELECT r.approved_executor_key = executor
-$$;
-
-
---
--- Name: rica_newbi_reply_preflight(uuid, text, integer, boolean); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_newbi_reply_preflight(reply uuid, executor text, retry_seconds integer, post_locked boolean) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-BEGIN
-  IF post_locked THEN
-    UPDATE public.newbi_replies r SET status = 'CLOSED'
-    WHERE r.id = reply AND r.status = 'READY' AND r.attempts = 0
-      AND public.rica_newbi_reply_matches_executor(r,executor);
-  ELSE
-    PERFORM c.id FROM public.characters c JOIN public.newbi_replies r ON r.character_id = c.id
-      WHERE r.id = reply FOR UPDATE OF c;
-    UPDATE public.newbi_replies r SET retry_not_before = greatest(r.retry_not_before,
-      clock_timestamp()+make_interval(secs => retry_seconds))
-    WHERE r.id = reply AND retry_seconds > 0 AND r.status IN ('READY','IN_FLIGHT','UNKNOWN')
-      AND public.rica_newbi_reply_matches_executor(r,executor);
-  END IF;
-  RETURN FOUND;
-END
 $$;
 
 
@@ -2557,48 +2268,6 @@ $$;
 
 
 --
--- Name: rica_sweep_newbi_events(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_sweep_newbi_events() RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE changed int;
-BEGIN
-  DELETE FROM public.newbi_events WHERE (account_id,seq) IN (
-    SELECT account_id,seq FROM public.newbi_events WHERE occurred_at <= statement_timestamp()-interval '720 hours'
-    ORDER BY occurred_at LIMIT 100 FOR UPDATE SKIP LOCKED
-  );
-  GET DIAGNOSTICS changed = ROW_COUNT;
-  RETURN changed;
-END
-$$;
-
-
---
--- Name: rica_sweep_newbi_retention(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rica_sweep_newbi_retention() RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE changed int;
-BEGIN
-  UPDATE public.newbi_replies SET content = NULL WHERE id IN (
-    SELECT id FROM public.newbi_replies
-    WHERE content IS NOT NULL AND created_at <= statement_timestamp()-interval '720 hours'
-      AND expires_at <= statement_timestamp()
-    ORDER BY created_at,id LIMIT 50 FOR UPDATE SKIP LOCKED
-  );
-  GET DIAGNOSTICS changed = ROW_COUNT;
-  RETURN changed;
-END
-$$;
-
-
---
 -- Name: rica_sweep_simulation_retention(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3311,40 +2980,6 @@ CREATE TABLE public.model_daily_usage (
 
 
 --
--- Name: newbi_event_checkpoints; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.newbi_event_checkpoints (
-    account_id uuid NOT NULL,
-    cursor character varying(2048),
-    next_poll_at timestamp with time zone DEFAULT now() NOT NULL,
-    ticket uuid,
-    lease_until timestamp with time zone,
-    history_lost_count integer DEFAULT 0 NOT NULL,
-    last_history_lost_at timestamp with time zone,
-    CONSTRAINT newbi_event_checkpoints_check CHECK (((ticket IS NULL) = (lease_until IS NULL))),
-    CONSTRAINT newbi_event_checkpoints_check1 CHECK (((history_lost_count = 0) = (last_history_lost_at IS NULL))),
-    CONSTRAINT newbi_event_checkpoints_history_lost_count_check CHECK ((history_lost_count >= 0))
-);
-
-
---
--- Name: newbi_events; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.newbi_events (
-    account_id uuid NOT NULL,
-    seq character varying(40) NOT NULL,
-    type text NOT NULL,
-    post_id uuid NOT NULL,
-    comment_id uuid,
-    occurred_at timestamp with time zone NOT NULL,
-    CONSTRAINT newbi_events_seq_check CHECK (((seq)::text ~ '^[1-9][0-9]*$'::text)),
-    CONSTRAINT newbi_events_type_check CHECK ((type = ANY (ARRAY['POST_REPLIED'::text, 'COMMENT_REPLIED'::text, 'AGENT_MENTIONED'::text])))
-);
-
-
---
 -- Name: outbox; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3817,38 +3452,6 @@ ALTER TABLE ONLY public.model_daily_usage
 
 
 --
--- Name: newbi_event_checkpoints newbi_event_checkpoints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_event_checkpoints
-    ADD CONSTRAINT newbi_event_checkpoints_pkey PRIMARY KEY (account_id);
-
-
---
--- Name: newbi_events newbi_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_events
-    ADD CONSTRAINT newbi_events_pkey PRIMARY KEY (account_id, seq);
-
-
---
--- Name: newbi_replies newbi_replies_account_id_remote_comment_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_replies
-    ADD CONSTRAINT newbi_replies_account_id_remote_comment_id_key UNIQUE (account_id, remote_comment_id);
-
-
---
--- Name: newbi_replies newbi_replies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_replies
-    ADD CONSTRAINT newbi_replies_pkey PRIMARY KEY (id);
-
-
---
 -- Name: outbox outbox_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4159,20 +3762,6 @@ CREATE INDEX memory_sources_character_id_source_id_idx ON public.memory_sources 
 
 
 --
--- Name: newbi_events_account_id_occurred_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX newbi_events_account_id_occurred_at_idx ON public.newbi_events USING btree (account_id, occurred_at);
-
-
---
--- Name: newbi_events_occurred_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX newbi_events_occurred_at_idx ON public.newbi_events USING btree (occurred_at);
-
-
---
 -- Name: outbox_processed_at_enqueued_at_created_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4373,13 +3962,6 @@ CREATE TRIGGER memories_copy_sources AFTER INSERT ON public.memories FOR EACH RO
 --
 
 CREATE TRIGGER memory_sources_freeze_after_derivation BEFORE INSERT ON public.memory_sources FOR EACH ROW EXECUTE FUNCTION public.rica_freeze_memory_sources();
-
-
---
--- Name: newbi_replies newbi_replies_guard_executor; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER newbi_replies_guard_executor BEFORE INSERT OR UPDATE OF executor_key, approved_executor_key, status ON public.newbi_replies FOR EACH ROW EXECUTE FUNCTION public.rica_guard_newbi_reply_executor();
 
 
 --
@@ -4781,30 +4363,6 @@ ALTER TABLE ONLY public.memory_sources
 
 ALTER TABLE ONLY public.model_daily_usage
     ADD CONSTRAINT model_daily_usage_character_id_fkey FOREIGN KEY (character_id) REFERENCES public.characters(id) ON DELETE RESTRICT;
-
-
---
--- Name: newbi_event_checkpoints newbi_event_checkpoints_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_event_checkpoints
-    ADD CONSTRAINT newbi_event_checkpoints_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.platform_accounts(id) ON DELETE CASCADE;
-
-
---
--- Name: newbi_events newbi_events_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_events
-    ADD CONSTRAINT newbi_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.platform_accounts(id) ON DELETE CASCADE;
-
-
---
--- Name: newbi_replies newbi_replies_character_id_identity_id_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.newbi_replies
-    ADD CONSTRAINT newbi_replies_character_id_identity_id_account_id_fkey FOREIGN KEY (character_id, identity_id, account_id) REFERENCES public.platform_accounts(character_id, identity_id, id) ON DELETE RESTRICT;
 
 
 --
@@ -5227,34 +4785,10 @@ GRANT ALL ON FUNCTION public.rica_change_contact_boundary(target_character uuid,
 
 
 --
--- Name: FUNCTION rica_claim_newbi_event_page(account uuid, endpoint text); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_claim_newbi_event_page(account uuid, endpoint text) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_claim_newbi_event_page(account uuid, endpoint text) TO rica_newbi_poller;
-
-
---
--- Name: FUNCTION rica_claim_newbi_reply(reply uuid, allow_retry boolean, agent uuid, endpoint text, executor text); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_claim_newbi_reply(reply uuid, allow_retry boolean, agent uuid, endpoint text, executor text) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_claim_newbi_reply(reply uuid, allow_retry boolean, agent uuid, endpoint text, executor text) TO rica_newbi_executor;
-
-
---
 -- Name: FUNCTION rica_clear_stale_draft_content(); Type: ACL; Schema: public; Owner: -
 --
 
 REVOKE ALL ON FUNCTION public.rica_clear_stale_draft_content() FROM PUBLIC;
-
-
---
--- Name: FUNCTION rica_close_newbi_reply(reply uuid, owner_character uuid, reason text); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_close_newbi_reply(reply uuid, owner_character uuid, reason text) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_close_newbi_reply(reply uuid, owner_character uuid, reason text) TO rica_admin_api;
 
 
 --
@@ -5315,22 +4849,6 @@ GRANT ALL ON FUNCTION public.rica_finish_action_review(target_character uuid, ta
 
 
 --
--- Name: FUNCTION rica_finish_newbi_event_page(account uuid, claim_ticket uuid, version integer, epoch integer, page jsonb, delay_seconds integer); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_finish_newbi_event_page(account uuid, claim_ticket uuid, version integer, epoch integer, page jsonb, delay_seconds integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_finish_newbi_event_page(account uuid, claim_ticket uuid, version integer, epoch integer, page jsonb, delay_seconds integer) TO rica_newbi_poller;
-
-
---
--- Name: FUNCTION rica_finish_newbi_reply(reply uuid, ticket integer, remote_comment uuid, retry_seconds integer, post_locked boolean); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_finish_newbi_reply(reply uuid, ticket integer, remote_comment uuid, retry_seconds integer, post_locked boolean) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_finish_newbi_reply(reply uuid, ticket integer, remote_comment uuid, retry_seconds integer, post_locked boolean) TO rica_newbi_executor;
-
-
---
 -- Name: FUNCTION rica_fold_identity_state(previous double precision[], seconds double precision, kind public."InboundKind", configuration jsonb); Type: ACL; Schema: public; Owner: -
 --
 
@@ -5349,13 +4867,6 @@ REVOKE ALL ON FUNCTION public.rica_formal_beliefs(target_character uuid, target_
 --
 
 REVOKE ALL ON FUNCTION public.rica_goal_json(g public.goal_versions) FROM PUBLIC;
-
-
---
--- Name: FUNCTION rica_guard_newbi_reply_executor(); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_guard_newbi_reply_executor() FROM PUBLIC;
 
 
 --
@@ -5503,57 +5014,6 @@ GRANT ALL ON FUNCTION public.rica_memory_provenance(target_character uuid, targe
 
 REVOKE ALL ON FUNCTION public.rica_memory_scope() FROM PUBLIC;
 GRANT ALL ON FUNCTION public.rica_memory_scope() TO rica_memory_reader;
-
-
---
--- Name: FUNCTION rica_newbi_execution_target(reply uuid, executor text); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_newbi_execution_target(reply uuid, executor text) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_newbi_execution_target(reply uuid, executor text) TO rica_newbi_executor;
-
-
---
--- Name: TABLE newbi_replies; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT ON TABLE public.newbi_replies TO rica_admin_api;
-
-
---
--- Name: COLUMN newbi_replies.reviewer_id; Type: ACL; Schema: public; Owner: -
---
-
-GRANT UPDATE(reviewer_id) ON TABLE public.newbi_replies TO rica_admin_api;
-
-
---
--- Name: COLUMN newbi_replies.status; Type: ACL; Schema: public; Owner: -
---
-
-GRANT UPDATE(status) ON TABLE public.newbi_replies TO rica_admin_api;
-
-
---
--- Name: COLUMN newbi_replies.approved_executor_key; Type: ACL; Schema: public; Owner: -
---
-
-GRANT UPDATE(approved_executor_key) ON TABLE public.newbi_replies TO rica_admin_api;
-
-
---
--- Name: FUNCTION rica_newbi_reply_matches_executor(r public.newbi_replies, executor text); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_newbi_reply_matches_executor(r public.newbi_replies, executor text) FROM PUBLIC;
-
-
---
--- Name: FUNCTION rica_newbi_reply_preflight(reply uuid, executor text, retry_seconds integer, post_locked boolean); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_newbi_reply_preflight(reply uuid, executor text, retry_seconds integer, post_locked boolean) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_newbi_reply_preflight(reply uuid, executor text, retry_seconds integer, post_locked boolean) TO rica_newbi_executor;
 
 
 --
@@ -5804,22 +5264,6 @@ GRANT ALL ON FUNCTION public.rica_simulation_payload_allowed(target_character uu
 
 REVOKE ALL ON FUNCTION public.rica_simulation_reconciliation(target_character uuid, target_action uuid) FROM PUBLIC;
 GRANT ALL ON FUNCTION public.rica_simulation_reconciliation(target_character uuid, target_action uuid) TO rica_admin_api;
-
-
---
--- Name: FUNCTION rica_sweep_newbi_events(); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_sweep_newbi_events() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_sweep_newbi_events() TO rica_runtime;
-
-
---
--- Name: FUNCTION rica_sweep_newbi_retention(); Type: ACL; Schema: public; Owner: -
---
-
-REVOKE ALL ON FUNCTION public.rica_sweep_newbi_retention() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.rica_sweep_newbi_retention() TO rica_runtime;
 
 
 --
@@ -6237,41 +5681,6 @@ GRANT SELECT(memory_id) ON TABLE public.memory_sources TO rica_memory_reader;
 --
 
 GRANT SELECT(source_id) ON TABLE public.memory_sources TO rica_memory_reader;
-
-
---
--- Name: COLUMN newbi_event_checkpoints.account_id; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(account_id) ON TABLE public.newbi_event_checkpoints TO rica_admin_api;
-
-
---
--- Name: COLUMN newbi_event_checkpoints.next_poll_at; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(next_poll_at) ON TABLE public.newbi_event_checkpoints TO rica_admin_api;
-
-
---
--- Name: COLUMN newbi_event_checkpoints.history_lost_count; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(history_lost_count) ON TABLE public.newbi_event_checkpoints TO rica_admin_api;
-
-
---
--- Name: COLUMN newbi_event_checkpoints.last_history_lost_at; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT(last_history_lost_at) ON TABLE public.newbi_event_checkpoints TO rica_admin_api;
-
-
---
--- Name: TABLE newbi_events; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT ON TABLE public.newbi_events TO rica_admin_api;
 
 
 --

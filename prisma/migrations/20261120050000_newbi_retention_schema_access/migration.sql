@@ -1,1 +1,1 @@
-GRANT USAGE ON SCHEMA rica_plugin_newbi TO rica_runtime;
+-- Newbi initializes these objects in its package bootstrap migration.

@@ -22,19 +22,6 @@ CREATE OR REPLACE FUNCTION public.rica_simulation_core_prompt(target_run uuid) R
     AND translate(c.hard_profile->>'aiDisclosure', E'\t\r\n', '') !~ '[[:cntrl:]]'
 $$;
 
--- Existing approvals bind the old payload. Preserve receipts and unresolved attempts for reconciliation.
-UPDATE public.newbi_replies
-SET status = 'CLOSED', reviewer_id = coalesce(reviewer_id, 'system:core-prompt-migration'),
-    closure_reason = '原提案包含角色核心设定，请重新拟写并送审。'
-WHERE status IN ('WAITING', 'READY') AND strpos(content, E'\n\nAI 披露：') > 0;
-
-CREATE OR REPLACE FUNCTION public.rica_newbi_reply_matches_executor(r public.newbi_replies, executor text) RETURNS boolean
-    LANGUAGE sql IMMUTABLE
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-  SELECT r.approved_executor_key = executor AND strpos(r.content, E'\n\nAI 披露：') = 0
-$$;
-
 CREATE FUNCTION public.rica_run_system_prompts(target_character uuid, target_run uuid) RETURNS jsonb
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'pg_temp'

@@ -11,6 +11,7 @@
     ".": "./index.ts",
     "./package.json": "./package.json",
     "./rica": "./rica/plugin.ts",
+    "./rica/bootstrap": "./prisma/bootstrap.config.ts",
     "./rica/prisma": "./prisma/prisma.config.ts",
     "./shared": "./rica/shared.ts",
     "./console": "./rica/console/index.ts"
