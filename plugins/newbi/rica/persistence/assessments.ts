@@ -167,7 +167,7 @@ export function newbiAssessmentActivity(characterId: string) {
         THEN 'PENDING' ELSE 'UNAVAILABLE' END) AS state, r.created_at
     FROM public.newbi_discussion_assessments r
     JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
-    LEFT JOIN public.newbi_credentials c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
+    LEFT JOIN rica_plugin_newbi.account_profiles c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
     WHERE r.character_id = ${characterId}::uuid AND r.created_at > ${new Date(Date.now() - retentionMs)}::timestamptz
   `
 }

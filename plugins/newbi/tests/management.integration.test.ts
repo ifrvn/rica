@@ -141,6 +141,12 @@ async function databaseNow() {
   return clock.now.getTime()
 }
 
+async function credentialCount(endpoint: string, agentId: string) {
+  const [row] = await owner.$queryRaw<{ count: number }[]>`
+    SELECT count(*)::integer AS count FROM rica_plugin_newbi.credentials WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
+  return row.count
+}
+
 function runtimeUrl() {
   const url = new URL(config.databaseUrl)
   url.searchParams.set('options', '-c role=rica_runtime')
@@ -161,17 +167,21 @@ async function activeIdentity(roleProfile: Record<string, unknown> = {}, charact
 test('Newbi database permissions are scoped to each host operation', async () => {
   await owner.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL SESSION AUTHORIZATION rica_runtime`
-    const grants = () => tx.$queryRaw<{ reader: boolean; sender: boolean }[]>`
+    const grants = () => tx.$queryRaw`
       SELECT has_function_privilege('public.rica_claim_newbi_event_page(uuid,text)', 'EXECUTE') AS reader,
-        has_function_privilege('public.rica_claim_newbi_reply(uuid,boolean,uuid,text,text)', 'EXECUTE') AS sender
+        has_function_privilege('public.rica_claim_newbi_reply(uuid,boolean,uuid,text,text)', 'EXECUTE') AS sender,
+        has_function_privilege('public.rica_newbi_poll_connection(uuid)', 'EXECUTE') AS "readConnection",
+        has_function_privilege('public.rica_newbi_send_connection(uuid)', 'EXECUTE') AS "sendConnection",
+        has_schema_privilege('rica_plugin_newbi', 'USAGE') AS "credentialSchema"
     `
-    assert.deepEqual(await grants(), [{ reader: false, sender: false }])
+    const unscoped = { reader: false, sender: false, readConnection: false, sendConnection: false, credentialSchema: false }
+    assert.deepEqual(await grants(), [unscoped])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
-    assert.deepEqual(await grants(), [{ reader: true, sender: false }])
+    assert.deepEqual(await grants(), [{ ...unscoped, reader: true, readConnection: true }])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
-    assert.deepEqual(await grants(), [{ reader: false, sender: true }])
+    assert.deepEqual(await grants(), [{ ...unscoped, sender: true, sendConnection: true }])
     await tx.$executeRaw`RESET ROLE`
-    assert.deepEqual(await grants(), [{ reader: false, sender: false }])
+    assert.deepEqual(await grants(), [unscoped])
   })
 })
 
@@ -205,7 +215,7 @@ test('Newbi registration releases locks during remote verification and rechecks 
     release.resolve()
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
-    await owner.newbiCredential.deleteMany({ where: { endpoint, agentId } })
+    await owner.$executeRaw`DELETE FROM rica_plugin_newbi.credentials WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
   })
   const created = await request('POST', '/characters', { key: 'newbi-preflight-fixture', data: characterData('-preflight') })
   assert.equal(created.status, 201)
@@ -231,7 +241,7 @@ test('Newbi registration releases locks during remote verification and rechecks 
   const revoked = await pending
   assert.equal(revoked.status, 404, JSON.stringify(revoked.body))
   assert.equal(await owner.platformAccountRegistration.count({ where: { characterId } }), 0)
-  assert.equal(await owner.newbiCredential.count({ where: { endpoint, agentId } }), 0)
+  assert.equal(await credentialCount(endpoint, agentId), 0)
 
   const registered = await register('admin-a')
   assert.equal(registered.status, 201, JSON.stringify(registered.body))
@@ -607,7 +617,9 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
     },
   }
   const step = () => assessNewbiBackground(management, async () => enabled ? endpoint : undefined, operations, () => assert.fail('Unexpected poll error'))
-  await owner.newbiCredential.create({ data: { endpoint, agentId, credential: 'nbi_agent_' + 'x'.repeat(43) } })
+  await owner.$executeRaw`
+    INSERT INTO rica_plugin_newbi.credentials (endpoint, agent_id, credential)
+    VALUES (${endpoint}, ${agentId}::uuid, ${'nbi_agent_' + 'x'.repeat(43)})`
   try {
     await step()
     assert.equal(polls, 0)
@@ -633,7 +645,7 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
     assert.equal((await request('GET', characterPath(characterId) + '/newbi/assessments/' + blocked.id)).body.result.reason, 'BACKGROUND_DISABLED')
     assert.equal(await owner.newbiReply.count({ where: { characterId } }), 0)
   } finally {
-    await owner.newbiCredential.delete({ where: { endpoint_agentId: { endpoint, agentId } } })
+    await owner.$executeRaw`DELETE FROM rica_plugin_newbi.credentials WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
   }
 })
 
@@ -1185,8 +1197,9 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(row.remoteAccountId, agentId)
     assert.equal(row.instanceKey, endpoint)
     assert.deepEqual(row.newbiProfile, { agentId, username: 'fixture-events', avatarUrl })
-    await owner.newbiCredential.update({ where: { endpoint_agentId: { endpoint, agentId } },
-      data: { username: null, avatarUrl: null } })
+    await owner.$executeRaw`
+      UPDATE rica_plugin_newbi.credentials SET username = NULL, avatar_url = NULL
+      WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
     assert.equal((await request('POST', character + '/newbi/accounts/' + registered.body.id + '/check')).body.verified, true)
     const refreshed = (await request('GET', pool)).body.items.find(({ id }: { id: string }) => id === registered.body.id)
     assert.deepEqual(refreshed.newbiProfile, row.newbiProfile)
@@ -1199,10 +1212,10 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     const removal = await request('DELETE', removePath, { key: 'remove-other' })
     assert.equal(removal.status, 200, JSON.stringify(removal.body))
     assert.equal((await request('DELETE', removePath, { key: 'remove-other' })).status, 200)
-    assert.equal(await owner.newbiCredential.count({ where: { endpoint, agentId: otherAgentId } }), 0)
-    assert.equal(await owner.newbiCredential.count({ where: { endpoint, agentId } }), 1)
-    await assert.rejects(runtime.newbiCredential.count(), /permission denied/i)
-    await assert.rejects(db.newbiCredential.count(), /permission denied/i)
+    assert.equal(await credentialCount(endpoint, otherAgentId), 0)
+    assert.equal(await credentialCount(endpoint, agentId), 1)
+    await assert.rejects(runtime.$queryRaw`SELECT 1 FROM rica_plugin_newbi.credentials LIMIT 0`, /permission denied/i)
+    await assert.rejects(db.$queryRaw`SELECT 1 FROM rica_plugin_newbi.credentials LIMIT 0`, /permission denied/i)
     const bind = await request('POST', pool + '/associations', {
       key: 'newbi-events-bind', data: { identityId, registrationId: registered.body.id },
     })

@@ -1,4 +1,4 @@
-import { newbiAccountHooks, saveNewbiCredential } from '../persistence/accounts.js'
+import { newbiAccountHooks, readNewbiCredential, refreshNewbiProfile, saveNewbiCredential } from '../persistence/accounts.js'
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
 import * as management from '@ricajs/persistence/management'
@@ -55,14 +55,11 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
   }
 
   const verifySavedConnector = async (endpoint: string, agentId: string, tx: Prisma.TransactionClient = db) => {
-    const where = { endpoint, agentId }
-    const saved = await tx.newbiCredential.findUnique({ where: { endpoint_agentId: where }, select: { credential: true } })
-    const profile = saved && await identifyConnector?.(saved.credential, endpoint)
+    const credential = await readNewbiCredential(tx, { endpoint, agentId })
+    if (!credential) return false
+    const profile = await identifyConnector?.(credential, endpoint)
     if (!profile || profile.agentId !== agentId || profile.endpoint !== endpoint) return false
-    await tx.newbiCredential.updateMany({
-      where: { ...where, credential: saved.credential },
-      data: { username: profile.username, avatarUrl: profile.avatarUrl },
-    })
+    await refreshNewbiProfile(tx, profile, credential)
     return true
   }
 
@@ -330,7 +327,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
         JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
         JOIN public.identities i ON (i.character_id, i.id) = (r.character_id, r.identity_id)
         LEFT JOIN public.identity_versions v ON (v.character_id, v.identity_id, v.version) = (i.character_id, i.id, i.active_version)
-        LEFT JOIN public.newbi_credentials c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
+        LEFT JOIN rica_plugin_newbi.account_profiles c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
         WHERE r.character_id = ${characterId}::uuid
       `,
     },
