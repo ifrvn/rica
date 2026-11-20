@@ -11,6 +11,8 @@ import type { Prisma, PrismaClient } from '../generated/client.js'
 type Subject = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
 type Tx = Prisma.TransactionClient
 type CommandResult = { id: string; status?: string; version?: number; authEpoch?: number }
+type CommandApply = (tx: Tx) => Promise<CommandResult>
+export type ManagementCommandHandler = CommandApply | { prepare(): Promise<CommandApply> }
 type Input<T extends z.ZodType> = z.infer<T>
 
 export class ManagementError extends Error {
@@ -71,13 +73,15 @@ type Command = {
 }
 
 export async function executeManagementCommand(
-  db: PrismaClient, command: Command, apply: (tx: Tx) => Promise<CommandResult>,
+  db: PrismaClient, command: Command, handler: ManagementCommandHandler,
 ) {
   const { actor, characterId, operation, requestId, input, key, targetScope } = command
   const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex')
   const routeScope = operation + ':' + targetScope
+  const selector = key ? { principalId: actor.id, routeScope, key } : null
+  const unique = selector ? { principalId_routeScope_key: selector } : null
 
-  return db.$transaction(async (tx) => {
+  async function lockAndAuthorize(tx: Tx) {
     if (key) {
       // Scope the lock to the same tuple as the unique idempotency key.
       const lock = JSON.stringify([actor.id, routeScope, key])
@@ -89,9 +93,9 @@ export async function executeManagementCommand(
       await lockCharacter(tx, characterId)
       await authorize(tx, { actor, characterId })
     }
+  }
 
-    const selector = key ? { principalId: actor.id, routeScope, key } : null
-    const unique = selector ? { principalId_routeScope_key: selector } : null
+  async function replay(tx: Tx) {
     if (unique) {
       const previous = await tx.managementIdempotency.findUnique({ where: unique })
       if (previous && previous.expiresAt > new Date()) {
@@ -101,7 +105,23 @@ export async function executeManagementCommand(
         return previous.response as CommandResult
       }
     }
+  }
 
+  let apply: CommandApply
+  if (typeof handler === 'function') apply = handler
+  else {
+    const previous = await db.$transaction(async (tx) => {
+      await lockAndAuthorize(tx)
+      return replay(tx)
+    }, { isolationLevel: 'ReadCommitted' })
+    if (previous) return previous
+    apply = await handler.prepare()
+  }
+
+  return db.$transaction(async (tx) => {
+    await lockAndAuthorize(tx)
+    const previous = await replay(tx)
+    if (previous) return previous
     const result = await apply(tx)
     await tx.managementAudit.create({
       data: { characterId: characterId ?? result.id, actorId: actor.id, operation, targetId: result.id, requestId, digest },

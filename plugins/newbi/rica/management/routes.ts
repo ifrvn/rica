@@ -66,11 +66,17 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
     return true
   }
 
-  async function registerAccount(tx: Prisma.TransactionClient, scope: management.Scope, input: z.infer<typeof connectorAccountRegistration>) {
-    const account = await identifyNewbi(input.credential, input.agentId)
-    const result = await management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: account.endpoint, remoteAccountId: account.agentId })
-    await saveNewbiCredential(tx, account, input.credential)
-    return result
+  function prepareNewbiRegistration(input: { credential: string; agentId: string }, apply: (tx: Prisma.TransactionClient,
+    account: Awaited<ReturnType<typeof identifyNewbi>>) => Promise<{ id: string; status?: string; version?: number }>) {
+    return { async prepare() {
+      const account = await identifyNewbi(input.credential, input.agentId)
+      return async (tx: Prisma.TransactionClient) => {
+        await requireNewbi(account.endpoint)
+        const result = await apply(tx, account)
+        await saveNewbiCredential(tx, account, input.credential)
+        return result
+      }
+    } }
   }
 
   async function status(characterId: string) {
@@ -149,12 +155,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
       const result = await management.executeManagementCommand(db, {
         ...scope, operation: 'newbi.account.bind', targetScope: scope.characterId, input, requestId,
         key: c.req.valid('header')['idempotency-key'],
-      }, async (tx) => {
-        const account = await identifyNewbi(input.credential, input.agentId)
-        const result = await bindNewbiAccount(tx, scope, { ...input, ...account })
-        await saveNewbiCredential(tx, account, input.credential)
-        return result
-      })
+      }, prepareNewbiRegistration(input, (tx, account) => bindNewbiAccount(tx, scope, { ...input, ...account })))
       return c.json({ ...result, requestId }, 201)
     })
 
@@ -334,7 +335,8 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
       `,
     },
     account: { ...newbiAccountHooks(verifySavedConnector), registration: connectorAccountRegistration,
-      register: (tx, scope, input) => registerAccount(tx, scope, connectorAccountRegistration.parse(input)) },
+      register: (scope, input) => prepareNewbiRegistration(connectorAccountRegistration.parse(input), (tx, account) =>
+        management.registerAccount(tx, scope, { platform: 'newbi', instanceKey: account.endpoint, remoteAccountId: account.agentId })) },
     accountFields: { newbiProfile: newbiAccountProfile.optional() },
     workspace: { fields: { newbiInstalled: z.boolean() },
       read: async () => ({ newbiInstalled: await deploymentPlugins?.isInstalled() ?? true }) },

@@ -175,6 +175,73 @@ test('Newbi database permissions are scoped to each host operation', async () =>
   })
 })
 
+test('Newbi registration releases locks during remote verification and rechecks access before saving', { timeout: 20_000 }, async (t) => {
+  const secret = 'nbi_agent_' + 'v'.repeat(43)
+  const agentId = randomUUID()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let verifications = 0
+  let available = true
+  const server = createServer(async (req, res) => {
+    const reply = (data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ code: 0, data }))
+    if (req.url === '/agent-api/v1/status') return reply({ state: 'OPEN', protocolVersion: 1 })
+    if (req.headers.authorization !== 'Bearer ' + secret) return res.writeHead(401).end()
+    if (req.url === '/agent-api/v1/rules') return reply({ idempotencyDays: 7 })
+    if (req.url === '/agent-api/v1/quota') return reply({ comments: [{ remaining: 5 }] })
+    if (req.url !== '/agent-api/v1/me') return res.writeHead(404).end()
+    if (++verifications === 1) {
+      entered.resolve()
+      await release.promise
+    }
+    return available ? reply({ id: agentId, username: 'verified-agent', accessStatus: 'ACTIVE' }) : res.writeHead(503).end()
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const endpoint = 'http://localhost:' + (server.address() as { port: number }).port + '/agent-api/v1'
+  const previousEndpoint = connectorEndpoint
+  connectorEndpoint = endpoint
+  t.after(async () => {
+    connectorEndpoint = previousEndpoint
+    release.resolve()
+    server.closeAllConnections()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await owner.newbiCredential.deleteMany({ where: { endpoint, agentId } })
+  })
+  const created = await request('POST', '/characters', { key: 'newbi-preflight-fixture', data: characterData('-preflight') })
+  assert.equal(created.status, 201)
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const base = characterPath(characterId)
+  const membership = (action: 'GRANT' | 'REVOKE') => request('POST', base + '/memberships', {
+    key: 'newbi-preflight-' + action, data: { subject: 'reviewer', action, reason: 'Registration authorization fixture' },
+  })
+  const register = (actor: string, credential = secret) => request('POST', base + '/account-pool', {
+    key: 'newbi-preflight-registration', actor, data: { platform: 'newbi', credential, agentId },
+  })
+  assert.equal((await register('nonmember')).status, 404)
+  assert.equal(verifications, 0)
+  assert.equal((await membership('GRANT')).status, 200)
+  const pending = register('reviewer')
+  try {
+    await entered.promise
+    assert.equal((await membership('REVOKE')).status, 200)
+  } finally {
+    release.resolve()
+  }
+  const revoked = await pending
+  assert.equal(revoked.status, 404, JSON.stringify(revoked.body))
+  assert.equal(await owner.platformAccountRegistration.count({ where: { characterId } }), 0)
+  assert.equal(await owner.newbiCredential.count({ where: { endpoint, agentId } }), 0)
+
+  const registered = await register('admin-a')
+  assert.equal(registered.status, 201, JSON.stringify(registered.body))
+  available = false
+  assert.equal((await register('admin-a')).body.id, registered.body.id)
+  const conflict = await register('admin-a', 'nbi_agent_' + 'q'.repeat(43))
+  assert.equal(conflict.body.error.code, 'IDEMPOTENCY_CONFLICT')
+  assert.equal(verifications, 2)
+})
+
 test('Newbi installation gates new proposals and approvals while preserving review history', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'rica-connector-lifecycle-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

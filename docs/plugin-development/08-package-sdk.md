@@ -56,9 +56,12 @@ accounts: {
 ```
 
 - `register` 必填。`register`、`remove` 和 `verifyResume` 指向宿主数据库中插件 schema 下的函数。签名为 `(character_id uuid, account_id uuid, instance_key text, remote_account_id text, data jsonb) RETURNS boolean`。登记使用宿主生成的 ID，关联后沿用此 ID。删除和恢复的 `data` 为 JSON `null`。
+- 需要远端核验时，声明异步 `prepareRegistration({ characterId, instanceKey, remoteAccountId, data })`。宿主先授权并检查幂等结果，释放事务和锁后调用核验。回调应限制外部请求的时长，只做可重复的检查。返回 `{ accepted: false }` 会拒绝登记。返回 `{ accepted: true, data }` 时，宿主在写事务内重新检查权限和幂等状态，并把核验后的 `data` 传给 `register` 函数。账号的实例和远端 ID 仍以登记请求为准，核验时应核对这两个值。已经成功的同键重试直接返回原结果，并发的首次请求可能各自做一次核验。
 - 宿主在同一事务中调用声明的函数，传入已授权的角色和账号。函数返回 `true` 才继续提交，返回 `false` 或抛出错误会回滚宿主和插件的写入。仅向 `rica_admin_api` 授予 schema 的 `USAGE` 和指定函数的 `EXECUTE`。如使用 `SECURITY DEFINER`，设定固定的 `search_path`、限定对象名，并撤销 `PUBLIC` 执行权限。事务函数处理本地数据库变更，外部请求无法随数据库回滚。
 - `remove` 可选，省略时仅删除宿主的未绑定登记。省略 `verifyResume` 时，宿主拒绝激活该平台账号。可选的 `profiles` 声明只读视图，提供 `character_id uuid`、`account_id uuid`、`profile jsonb`，每个账号最多一行。宿主分页后批量查视图，并通过 `pluginProfile` 返回公开资料。
 - `services.readAccounts(ids)` 供已声明 `accounts` 的插件在管理 `read` 回调中使用。每次最多 100 个 UUID，只返回当前角色在该插件平台下的已绑定账号，字段包含身份、远端标识、状态和绑定版本。每次查询重新检查调用者的角色访问权限。
+
+内置 Newbi 的账号池登记和直接绑定已走相同的两阶段宿主命令。它先核对远端 Agent，提交前再确认部署中的接入点，账号登记和凭据保存仍作为一次本地写入完成。
 
 ## 部署和生命周期
 

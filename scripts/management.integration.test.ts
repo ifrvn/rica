@@ -4047,7 +4047,11 @@ test('external account operations share the host transaction and enforce account
     writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'rica-account-fixture', version: '1.0.0', type: 'module',
       exports: { './package.json': './package.json', './rica': './plugin.js' } })),
     writeFile(join(plugin, 'plugin.js'), `export const ricaPlugin = { id: 'account-fixture', sdkVersion: 1,
-      accounts: { register: 'register_account', profiles: 'account_profiles', remove: 'remove_account', verifyResume: 'verify_resume' },
+      accounts: { register: 'register_account', profiles: 'account_profiles', remove: 'remove_account', verifyResume: 'verify_resume',
+        async prepareRegistration({ data }) {
+          if (data.label === 'RejectRemote') return { accepted: false }
+          return { accepted: true, data: { label: data.label.trim() } }
+        } },
       management() { return { read(request, { readAccounts }) { return readAccounts(request.query.map(([, id]) => id)) } } }
     }`),
   ])
@@ -4079,12 +4083,13 @@ test('external account operations share the host transaction and enforce account
   assert.equal(rejected.body.error.code, 'PLUGIN_ACCOUNT_REJECTED')
   assert.equal(await owner.platformAccountRegistration.count({ where: { platform: 'account-fixture' } }), 0)
   assert.deepEqual(await owner.$queryRaw`SELECT label FROM rica_plugin_account_fixture.entries`, [])
+  assert.equal((await register(a, 'admin-a', 'external-registration', 'RejectRemote')).status, 409)
 
-  const local = await register(a, 'admin-a', 'external-registration', 'Allowed')
+  const local = await register(a, 'admin-a', 'external-registration', ' Allowed ')
   const foreign = await register(b, 'admin-b', 'foreign-registration', 'Blocked')
   assert.equal(local.status, 201, JSON.stringify(local.body))
   assert.equal(foreign.status, 201, JSON.stringify(foreign.body))
-  assert.equal((await register(a, 'admin-a', 'external-registration', 'Allowed')).body.id, local.body.id)
+  assert.equal((await register(a, 'admin-a', 'external-registration', ' Allowed ')).body.id, local.body.id)
   const list = await request('GET', pool(a), { target })
   assert.deepEqual(list.body.items.filter((row: { platform: string }) => row.platform === 'account-fixture').map((row: { pluginProfile: unknown }) => row.pluginProfile), [{ label: 'Allowed' }])
 

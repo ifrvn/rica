@@ -1,7 +1,7 @@
 import { z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
 import type { OpenAPIHono } from '@hono/zod-openapi'
-import { ManagementError, type PlatformAccountHooks, type Scope } from './index.js'
+import { ManagementError, type ManagementCommandHandler, type PlatformAccountHooks, type Scope } from './index.js'
 import type { Prisma } from '../generated/client.js'
 
 export type ManagementPrincipal = Readonly<{ issuer: string; subject: string; id: string; canCreate?: boolean }>
@@ -14,7 +14,7 @@ export type ManagementPlugin = {
   runActivity?: Partial<Record<z.infer<typeof schema.runActivityKind>, (characterId: string) => Prisma.Sql>>
   account?: PlatformAccountHooks & {
     registration: z.ZodType<{ platform: string }>
-    register(tx: Prisma.TransactionClient, scope: Scope, input: unknown): Promise<{ id: string }>
+    register(scope: Scope, input: unknown): ManagementCommandHandler
   }
   workspace?: { fields: z.ZodRawShape; read(): Promise<object> }
   status?: { fields: z.ZodRawShape; read(characterId: string): Promise<object> }

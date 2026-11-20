@@ -22,6 +22,7 @@ const identifier = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/)
 const activityView = z.strictObject({ view: identifier })
 const accountOperations = z.strictObject({
   register: identifier, profiles: identifier.optional(), remove: identifier.optional(), verifyResume: identifier.optional(),
+  prepareRegistration: z.custom<NonNullable<PluginAccounts['prepareRegistration']>>(value => typeof value === 'function').optional(),
 })
 
 export type PackageActivityView = Readonly<{ id: string; schema: string; view: string }>

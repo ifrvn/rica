@@ -37,11 +37,19 @@ export type PluginWorker = Readonly<{
 type ManagementFactory = (config: PluginJson, context: PluginContext) => PluginManagement | Promise<PluginManagement>
 type WorkerFactory = (config: PluginJson, context: PluginWorkerContext) => PluginWorker
 export type PluginActivity = Readonly<{ view: string }>
+export type PluginAccountPreparation = Readonly<{
+  characterId: string
+  instanceKey: string
+  remoteAccountId: string
+  data: PluginJson
+}>
+
 export type PluginAccounts = Readonly<{
   register: string
   profiles?: string
   remove?: string
   verifyResume?: string
+  prepareRegistration?(request: PluginAccountPreparation): Promise<{ accepted: true; data: PluginJson } | { accepted: false }>
 }>
 
 type Capabilities = {

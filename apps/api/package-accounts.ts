@@ -7,6 +7,11 @@ import { Prisma } from '@ricajs/persistence/prisma'
 import type { PackageAccounts } from '../package-plugins.js'
 import { packageObject } from './package-database.js'
 
+const preparedRegistration = z.discriminatedUnion('accepted', [
+  z.strictObject({ accepted: z.literal(true), data: z.json() }),
+  z.strictObject({ accepted: z.literal(false) }),
+])
+
 export function packageAccountHooks({ id: platform, schema, operations }: PackageAccounts): ManagementPlugin {
   const registration = simulationAccountRegistration.extend({ platform: z.literal(platform), data: z.unknown().default(null) })
   const relation = operations.profiles ? packageObject(schema, operations.profiles) : undefined
@@ -25,11 +30,23 @@ export function packageAccountHooks({ id: platform, schema, operations }: Packag
     registerRoutes() {},
     account: {
       platform, registration,
-      async register(tx, scope, input) {
+      register(scope, input) {
         const { data, ...ref } = registration.parse(input)
-        const result = await registerAccount(tx, scope, ref)
-        await apply(tx, operations.register, scope.characterId, { ...ref, ...result }, z.json().parse(data))
-        return result
+        const payload = z.json().parse(data)
+        const commit = (verified: PluginJson) => async (tx: Prisma.TransactionClient) => {
+          const result = await registerAccount(tx, scope, ref)
+          await apply(tx, operations.register, scope.characterId, { ...ref, ...result }, verified)
+          return result
+        }
+        const prepare = operations.prepareRegistration
+        if (!prepare) return commit(payload)
+        return { async prepare() {
+          const result = preparedRegistration.parse(await prepare({
+            characterId: scope.characterId, instanceKey: ref.instanceKey, remoteAccountId: ref.remoteAccountId, data: payload,
+          }))
+          if (!result.accepted) throw new ManagementError(409, 'PLUGIN_ACCOUNT_REJECTED', 'Plugin did not verify the account')
+          return commit(result.data)
+        } }
       },
       async profiles(tx, accounts, characterId) {
         if (!relation) return () => ({})

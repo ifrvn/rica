@@ -361,14 +361,11 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     const input = c.req.valid('json')
     const requestId = c.get('requestId')
+    const account = accountHooks.find(({ platform }) => platform === input.platform)
     const result = await management.executeManagementCommand(db, {
       ...scope, operation: 'account.register', targetScope: scope.characterId, input, requestId,
       key: c.req.valid('header')['idempotency-key'],
-    }, async (tx) => {
-      const account = accountHooks.find(({ platform }) => platform === input.platform)
-      return account ? account.register(tx, scope, input)
-        : management.registerAccount(tx, scope, schema.simulationAccountRegistration.parse(input))
-    })
+    }, account ? account.register(scope, input) : (tx) => management.registerAccount(tx, scope, schema.simulationAccountRegistration.parse(input)))
     return c.json({ ...result, requestId }, 201)
   })
 
