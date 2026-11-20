@@ -37,6 +37,7 @@ export type PluginWorker = Readonly<{
 type ManagementFactory = (config: PluginJson, context: PluginContext) => PluginManagement | Promise<PluginManagement>
 type WorkerFactory = (config: PluginJson, context: PluginWorkerContext) => PluginWorker
 export type PluginActivity = Readonly<{ view: string }>
+export type PluginRetention = Readonly<{ sweep: string }>
 export type PluginAccountPreparation = Readonly<{
   characterId: string
   instanceKey: string
@@ -57,6 +58,7 @@ type Capabilities = {
   worker: WorkerFactory
   activity: PluginActivity
   accounts: PluginAccounts
+  retention: PluginRetention
 }
 type DeclaredCapability = { [K in keyof Capabilities]: Pick<Capabilities, K> }[keyof Capabilities]
 

@@ -8,7 +8,7 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 {"version": 1, "plugins": [{"id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0", "config": {"label": "Acme"}}]}
 ```
 
-包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`worker`、`activity` 或 `accounts` 其中一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
+包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`worker`、`activity`、`accounts` 或 `retention` 中的一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
 
 `management(config, context)` 可异步创建实例，返回 `read(request, services)` 和可选的 `stop()`。`request` 包含角色 ID、调用者 ID、插件内路径和保留重复项的查询参数。`read` 返回 JSON，宿主只转发已通过权限校验的 GET 请求。插件查询自己的数据库时仍应使用已授权的 `characterId` 筛选数据。
 
@@ -43,6 +43,12 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 | `created_at` | `timestamptz`，保留微秒 |
 
 每条记录引用当前 Rica 角色的已绑定账号。同一插件在一个角色下的 `(created_at, id, kind)` 必须唯一。宿主验证账号归属后，与其他活动来源统一排序和分页，并将来源标记为 `plugin:<id>`。授予 `rica_admin_api` 插件 schema 的 `USAGE` 和该视图的 `SELECT` 即可，插件可通过视图只公开摘要字段。控制台目前展示外部插件的摘要，详情随插件 UI 接入提供。
+
+### 数据保留期
+
+使用 `retention: { sweep: 'sweep_retention' }` 将清理接入宿主 Worker 和 `rica retention`。包需要声明 `database`，并在宿主数据库的插件 schema 中创建同名的无参数函数，返回本批修改或删除的记录总数，类型为 PostgreSQL `integer`。每次调用应限制处理批量，并支持与其他 Worker 并行调用。
+
+为 `rica_runtime` 授予插件 schema 的 `USAGE` 和该函数的 `EXECUTE`，撤销 `PUBLIC` 的执行权限。Worker 和手动命令在启用清理前会检查函数签名与权限。各插件在独立事务中运行清理，单个插件报错时其他清理仍可提交。
 
 ### 账号接入和事务
 
@@ -82,7 +88,7 @@ Newbi 的统一活动已有独立包入口。部署者可在安装 `@ricajs/plug
 }
 ```
 
-Newbi 活动视图与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。迁移登录需要能在该 schema 记录迁移，也需要 `rica_plugin_newbi` 的 `USAGE` 和 `CREATE`，以及 `public` 的 `USAGE`。部署者可以在宿主首次创建业务 schema 后授予这些权限。视图以调用者权限运行，活动查询沿用宿主的 `rica_admin_api`。清单里的运行时 URL 只为以后启用需要独立连接的能力保留。管理命令、轮询与发送仍按内置方式装配。
+Newbi 的活动视图和清理函数与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。迁移登录需要能在该 schema 记录迁移，也需要 `rica_plugin_newbi` 的 `USAGE` 和 `CREATE`，以及 `public` 的 `USAGE`。部署者可以在宿主首次创建业务 schema 后授予这些权限。活动查询沿用宿主的 `rica_admin_api`，清理函数以 `rica_runtime` 调用现有的受限清理函数。未登记 Newbi 包时继续使用内置清理。清单里的运行时 URL 留给需要独立连接的能力。管理命令、轮询与发送仍按内置方式装配。
 
 ## 部署和生命周期
 

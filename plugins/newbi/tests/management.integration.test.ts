@@ -21,12 +21,12 @@ import { createNewbiManagement, type NewbiManagementOptions } from '../rica/mana
 import { assessNewbiBackground } from '../rica/management/background.js'
 import { connectNewbiSettings } from '../rica/deployment/settings.js'
 import { createManagementApp } from '../../../apps/api/management.js'
-import { sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
+import { checkPackageRetention, sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
 import { createDatabase } from '@ricajs/persistence/client'
 import { Prisma } from '@ricajs/persistence/prisma'
 import { loadConfig } from '@ricajs/runtime/config'
 import { createDeploymentPluginStore } from '../../../apps/deployment-plugins.js'
-import { loadPackageManagement } from '../../../apps/package-plugins.js'
+import { loadPackageManagement, loadPackageRetention } from '../../../apps/package-plugins.js'
 import { readPluginStatus, reportPluginResult } from '../../../apps/plugin-observation.js'
 
 const config = loadConfig()
@@ -34,6 +34,7 @@ const simulationPlatforms = await startSimulationPlatforms({})
 const owner = createDatabase(config.databaseUrl)
 const management = createDatabase(config.databaseUrl, 'rica_admin_api')
 const packageManagement = await loadPackageManagement(process.env.RICA_TEST_NEWBI_PACKAGE_MANIFEST, { newbi: '@ricajs/plugin-newbi' })
+const packageRetention = await loadPackageRetention(process.env.RICA_TEST_NEWBI_PACKAGE_MANIFEST)
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'nonmember'])
@@ -179,6 +180,8 @@ async function activeIdentity(roleProfile: Record<string, unknown> = {}, charact
 
 test('Newbi database permissions are scoped to each host operation', async () => {
   await owner.$transaction(async (tx) => {
+    const [{ installed }] = await tx.$queryRaw<[{ installed: boolean }]>`
+      SELECT to_regprocedure('rica_plugin_newbi.sweep_retention()') IS NOT NULL AS installed`
     await tx.$executeRaw`SET LOCAL SESSION AUTHORIZATION rica_runtime`
     const grants = () => tx.$queryRaw`
       SELECT has_function_privilege('public.rica_claim_newbi_event_page(uuid,text)', 'EXECUTE') AS reader,
@@ -187,17 +190,22 @@ test('Newbi database permissions are scoped to each host operation', async () =>
         has_function_privilege('public.rica_claim_newbi_reply(uuid,boolean,uuid,text,text)', 'EXECUTE') AS sender,
         has_function_privilege('public.rica_newbi_poll_connection(uuid)', 'EXECUTE') AS "readConnection",
         has_function_privilege('public.rica_newbi_send_connection(uuid)', 'EXECUTE') AS "sendConnection",
-        has_schema_privilege('rica_plugin_newbi', 'USAGE') AS "credentialSchema"
+        has_schema_privilege('rica_plugin_newbi', 'USAGE') AS "pluginSchema",
+        has_table_privilege((SELECT oid FROM pg_class WHERE relnamespace = 'rica_plugin_newbi'::regnamespace AND relname = 'credentials'),
+          'SELECT') AS "credentialRead",
+        EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace AND proname = 'sweep_retention'
+          AND has_function_privilege(oid, 'EXECUTE')) AS "packageSweep"
     `
     const unscoped = { reader: false, finishPage: false, sweepEvents: false, sender: false,
-      readConnection: false, sendConnection: false, credentialSchema: false }
-    assert.deepEqual(await grants(), [{ ...unscoped, sweepEvents: true }])
+      readConnection: false, sendConnection: false, pluginSchema: false, credentialRead: false, packageSweep: false }
+    const runtime = { ...unscoped, sweepEvents: true, pluginSchema: true, packageSweep: installed }
+    assert.deepEqual(await grants(), [runtime])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
     assert.deepEqual(await grants(), [{ ...unscoped, reader: true, finishPage: true, readConnection: true }])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
     assert.deepEqual(await grants(), [{ ...unscoped, sender: true, sendConnection: true }])
     await tx.$executeRaw`RESET ROLE`
-    assert.deepEqual(await grants(), [{ ...unscoped, sweepEvents: true }])
+    assert.deepEqual(await grants(), [runtime])
   })
 })
 
@@ -454,6 +462,11 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
     target, key: randomUUID(), data: { accountId: account.id, postId, content: '手动拟好的一条回复。' },
   })
   assert.equal(proposal.status, 201, JSON.stringify(proposal.body))
+  await owner.$executeRaw`
+    UPDATE rica_plugin_newbi.replies
+    SET created_at = greatest(created_at, (SELECT created_at FROM public.agent_runs WHERE id = ${simulation.id}::uuid))
+      + interval '1 microsecond'
+    WHERE id = ${proposal.body.id}::uuid`
 
   const activityPath = characterPath(characterId) + '/run-activity'
   const firstPage = await request('GET', activityPath + '?limit=2', { target })
@@ -532,7 +545,7 @@ test('Newbi learns corroborated author slang and isolates it across authors and 
   assert.deepEqual(audiences, [false, true, false, false, false])
   await owner.$executeRaw`UPDATE rica_plugin_newbi.discussion_assessments SET created_at = ${new Date(0)} WHERE id = ${learned.id}::uuid`
   assert.deepEqual((await assess(firstAccount.id, 20, '博主甲')).glossaryUsed, [])
-  await sweepRuntimeRetention(owner)
+  await sweepRuntimeRetention(owner, packageRetention)
   const [{ count }] = await owner.$queryRaw<[{ count: number }]>`
     SELECT count(*)::integer AS count FROM rica_plugin_newbi.author_terms WHERE account_id = ${firstAccount.id}::uuid`
   assert.equal(count, 0)
@@ -1429,7 +1442,8 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(writes, 0)
 
     await owner.$executeRaw`UPDATE rica_plugin_newbi.events SET occurred_at = ${new Date(0)} WHERE account_id = ${accountId}::uuid`
-    await sweepRuntimeRetention(runtime)
+    await checkPackageRetention(runtime, packageRetention)
+    await sweepRuntimeRetention(runtime, packageRetention)
     assert.equal(await eventCount(), 0)
     assert.equal((await account()).historyLostCount, 1)
     const callsBeforeStop = calls

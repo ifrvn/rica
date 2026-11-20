@@ -5,7 +5,7 @@ import { authorize, ManagementError, type Scope } from '@ricajs/persistence/mana
 import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import type { PackageActivityView } from '../package-plugins.js'
-import { packageObject } from './package-database.js'
+import { packageObject } from '../package-database.js'
 
 const cursorSchema = z.tuple([z.iso.datetime(), resourceId, runActivityKind, z.string()])
 

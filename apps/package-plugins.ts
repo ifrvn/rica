@@ -22,6 +22,7 @@ const manifestSchema = z.strictObject({
 const packageIdentity = z.object({ name: packageName, version })
 const identifier = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/)
 const activityView = z.strictObject({ view: identifier })
+const retentionOperation = z.strictObject({ sweep: identifier })
 const accountOperations = z.strictObject({
   register: identifier, profiles: identifier.optional(), remove: identifier.optional(), verifyResume: identifier.optional(),
   prepareRegistration: z.custom<NonNullable<PluginAccounts['prepareRegistration']>>(value => typeof value === 'function').optional(),
@@ -29,6 +30,7 @@ const accountOperations = z.strictObject({
 
 export type PackageActivityView = Readonly<{ platform: string; schema: string; view: string }>
 export type PackageAccounts = Readonly<{ id: string; schema: string; operations: PluginAccounts }>
+export type PackageRetention = Readonly<{ id: string; package: string; schema: string; sweep: string }>
 
 export async function readPackagePlugins(manifestPath: string | undefined) {
   if (!manifestPath) return []
@@ -83,7 +85,8 @@ async function readPackageModules(manifestPath: string | undefined) {
   for (const entry of await readPackagePlugins(manifestPath)) {
     const { ricaPlugin }: { ricaPlugin?: RicaPlugin } = await import(pathToFileURL(entry.resolveExport('/rica')).href)
     if (ricaPlugin?.id !== entry.id || ricaPlugin.sdkVersion !== 1 ||
-        (ricaPlugin.management === undefined && ricaPlugin.worker === undefined && ricaPlugin.activity === undefined && ricaPlugin.accounts === undefined) ||
+        (ricaPlugin.management === undefined && ricaPlugin.worker === undefined && ricaPlugin.activity === undefined &&
+          ricaPlugin.accounts === undefined && ricaPlugin.retention === undefined) ||
         (ricaPlugin.management !== undefined && typeof ricaPlugin.management !== 'function') ||
         (ricaPlugin.worker !== undefined && typeof ricaPlugin.worker !== 'function')) {
       throw new Error('Unsupported Rica plugin SDK or capabilities: ' + entry.id)
@@ -96,7 +99,11 @@ async function readPackageModules(manifestPath: string | undefined) {
     if (!accounts.success || (accounts.data && !entry.database)) {
       throw new Error('Invalid Rica plugin account operations: ' + entry.id)
     }
-    modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data })
+    const retention = retentionOperation.optional().safeParse(ricaPlugin.retention)
+    if (!retention.success || (retention.data && !entry.database)) {
+      throw new Error('Invalid Rica plugin retention operation: ' + entry.id)
+    }
+    modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data, retention: retention.data })
   }
   return modules
 }
@@ -135,12 +142,30 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
   return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, accountPlugins, stop: host.stop }
 }
 
-export async function startPackageWorkers(manifestPath: string | undefined, shutdown: AbortSignal,
+type PackageModules = Awaited<ReturnType<typeof readPackageModules>>
+
+function retentionSources(modules: PackageModules): PackageRetention[] {
+  return modules.flatMap(({ entry, retention }) => retention ?
+    [{ id: entry.id, package: entry.package, schema: packageSchema(entry.id), sweep: retention.sweep }] : [])
+}
+
+export async function loadPackageRetention(manifestPath: string | undefined) {
+  return retentionSources(await readPackageModules(manifestPath))
+}
+
+export async function loadPackageWorkerDeployment(manifestPath: string | undefined) {
+  const modules = await readPackageModules(manifestPath)
+  return { retention: retentionSources(modules),
+    start: (shutdown: AbortSignal, report?: (diagnostic: PluginHostError['diagnostic']) => void) =>
+      startPackageWorkers(modules, shutdown, report) }
+}
+
+async function startPackageWorkers(modules: PackageModules, shutdown: AbortSignal,
   report?: (diagnostic: PluginHostError['diagnostic']) => void) {
   const controller = new AbortController()
   const signal = AbortSignal.any([shutdown, controller.signal])
   const definitions: PluginDefinition<undefined>[] = []
-  for (const { entry, ricaPlugin } of await readPackageModules(manifestPath)) {
+  for (const { entry, ricaPlugin } of modules) {
     const createWorker = ricaPlugin.worker
     if (!createWorker) continue
     const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)

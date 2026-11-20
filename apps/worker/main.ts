@@ -1,5 +1,5 @@
 import { startOutboxWorker, WorkerDependencyUnavailable } from './outbox.js'
-import { sweepRuntimeRetention } from './runtime-retention.js'
+import { checkPackageRetention, sweepRuntimeRetention } from './runtime-retention.js'
 import { loadConfig } from '@ricajs/runtime/config'
 import { startConfiguredModel, startObservedModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
 import { createDatabase } from '@ricajs/persistence/client'
@@ -12,11 +12,15 @@ import { observationError, reportPluginResult, startPluginHeartbeat } from '../p
 import { createAutoReviewer } from '../auto-review.js'
 import { createDiscussionAssessor } from '../discussion-assessment.js'
 import { connectNewbiSettings, createNewbiOperations, startNewbiBackground } from '@ricajs/plugin-newbi'
-import { startPackageWorkers } from '../package-plugins.js'
+import { loadPackageWorkerDeployment } from '../package-plugins.js'
 import { PluginHostError } from '@ricajs/plugin-host'
 
 async function main() {
   const config = loadConfig()
+  const packageDeployment = await loadPackageWorkerDeployment(process.env.RICA_PLUGIN_MANIFEST).catch(async (error: unknown) => {
+    await reportPluginResult(config.redisUrl, 'worker', 'START_FAILED')
+    throw error
+  })
   const directory = modelSettingsDirectory(config.databaseUrl)
   const settings = createModelSettingsStore(directory, modelSettingsContracts)
   const plugins = createDeploymentPluginStore(directory)
@@ -53,8 +57,10 @@ async function main() {
 
   let worker: Awaited<ReturnType<typeof startOutboxWorker>>
   try {
+    await checkPackageRetention(usageDb, packageDeployment.retention)
     const review = createAutoReviewer(async (check) => check((await getModel()).implementation))
-    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, getModel, platforms.resolveAdapter, sweepRuntimeRetention, review)
+    worker = await startOutboxWorker(config.databaseUrl, config.redisUrl, getModel, platforms.resolveAdapter,
+      (db) => sweepRuntimeRetention(db, packageDeployment.retention), review)
   } catch (error) {
     await Promise.all([selected.stop(), platforms.stop(), usageDb.$disconnect()])
     await reportPluginResult(config.redisUrl, 'worker',
@@ -85,7 +91,7 @@ async function main() {
   const stopBackground = startNewbiBackground(backgroundDb, backgroundEndpoint, { pollConnector, readConnectorThread, assessDiscussion },
     () => console.error(JSON.stringify({ service: 'worker', event: 'newbi_background_failed' })))
   const stopping = new AbortController()
-  const packageStartup = startPackageWorkers(process.env.RICA_PLUGIN_MANIFEST, stopping.signal, (diagnostic) => {
+  const packageStartup = packageDeployment.start(stopping.signal, (diagnostic) => {
     console.info(JSON.stringify({ service: 'worker', event: 'plugin_status', ...diagnostic }))
     if (diagnostic.code === 'STOP_FAILED') process.exitCode = 1
   })

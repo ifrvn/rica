@@ -5,7 +5,7 @@ import { ManagementError, registerAccount } from '@ricajs/persistence/management
 import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { Prisma } from '@ricajs/persistence/prisma'
 import type { PackageAccounts } from '../package-plugins.js'
-import { packageObject } from './package-database.js'
+import { packageObject } from '../package-database.js'
 
 const preparedRegistration = z.discriminatedUnion('accepted', [
   z.strictObject({ accepted: z.literal(true), data: z.json() }),
