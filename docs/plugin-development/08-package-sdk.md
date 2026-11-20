@@ -112,7 +112,7 @@ FROM pg_catalog.pg_class
 WHERE oid = 'rica_plugin_newbi.credentials'::regclass;
 ```
 
-授权后带上插件清单运行 `rica migrate`。包迁移会把它创建的活动视图和清理入口交给同一个所有者。后续该包可以用迁移登录维护 Newbi 的业务表。活动查询沿用 `rica_admin_api`，清理入口继续以 `rica_runtime` 调用宿主已有的受限函数。
+授权后带上插件清单运行 `rica migrate`。包迁移会把它创建的活动视图和清理入口交给同一个所有者。后续该包可以用迁移登录维护 Newbi 的业务表。活动查询沿用 `rica_admin_api`。配置 Newbi 包后，`rica_runtime` 调用包内的清理函数，由 Newbi 所有者角色按批清理回复正文、事件和讨论评估。
 
 清单里的 Newbi Worker 和管理入口都使用 `RICA_PLUGIN_NEWBI_RUNTIME_URL`，连接宿主数据库并指定 `?schema=rica_plugin_newbi`。运行时登录需要现有的 `rica_runtime` 角色权限，并可以切换到 `rica_admin_api`、`rica_newbi_poller` 和 `rica_newbi_executor`。后台轮询和评估继续读取控制台的接入点、后台评估开关与外部模型状态。未登记 Newbi 包时，宿主使用内置活动和清理，以及同一套 Worker 与管理入口。
 
