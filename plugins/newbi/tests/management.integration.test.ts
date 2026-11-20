@@ -189,13 +189,15 @@ test('Newbi database permissions are scoped to each host operation', async () =>
   await owner.$transaction(async (tx) => {
     const [{ installed, scopedOwners }] = await tx.$queryRaw<[{ installed: boolean; scopedOwners: boolean }]>`
       SELECT to_regprocedure('rica_plugin_newbi.sweep_retention()') IS NOT NULL AS installed,
-        (SELECT count(*) = 7 FROM pg_proc p
+        (SELECT count(*) = 9 FROM pg_proc p
           JOIN pg_class c ON c.oid = 'rica_plugin_newbi.events'::regclass
           WHERE p.pronamespace = 'rica_plugin_newbi'::regnamespace AND p.proname IN (
-            'claim_event_page', 'finish_event_page', 'claim_reply', 'finish_reply', 'reply_preflight', 'execution_target', 'close_reply')
+            'claim_event_page', 'finish_event_page', 'claim_reply', 'finish_reply', 'reply_preflight',
+            'execution_target', 'close_reply', 'poll_connection', 'send_connection')
             AND p.proowner = c.relowner AND p.prosecdef
             AND has_function_privilege(c.relowner, 'public.rica_newbi_lock_poll_binding_v1(uuid)', 'EXECUTE')
             AND has_function_privilege(c.relowner, 'public.rica_newbi_read_active_binding_v1(uuid)', 'EXECUTE')
+            AND has_function_privilege(c.relowner, 'public.rica_newbi_read_active_account_v1(uuid)', 'EXECUTE')
             AND NOT has_table_privilege(c.relowner, 'public.platform_accounts', 'SELECT')
             AND NOT has_table_privilege(c.relowner, 'public.characters', 'UPDATE')) AS "scopedOwners"`
     assert.equal(scopedOwners, true)
@@ -213,8 +215,11 @@ test('Newbi database permissions are scoped to each host operation', async () =>
           AND has_function_privilege(oid, 'EXECUTE')) AS "sendFunctions",
         EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace
           AND proname = 'close_reply' AND has_function_privilege(oid, 'EXECUTE')) AS "closeReply",
-        has_function_privilege('public.rica_newbi_poll_connection(uuid)', 'EXECUTE') AS "readConnection",
-        has_function_privilege('public.rica_newbi_send_connection(uuid)', 'EXECUTE') AS "sendConnection",
+        EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace
+          AND proname = 'poll_connection' AND has_function_privilege(oid, 'EXECUTE')) AS "readConnection",
+        EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace
+          AND proname = 'send_connection' AND has_function_privilege(oid, 'EXECUTE')) AS "sendConnection",
+        has_function_privilege('public.rica_newbi_read_active_account_v1(uuid)', 'EXECUTE') AS "readHostAccount",
         has_schema_privilege('rica_plugin_newbi', 'USAGE') AS "pluginSchema",
         has_table_privilege((SELECT oid FROM pg_class WHERE relnamespace = 'rica_plugin_newbi'::regnamespace AND relname = 'credentials'),
           'SELECT') AS "credentialRead",
@@ -225,7 +230,8 @@ test('Newbi database permissions are scoped to each host operation', async () =>
     `
     const unscoped = { reader: false, finishPage: false, hostBinding: false, readHostBinding: false,
       sweepEvents: false, sendFunctions: 0, closeReply: false,
-      readConnection: false, sendConnection: false, pluginSchema: false, credentialRead: false, ownsPluginData: false, packageSweep: false }
+      readConnection: false, sendConnection: false, readHostAccount: false,
+      pluginSchema: false, credentialRead: false, ownsPluginData: false, packageSweep: false }
     const runtime = { ...unscoped, sweepEvents: true, pluginSchema: true, packageSweep: installed }
     assert.deepEqual(await grants(), [runtime])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
@@ -1039,6 +1045,12 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.equal(writes, 0)
     const sendFromConsole = (path: string, actor = 'admin-a', retry = false) =>
       sendRequest('POST', path + '/send', { actor, data: { retry } })
+    const hasSendConnection = async (id: string) => {
+      const [{ available }] = await executor.$queryRaw<[{ available: boolean }]>`
+        SELECT EXISTS (SELECT FROM rica_plugin_newbi.send_connection(${id}::uuid)) AS available`
+      return available
+    }
+    assert.equal(await hasSendConnection(approved.id), false)
     assert.equal((await sendFromConsole(approved.path)).status, 409)
     const queuePath = prefix + '/replies'
     const waitingQueue = await sendRequest('GET', queuePath + '?status=WAITING', { actor: 'reviewer' })
@@ -1067,6 +1079,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       UPDATE rica_plugin_newbi.replies SET status = 'READY', reviewer_id = 'unbound-reviewer' WHERE id = ${approved.id}::uuid
     `, /Approval must bind the reply executor/)
     assert.equal((await approved.decide('APPROVE')).status, 200)
+    assert.equal(await hasSendConnection(approved.id), true)
     assert.equal((await sendFromConsole(approved.path, 'nonmember')).status, 404)
     assert.equal((await sendFromConsole(characterPath(b) + '/newbi/replies/' + approved.id, 'admin-b')).status, 404)
     assert.equal((await sendFromConsole(approved.path, 'admin-a', true)).status, 409)
@@ -1235,6 +1248,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.equal((await paused.decide('APPROVE')).status, 200)
     assert.equal((await sendRequest('POST', characterPath(a) + '/controls', { key: 'newbi-test-pause',
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'PAUSE', reason: 'Check claim boundary' } })).status, 200)
+    assert.equal(await hasSendConnection(paused.id), false)
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, paused.id), { status: 'UNAVAILABLE' })
     assert.equal((await sendRequest('GET', paused.path)).body.attempts, 0)
     assert.equal(writes, 7)
@@ -1365,6 +1379,15 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.ok(bound)
     assert.deepEqual(bound.newbiProfile, row.newbiProfile)
     const accountId: string = bind.body.id
+    const hasPollConnection = async (id: string) => {
+      const [{ available }] = await db.$queryRaw<[{ available: boolean }]>`
+        SELECT EXISTS (SELECT FROM rica_plugin_newbi.poll_connection(${id}::uuid)) AS available`
+      return available
+    }
+    const otherPlatform = await owner.platformAccount.create({ data: { characterId: a, identityId, status: 'ACTIVE',
+      platform: 'mock-a', instanceKey: endpoint, remoteAccountId: agentId } })
+    assert.equal(await hasPollConnection(accountId), false)
+    assert.equal(await hasPollConnection(otherPlatform.id), false)
     const reader = host.plugin.implementation
     assert.equal('comment' in reader, false)
     const poll = () => pollNewbiEvents(db, reader, accountId)
@@ -1392,6 +1415,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     assert.equal(calls, callsAfterRegistration)
     connectorEndpoint = endpoint
     assert.equal((await control('RESUME')).status, 200)
+    assert.equal(await hasPollConnection(accountId), true)
     connectorEndpoint = undefined
     await assert.rejects(startNewbiReader({ endpoint, credential: '' }), /MISSING_SERVICE/)
     await assert.rejects(startNewbiReader({ ...readerEnv, endpoint: 'https://fixture.example/agent-api/v1' }),
@@ -1517,6 +1541,7 @@ test('Newbi event polling checkpoints empty and replayed pages, backs off, and f
     await Promise.race([requestEntered, pending.then(() => { throw new Error('No event read reached the fixture') })])
     assert.equal((await poll()).status, 'WAITING')
     assert.equal((await control('PAUSE')).status, 200)
+    assert.equal(await hasPollConnection(accountId), false)
     releasePage()
     assert.deepEqual(await pending, { status: 'STOPPED' })
     assert.equal((await account()).cursor, 'after-reset')
