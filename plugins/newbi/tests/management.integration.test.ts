@@ -26,12 +26,14 @@ import { createDatabase } from '@ricajs/persistence/client'
 import { Prisma } from '@ricajs/persistence/prisma'
 import { loadConfig } from '@ricajs/runtime/config'
 import { createDeploymentPluginStore } from '../../../apps/deployment-plugins.js'
+import { loadPackageManagement } from '../../../apps/package-plugins.js'
 import { readPluginStatus, reportPluginResult } from '../../../apps/plugin-observation.js'
 
 const config = loadConfig()
 const simulationPlatforms = await startSimulationPlatforms({})
 const owner = createDatabase(config.databaseUrl)
 const management = createDatabase(config.databaseUrl, 'rica_admin_api')
+const packageManagement = await loadPackageManagement(process.env.RICA_TEST_NEWBI_PACKAGE_MANIFEST, { newbi: '@ricajs/plugin-newbi' })
 const issuer = 'https://identity.example.test'
 const fixtureOrigin = 'http://localhost:5173'
 const subjects = new Set(['admin-a', 'admin-b', 'reviewer', 'auditor', 'nonmember'])
@@ -46,6 +48,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
     deploymentPlugins,
+    activityViews: packageManagement.activityViews,
     plugins: [createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
       identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
@@ -133,7 +136,7 @@ after(async () => {
       await tx.character.deleteMany({ where: { id: { in: characterIds } } })
     })
   } finally {
-    await Promise.all([management.$disconnect(), owner.$disconnect()])
+    await Promise.all([management.$disconnect(), owner.$disconnect(), packageManagement.stop()])
   }
 })
 
@@ -459,11 +462,13 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
     [proposal.body.id, 'WAITING'], [simulation.id, 'QUEUED'],
   ])
   assert.equal(firstPage.body.items[1].identity, '冷静观察者')
+  assert.equal(firstPage.body.items[0].platform, 'newbi')
   const older = await request('GET', activityPath + '?cursor=' + firstPage.body.nextCursor, { target })
   assert.equal(older.status, 200, JSON.stringify(older.body))
   assert.equal(older.body.items.length, 5)
   assert.equal(older.body.items.at(-1).id, completed.body.id)
   assert.equal(older.body.items.at(-1).kind, 'ASSESSMENT')
+  assert.equal(older.body.items.at(-1).platform, 'newbi')
   assert.equal(older.body.nextCursor, null)
   const filtered = await request('GET', activityPath + '?kind=SIMULATION', { target })
   assert.deepEqual(filtered.body.items.map(({ id }: { id: string }) => id), [simulation.id])

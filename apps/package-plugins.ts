@@ -14,7 +14,9 @@ const manifestSchema = z.strictObject({
   version: z.literal(1),
   plugins: z.array(z.strictObject({
     id: pluginId, package: packageName, version, config: z.json().default(null),
-    database: z.strictObject({ migrateUrlEnv: envName, runtimeUrlEnv: envName }).optional(),
+    database: z.strictObject({
+      migrateUrlEnv: envName, runtimeUrlEnv: envName, migrationJournal: z.literal('separate').optional(),
+    }).optional(),
   })),
 })
 const packageIdentity = z.object({ name: packageName, version })
@@ -25,7 +27,7 @@ const accountOperations = z.strictObject({
   prepareRegistration: z.custom<NonNullable<PluginAccounts['prepareRegistration']>>(value => typeof value === 'function').optional(),
 })
 
-export type PackageActivityView = Readonly<{ id: string; schema: string; view: string }>
+export type PackageActivityView = Readonly<{ platform: string; schema: string; view: string }>
 export type PackageAccounts = Readonly<{ id: string; schema: string; operations: PluginAccounts }>
 
 export async function readPackagePlugins(manifestPath: string | undefined) {
@@ -64,11 +66,11 @@ export async function readPackagePlugins(manifestPath: string | undefined) {
 
 function packageSchema(id: string) { return 'rica_plugin_' + id.replaceAll('-', '_') }
 
-export function packageDatabaseUrl(id: string, source: string) {
+export function packageDatabaseUrl(id: string, source: string, migrationJournal?: 'separate') {
   const value = process.env[source]
   if (!value) throw new Error('Missing Rica plugin database setting: ' + source)
   const url = URL.parse(value)
-  const schema = packageSchema(id)
+  const schema = migrationJournal === 'separate' ? 'rica_migrate_' + id.replaceAll('-', '_') : packageSchema(id)
   if (!url || !['postgres:', 'postgresql:'].includes(url.protocol) ||
       url.searchParams.getAll('schema').length !== 1 || url.searchParams.get('schema') !== schema) {
     throw new Error('Rica plugin database URL must target schema ' + schema + ': ' + id)
@@ -99,12 +101,15 @@ async function readPackageModules(manifestPath: string | undefined) {
   return modules
 }
 
-export async function loadPackageManagement(manifestPath: string | undefined) {
+export async function loadPackageManagement(manifestPath: string | undefined, builtInActivities: Readonly<Record<string, string>> = {}) {
   const definitions: PluginDefinition<PluginManagement>[] = []
   const activityViews: PackageActivityView[] = []
   const accountPlugins: PackageAccounts[] = []
   for (const { entry, ricaPlugin, activity, accounts } of await readPackageModules(manifestPath)) {
-    if (activity) activityViews.push({ id: entry.id, schema: packageSchema(entry.id), view: activity.view })
+    if (activity) {
+      const ownsBuiltInActivity = Object.hasOwn(builtInActivities, entry.id) && builtInActivities[entry.id] === entry.package
+      activityViews.push({ platform: ownsBuiltInActivity ? entry.id : 'plugin:' + entry.id, schema: packageSchema(entry.id), view: activity.view })
+    }
     if (accounts) accountPlugins.push({ id: entry.id, schema: packageSchema(entry.id), operations: accounts })
     const createManagement = ricaPlugin.management
     if (!createManagement) continue

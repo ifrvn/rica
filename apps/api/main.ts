@@ -24,7 +24,9 @@ import { packageManagementPlugins } from './package-management.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
-const packageManagement = await loadPackageManagement(managementConfig ? process.env.RICA_PLUGIN_MANIFEST : undefined)
+const packageManagement = await loadPackageManagement(managementConfig ? process.env.RICA_PLUGIN_MANIFEST : undefined, {
+  newbi: '@ricajs/plugin-newbi',
+})
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const platforms = managementConfig ? await deploymentPlugins.readSimulationPlatforms()

@@ -30,6 +30,8 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 
 两个 URL 均指定 `?schema=rica_plugin_acme`。命名规则是 `rica_plugin_` 加插件 ID，连字符转为下划线。部署者预先建立 schema、迁移角色和运行时角色，并通过迁移授予业务操作所需权限。无额外参数的 `pnpm run db:migrate` 或 `rica migrate` 先运行宿主迁移，再依清单顺序运行插件迁移。附带参数时只调用宿主的 Prisma CLI，方便保留 `--help` 和单独指定宿主配置的用法。运行时用自己的 Client 连接该命名空间，使用 `PrismaPg` 时将对应 schema 传给驱动适配器。
 
+首次接管已有插件 schema 时，可在 `database` 中声明 `"migrationJournal": "separate"`。迁移 URL 改用 `?schema=rica_migrate_acme`，运行时 URL 仍指向 `rica_plugin_acme`。由部署者创建迁移记录 schema 并授权迁移登录，迁移 SQL 显式限定业务对象的 schema。已经记录过迁移的部署应持续使用原来的记录位置。
+
 ### 统一运行活动
 
 插件可以单独声明 `activity: { view: 'run_activity' }`。它需要清单中的 `database` 配置，并在**宿主所在数据库**的插件 schema 中创建同名视图。视图名由小写字母开头，后续允许小写字母、数字和下划线，最多 63 个字符。视图应提供以下非空列。
@@ -63,7 +65,24 @@ accounts: {
 
 内置 Newbi 的账号池登记和直接绑定已走相同的两阶段宿主命令。它先核对远端 Agent，提交前再确认部署中的接入点，账号登记和凭据保存仍作为一次本地写入完成。
 
-内置 Newbi 的凭据、公开账号资料、事件、轮询检查点、讨论评估、词库和回复执行账本存放在 `rica_plugin_newbi`。这些结构当前由宿主迁移部署。轮询角色通过受限函数更新游标和事件页，发送角色通过自己的受限函数取用凭据、领取发送许可和记录回执。评估结果与词库证据在同一事务中提交，证据随来源评估到期清理。后续阶段将迁移独立部署入口。
+内置 Newbi 的凭据、公开账号资料、事件、轮询检查点、讨论评估、词库和回复执行账本存放在 `rica_plugin_newbi`，当前由宿主迁移部署。轮询角色通过受限函数更新游标和事件页，发送角色通过自己的受限函数取用凭据、领取发送许可和记录回执。评估结果与词库证据在同一事务中提交，证据随来源评估到期清理。
+
+Newbi 的统一活动已有独立包入口。部署者可在安装 `@ricajs/plugin-newbi` 后，把下面的条目加入部署清单。运行 `rica migrate` 会先应用宿主迁移，再从 Newbi 包部署只读视图。API 通过声明的视图获取评估和提案，保留原有活动标识和详情入口。未在清单中登记时，API 使用内置活动查询。
+
+```json
+{
+  "id": "newbi",
+  "package": "@ricajs/plugin-newbi",
+  "version": "0.1.0",
+  "database": {
+    "migrateUrlEnv": "RICA_PLUGIN_NEWBI_MIGRATE_URL",
+    "runtimeUrlEnv": "RICA_PLUGIN_NEWBI_RUNTIME_URL",
+    "migrationJournal": "separate"
+  }
+}
+```
+
+Newbi 活动视图与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。迁移登录需要能在该 schema 记录迁移，也需要 `rica_plugin_newbi` 的 `USAGE` 和 `CREATE`，以及 `public` 的 `USAGE`。部署者可以在宿主首次创建业务 schema 后授予这些权限。视图以调用者权限运行，活动查询沿用宿主的 `rica_admin_api`。清单里的运行时 URL 只为以后启用需要独立连接的能力保留。管理命令、轮询与发送仍按内置方式装配。
 
 ## 部署和生命周期
 

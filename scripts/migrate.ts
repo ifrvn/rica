@@ -14,7 +14,7 @@ const hostArgs = process.argv.slice(2)
 const plugins = await readPackagePlugins(hostArgs.length ? undefined : process.env.RICA_PLUGIN_MANIFEST)
 const migrations = plugins.flatMap((plugin) => plugin.database ? [{
   config: plugin.resolveExport('/rica/prisma'),
-  url: packageDatabaseUrl(plugin.id, plugin.database.migrateUrlEnv),
+  url: packageDatabaseUrl(plugin.id, plugin.database.migrateUrlEnv, plugin.database.migrationJournal),
 }] : [])
 
 function deploy(config: string, args: string[], env = process.env) {

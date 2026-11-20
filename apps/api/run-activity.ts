@@ -28,6 +28,7 @@ export async function listRunActivity(db: PrismaClient, scope: Scope, query: z.i
       ${id ?? null}::uuid, ${query.limit + 2}::integer)`,
   ]
   for (const plugin of plugins) {
+    if (activityViews.some(({ platform }) => platform === plugin.id)) continue
     for (const activity of query.kind ? [query.kind] : runActivityKind.options) {
       const source = plugin.runActivity?.[activity]
       if (source) sources.push(source(characterId))
@@ -37,7 +38,7 @@ export async function listRunActivity(db: PrismaClient, scope: Scope, query: z.i
     for (const source of activityViews) {
       const relation = packageObject(source.schema, source.view)
       sources.push(Prisma.sql`
-        SELECT v.id, v.kind, ${'plugin:' + source.id}::text AS platform,
+        SELECT v.id, v.kind, ${source.platform}::text AS platform,
           v.identity, v.account, v.account_id, v.state, v.created_at
         FROM ${relation} v
         JOIN public.platform_accounts a ON (a.character_id, a.id) = (v.character_id, v.account_id)

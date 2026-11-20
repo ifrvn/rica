@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -68,6 +68,12 @@ for (const [index, dir] of directories.entries()) {
     copy(join(build, dir), destination, isProduction)
     const entries = typeof exports === 'string' ? { '.': exports } : exports
     manifest.exports = Object.fromEntries(Object.entries(entries).map(([key, value]) => [key, compiledExport(value)]))
+    if (entries['./rica/prisma']) {
+      const configDirectory = dirname(entries['./rica/prisma'])
+      const relativeDirectory = join(dir, configDirectory)
+      copy(join(relativeDirectory, 'schema.prisma'), join(destination, configDirectory, 'schema.prisma'))
+      copy(join(relativeDirectory, 'migrations'), join(destination, configDirectory, 'migrations'))
+    }
     for (const file of sourceFiles.filter((file) => file.startsWith(dir.replaceAll('\\', '/') + '/') && /\.(?:vue|css)$/.test(file))) {
       copy(file, join(destination, file.slice(dir.length + 1)))
     }
