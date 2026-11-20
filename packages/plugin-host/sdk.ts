@@ -51,6 +51,7 @@ type ManagementFactory = (config: PluginJson, context: PluginContext) => PluginM
 type WorkerFactory = (config: PluginJson, context: PluginWorkerContext) => PluginWorker
 export type PluginActivity = Readonly<{ view: string }>
 export type PluginRetention = Readonly<{ sweep: string }>
+export type PluginCommand = Readonly<{ id: string; function: string; scope: 'character' | 'account' }>
 export type PluginAccountPreparation = Readonly<{
   characterId: string
   instanceKey: string
@@ -72,6 +73,7 @@ type Capabilities = {
   activity: PluginActivity
   accounts: PluginAccounts
   retention: PluginRetention
+  commands: readonly PluginCommand[]
 }
 type DeclaredCapability = { [K in keyof Capabilities]: Pick<Capabilities, K> }[keyof Capabilities]
 

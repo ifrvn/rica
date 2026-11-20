@@ -4033,6 +4033,18 @@ test('external account operations share the host transaction and enforce account
     RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
       SELECT EXISTS (SELECT FROM rica_plugin_account_fixture.entries WHERE character_id = $1 AND account_id = $2 AND label = 'Allowed')
     $$`
+  await owner.$executeRaw`CREATE TABLE rica_plugin_account_fixture.command_effects (
+    id uuid PRIMARY KEY, character_id uuid NOT NULL, actor_id text NOT NULL, account_id uuid, label text NOT NULL
+  )`
+  await owner.$executeRaw`CREATE FUNCTION rica_plugin_account_fixture.record_command(uuid, text, uuid, jsonb)
+    RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+      DECLARE effect uuid := gen_random_uuid();
+      BEGIN
+        INSERT INTO rica_plugin_account_fixture.command_effects VALUES (effect, $1, $2, $3, $4->>'label');
+        IF $4->>'label' = 'Reject' THEN RETURN NULL; END IF;
+        IF $4->>'label' = 'Malformed' THEN RETURN '{}'::jsonb; END IF;
+        RETURN jsonb_build_object('id', effect, 'status', 'RECORDED');
+      END $$`
   await owner.$executeRaw`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA rica_plugin_account_fixture FROM PUBLIC`
   await owner.$executeRaw`GRANT USAGE ON SCHEMA rica_plugin_account_fixture TO rica_admin_api`
   await owner.$executeRaw`GRANT SELECT ON rica_plugin_account_fixture.account_profiles TO rica_admin_api`
@@ -4052,6 +4064,10 @@ test('external account operations share the host transaction and enforce account
           if (data.label === 'RejectRemote') return { accepted: false }
           return { accepted: true, data: { label: data.label.trim() } }
         } },
+      commands: [
+        { id: 'record-account', function: 'record_command', scope: 'account' },
+        { id: 'record-character', function: 'record_command', scope: 'character' },
+      ],
       management() { return { read(request, { readAccounts }) { return readAccounts(request.query.map(([, id]) => id)) } } }
     }`),
   ])
@@ -4113,4 +4129,39 @@ test('external account operations share the host transaction and enforce account
   const removed = await request('DELETE', pool(a) + '/' + removable.body.id, { target, key: 'external-account-remove' })
   assert.equal(removed.status, 200, JSON.stringify(removed.body))
   assert.deepEqual(await owner.$queryRaw`SELECT account_id FROM rica_plugin_account_fixture.entries WHERE account_id = ${removable.body.id}::uuid`, [])
+
+  const commandPath = characterPath(a) + '/plugins/account-fixture/commands/'
+  const record = (accountId: string, label: string, key = 'package-command', actor = 'admin-a') =>
+    request('POST', commandPath + 'record-account', { target, actor, key, data: { accountId, data: { label } } })
+  for (const accountId of [foreign.body.id, accountA]) assert.equal((await record(accountId, 'Outside scope')).status, 404)
+  assert.equal((await record(local.body.id, 'Outside scope', 'package-command', 'admin-b')).status, 404)
+  assert.equal((await request('POST', commandPath + 'record-account', {
+    target, data: { accountId: local.body.id, data: { label: 'No key' } },
+  })).status, 422)
+  assert.equal((await record(local.body.id, 'Reject')).body.error.code, 'PLUGIN_COMMAND_REJECTED')
+  assert.equal((await record(local.body.id, 'Malformed')).status, 500)
+  assert.deepEqual(await owner.$queryRaw`SELECT id FROM rica_plugin_account_fixture.command_effects`, [])
+
+  const [first, replay] = await Promise.all([record(local.body.id, 'Committed'), record(local.body.id, 'Committed')])
+  assert.equal(first.status, 200, JSON.stringify(first.body))
+  assert.equal(replay.status, 200, JSON.stringify(replay.body))
+  assert.equal(first.body.id, replay.body.id)
+  assert.equal((await record(local.body.id, 'Changed')).body.error.code, 'IDEMPOTENCY_CONFLICT')
+  assert.deepEqual(await owner.$queryRaw`
+    SELECT id, character_id, actor_id, account_id, label FROM rica_plugin_account_fixture.command_effects
+  `, [{ id: first.body.id, character_id: a, actor_id: actorId(issuer, 'admin-a'), account_id: local.body.id, label: 'Committed' }])
+  assert.equal(await owner.managementAudit.count({ where: { characterId: a, targetId: first.body.id,
+    actorId: actorId(issuer, 'admin-a'), operation: 'plugin.account-fixture.record-account' } }), 1)
+
+  const characterCommand = await request('POST', commandPath + 'record-character', {
+    target, key: 'package-command', data: { data: { label: 'Character scope' } },
+  })
+  assert.equal(characterCommand.status, 200, JSON.stringify(characterCommand.body))
+  assert.deepEqual(await owner.$queryRaw`
+    SELECT account_id FROM rica_plugin_account_fixture.command_effects WHERE id = ${characterCommand.body.id}::uuid
+  `, [{ account_id: null }])
+  const revoked = await request('POST', characterPath(a) + '/controls', { target, key: 'revoke-package-command',
+    data: { scope: 'ACCOUNT', scopeId: local.body.id, operation: 'REVOKE_ACCOUNT', reason: 'Verify replay authorization' } })
+  assert.equal(revoked.status, 200, JSON.stringify(revoked.body))
+  assert.equal((await record(local.body.id, 'Committed')).status, 404)
 })

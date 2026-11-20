@@ -9,6 +9,7 @@ import { createDatabase } from '@ricajs/persistence/client'
 import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { loadPackageManagement } from '../package-plugins.js'
 import { packageAccountHooks } from './package-accounts.js'
+import { registerPackageCommands } from './package-commands.js'
 
 export async function startManagedApi(db: PrismaClient, host: Awaited<ReturnType<typeof loadPackageManagement>>,
   fallback: ManagementAdapter, context: ManagementAdapterContext) {
@@ -40,6 +41,13 @@ export function packageManagementPlugins(db: PrismaClient, host: Awaited<ReturnT
   const plugins = new Map(host.accountPlugins.map(entry => [entry.id, packageAccountHooks(entry)]))
   for (const plugin of host.plugins) {
     plugins.set(plugin.id, packageManagementRoute(db, plugin, plugins.get(plugin.id)?.account))
+  }
+  for (const source of host.commandPlugins) {
+    const base = plugins.get(source.id)
+    plugins.set(source.id, { ...base, id: source.id, registerRoutes(app) {
+      base?.registerRoutes(app)
+      registerPackageCommands(app, db, source)
+    } })
   }
   return [...plugins.values()]
 }

@@ -71,6 +71,7 @@ export async function lockCharacter(tx: Tx, characterId: string) {
 }
 
 type Command = {
+  authorizeTarget?(tx: Tx): Promise<void>
   actor: Subject
   characterId?: string
   operation: string
@@ -101,6 +102,7 @@ export async function executeManagementCommand(
       await lockCharacter(tx, characterId)
       await authorize(tx, { actor, characterId })
     }
+    await command.authorizeTarget?.(tx)
   }
 
   async function replay(tx: Tx) {

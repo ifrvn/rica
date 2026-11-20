@@ -2,15 +2,31 @@
 
 Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Worker、迁移任务和前端构建的共同输入。新版 SDK 按能力独立演进，公共签名使用可序列化的数据，插件各自管理 Prisma schema 和生成的 Client。
 
-当前实现覆盖部署清单加载、只读管理接口、Worker 生命周期、独立 Prisma 迁移、统一活动分页和账号接入。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
+当前实现覆盖部署清单加载、管理读取和写命令、Worker 生命周期、独立 Prisma 迁移、统一活动分页和账号接入。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
 
 ```json
 {"version": 1, "plugins": [{"id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0", "config": {"label": "Acme"}}]}
 ```
 
-包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`worker`、`activity`、`accounts` 或 `retention` 中的一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
+包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`commands`、`worker`、`activity`、`accounts` 或 `retention` 中的一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
 
 `management(config, context)` 可异步创建实例，返回 `read(request, services)` 和可选的 `stop()`。`request` 包含角色 ID、调用者 ID、插件内路径和保留重复项的查询参数。`read` 返回 JSON，宿主只转发已通过权限校验的 GET 请求。插件查询自己的数据库时仍应使用已授权的 `characterId` 筛选数据。
+
+### 管理写命令
+
+插件通过 `commands` 声明命令。命令 ID 由小写字母开头，由小写字母、数字和分隔用的连字符组成，最多 50 个字符。函数名使用下划线分隔的 PostgreSQL 标识符。
+
+```ts
+commands: [
+  { id: 'update-note', function: 'update_note', scope: 'account' },
+]
+```
+
+客户端使用 `POST /v1/characters/{characterId}/plugins/{pluginId}/commands/{commandId}`，提供 `Idempotency-Key` 请求头和 JSON 请求体。账号命令提交 `{ "accountId": "<uuid>", "data": {} }`，角色命令提交 `{ "data": {} }`。插件负责校验 `data` 的业务字段。
+
+包需要声明 `database`，并在宿主数据库的插件 schema 中迁移同名函数，签名为 `(character_id uuid, actor_id text, account_id uuid, data jsonb) RETURNS jsonb`。角色命令收到 SQL `NULL` 作为账号 ID。账号命令只对当前角色、当前插件平台下已绑定且未撤销的账号开放。宿主在重放前同样检查账号权限。函数返回 `{ "id": "<uuid>" }` 和可选的 `status`、`version`，其中 ID 用作审计目标。返回空值会拒绝命令。函数异常或返回结构无效时，插件写入会随宿主事务回滚。
+
+同一调用者、角色、命令和幂等键在 24 小时内重放结果。改变请求数据会返回冲突。审计操作名为 `plugin.<插件 ID>.<命令 ID>`。仅向 `rica_admin_api` 授予 schema 的 `USAGE` 和指定函数的 `EXECUTE`，撤销 `PUBLIC` 的执行权限。若使用 `SECURITY DEFINER`，固定 `search_path` 并限定所有业务对象的 schema。命令函数适用于本地事务数据，真实外部操作需要宿主的执行许可协议。
 
 ### Worker 生命周期
 

@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { startPluginHost, type PluginDefinition, type PluginHostError } from '@ricajs/plugin-host'
-import type { PluginAccounts, PluginManagement, PluginWorkerServices, RicaPlugin } from '@ricajs/plugin-host/sdk'
+import type { PluginAccounts, PluginCommand, PluginManagement, PluginWorkerServices, RicaPlugin } from '@ricajs/plugin-host/sdk'
 import type { ManagementAdapter } from '@ricajs/persistence/management-http'
 
 const pluginId = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(50)
@@ -24,6 +24,8 @@ const packageIdentity = z.object({ name: packageName, version })
 const identifier = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/)
 const activityView = z.strictObject({ view: identifier })
 const retentionOperation = z.strictObject({ sweep: identifier })
+const commandOperations = z.array(z.strictObject({ id: pluginId, function: identifier, scope: z.enum(['character', 'account']) }))
+  .min(1).refine(commands => new Set(commands.map(({ id }) => id)).size === commands.length)
 const workerServicesContract = z.strictObject({ discussion: z.literal(true) })
 const managementAdapterContract = z.strictObject({
   id: pluginId, hostApiVersion: z.literal(1),
@@ -37,6 +39,7 @@ const accountOperations = z.strictObject({
 export type PackageActivityView = Readonly<{ platform: string; schema: string; view: string }>
 export type PackageAccounts = Readonly<{ id: string; schema: string; operations: PluginAccounts }>
 export type PackageRetention = Readonly<{ id: string; package: string; schema: string; sweep: string }>
+export type PackageCommands = Readonly<{ id: string; schema: string; commands: readonly PluginCommand[] }>
 
 export async function readPackagePlugins(manifestPath: string | undefined) {
   if (!manifestPath) return []
@@ -93,7 +96,7 @@ async function readPackageModules(manifestPath: string | undefined) {
       await import(pathToFileURL(entry.resolveExport('/rica')).href)
     if (ricaPlugin?.id !== entry.id || ricaPlugin.sdkVersion !== 1 ||
         (ricaPlugin.management === undefined && ricaPlugin.worker === undefined && ricaPlugin.activity === undefined &&
-          ricaPlugin.accounts === undefined && ricaPlugin.retention === undefined) ||
+          ricaPlugin.accounts === undefined && ricaPlugin.retention === undefined && ricaPlugin.commands === undefined) ||
         (ricaPlugin.management !== undefined && typeof ricaPlugin.management !== 'function') ||
         (ricaPlugin.worker !== undefined && typeof ricaPlugin.worker !== 'function')) {
       throw new Error('Unsupported Rica plugin SDK or capabilities: ' + entry.id)
@@ -114,8 +117,12 @@ async function readPackageModules(manifestPath: string | undefined) {
     if (!workerServices.success || (workerServices.data && !ricaPlugin.worker)) {
       throw new Error('Invalid Rica plugin Worker services: ' + entry.id)
     }
+    const commands = commandOperations.optional().safeParse(ricaPlugin.commands)
+    if (!commands.success || (commands.data && !entry.database)) {
+      throw new Error('Invalid Rica plugin commands: ' + entry.id)
+    }
     modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data, retention: retention.data,
-      workerServices: workerServices.data, ricaManagement })
+      workerServices: workerServices.data, ricaManagement, commands: commands.data })
   }
   return modules
 }
@@ -124,9 +131,11 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
   const definitions: PluginDefinition<PluginManagement>[] = []
   const activityViews: PackageActivityView[] = []
   const accountPlugins: PackageAccounts[] = []
+  const commandPlugins: PackageCommands[] = []
   const adapters = new Map<string, { adapter: ManagementAdapter; databaseUrl: string }>()
-  for (const { entry, ricaPlugin, activity, accounts, ricaManagement } of await readPackageModules(manifestPath)) {
+  for (const { entry, ricaPlugin, activity, accounts, ricaManagement, commands } of await readPackageModules(manifestPath)) {
     const ownsBuiltIn = Object.hasOwn(builtInPackages, entry.id) && builtInPackages[entry.id] === entry.package
+    if (commands && Object.hasOwn(builtInPackages, entry.id)) throw new Error('Rica plugin command ID is reserved: ' + entry.id)
     if (ricaManagement !== undefined) {
       const adapter = managementAdapterContract.safeParse(ricaManagement)
       if (!ownsBuiltIn || !entry.database || !adapter.success || adapter.data.id !== entry.id || accounts || ricaPlugin.management) {
@@ -138,6 +147,7 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
       activityViews.push({ platform: ownsBuiltIn ? entry.id : 'plugin:' + entry.id, schema: packageSchema(entry.id), view: activity.view })
     }
     if (accounts) accountPlugins.push({ id: entry.id, schema: packageSchema(entry.id), operations: accounts })
+    if (commands) commandPlugins.push({ id: entry.id, schema: packageSchema(entry.id), commands })
     const createManagement = ricaPlugin.management
     if (!createManagement) continue
     const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
@@ -159,7 +169,7 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
     })
   }
   const host = await startPluginHost('package-management', definitions, definitions.map(({ id }) => ({ id })))
-  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, accountPlugins, adapters, stop: host.stop }
+  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, accountPlugins, commandPlugins, adapters, stop: host.stop }
 }
 
 type PackageModules = Awaited<ReturnType<typeof readPackageModules>>
