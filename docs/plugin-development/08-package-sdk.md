@@ -2,19 +2,27 @@
 
 Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Worker、迁移任务和前端构建的共同输入。新版 SDK 按能力独立演进，公共签名使用可序列化的数据，插件各自管理 Prisma schema 和生成的 Client。
 
-当前实现覆盖部署清单加载、只读管理接口、独立 Prisma 迁移和停机回调。其余能力按下表推进。启用管理 API 后，部署者可用以下方式从部署目录配置已安装的包。
+当前实现覆盖部署清单加载、只读管理接口、Worker 生命周期和独立 Prisma 迁移。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
 
 ```json
 {"version": 1, "plugins": [{"id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0", "config": {"label": "Acme"}}]}
 ```
 
-包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。`management(config, context)` 可异步创建实例，返回 `read(request)` 和可选的 `stop()`。`read` 接收角色 ID、调用者 ID、插件内路径和保留重复项的查询参数，返回 JSON 值。宿主只转发已通过权限校验的 GET 请求。插件写查询时仍应使用已授权的 `characterId` 筛选插件数据。
+包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management` 或 `worker` 其中一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
+
+`management(config, context)` 可异步创建实例，返回 `read(request)` 和可选的 `stop()`。`read` 接收角色 ID、调用者 ID、插件内路径和保留重复项的查询参数，返回 JSON 值。宿主只转发已通过权限校验的 GET 请求。插件写查询时仍应使用已授权的 `characterId` 筛选插件数据。
+
+### Worker 生命周期
+
+`worker(config, context)` 同步返回 `start()` 和 `stop()`，实例在 `start()` 内获取资源、确认就绪并启动后台任务。`context.signal` 用于中止初始化和停止领取新任务。`stop()` 等待在途任务结束并释放已获取的资源，也要能清理只初始化了一部分的实例。宿主等所有插件启动成功后报告 Worker 就绪。单个插件启动失败时，宿主触发取消，并按相反顺序关闭已经开始初始化的插件。
+
+插件的 Worker 随每个 Rica Worker 进程启动。需要单独领取的任务由插件管理租约、去重和重试。第一版提供生命周期入口，统一的事件订阅和任务协议在后续阶段实现。
 
 ### Prisma 插件的部署配置
 
 需要建表的包另行导出 `./rica/prisma`，指向该包的 Prisma 配置文件。其 `schema` 和 `migrations.path` 使用包内路径，`datasource.url` 读取 `process.env.RICA_PLUGIN_DATABASE_URL`。发布包应包含用于迁移的 schema、迁移目录和运行时使用的独立 Client。
 
-清单条目增加 `database` 字段。部署任务读取 `migrateUrlEnv` 指定的变量，API 将 `runtimeUrlEnv` 对应的 URL 托管在进程配置，通过 `context.databaseUrl` 传给插件。两个变量应由不同的 PostgreSQL 登录提供。清单本身只记录变量名。
+清单条目增加 `database` 字段。部署任务读取 `migrateUrlEnv` 指定的变量，API 和 Worker 在装配当前进程使用的能力时，将 `runtimeUrlEnv` 指定的 URL 通过 `context.databaseUrl` 传给插件。两个变量应由不同的 PostgreSQL 登录提供。清单本身只记录变量名。
 
 ```json
 {"migrateUrlEnv": "RICA_PLUGIN_ACME_MIGRATE_URL", "runtimeUrlEnv": "RICA_PLUGIN_ACME_RUNTIME_URL"}
@@ -27,7 +35,7 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 - `RICA_PLUGIN_MANIFEST` 指向部署目录中的 JSON 文件。清单版本为 `1`。第一批接入项包含 `id`、npm `package`、固定 `version` 和 JSON `config`。清单中省略某个包即停用其对外能力。部署者通过锁文件固定实际安装内容。
 - 宿主从清单所在目录解析插件包的 `./rica` 导出，核对包清单中的名称和版本，再载入导出的 `ricaPlugin`。插件声明 SDK 版本和能力，宿主拒绝重复 ID、版本不符或不支持的能力。API 扩展只挂在 `/v1/characters/{characterId}/plugins/{pluginId}/…` 下，复用现有会话、来源、请求大小和角色成员权限检查。
 - 数据库阶段在启动服务前先应用宿主迁移，再应用启用包的迁移。插件可用自己的 Prisma 迁移目录。部署配置给每个插件分配迁移身份和运行时身份，默认只授予其 PostgreSQL schema。迁移历史在各自命名空间记录。发布任务负责串行化迁移和版本切换，失败时中止部署。停用和卸载保留数据，清除数据由独立维护操作处理。
-- 后续的后台工厂接收宿主提供的停止信号，停机时停止领取并等待在途任务。重试和恢复使用持久化的幂等键和明确的插件版本。插件代码在宿主进程中按受信代码部署。需要代码隔离的接入使用独立进程或远程服务。
+- 插件代码在宿主进程中按受信代码部署。需要代码隔离的接入使用独立进程或远程服务。
 
 ## 数据接口
 

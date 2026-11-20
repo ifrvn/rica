@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue } from 'bullmq'
 import { Redis } from 'ioredis'
@@ -27,7 +30,7 @@ queue.on('error', () => {})
 function launchWorker(overrides: NodeJS.ProcessEnv = {}) {
   const child = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/main.ts'], {
     env: {
-      ...process.env, DATABASE_URL: runtimeUrl.toString(), REDIS_URL: config.redisUrl,
+      ...process.env, DATABASE_URL: runtimeUrl.toString(), REDIS_URL: config.redisUrl, RICA_PLUGIN_MANIFEST: '',
       ...overrides,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -53,6 +56,7 @@ async function workerReport() {
   return (await readPluginStatus(redis)).services.find(({ service }) => service === 'worker')?.report
 }
 
+const deployment = await mkdtemp(join(tmpdir(), 'rica-worker-smoke-'))
 try {
   await redis.ping()
   const missingDatabase = new URL(runtimeUrl)
@@ -69,11 +73,40 @@ try {
     await unavailable.closed
   }
 
+  const manifest = join(deployment, 'plugins.json')
+  const fixturePackage = join(deployment, 'node_modules', 'rica-smoke-worker')
+  const writeManifest = (fail: boolean) => writeFile(manifest, JSON.stringify({ version: 1, plugins: [
+    { id: 'smoke-worker', package: 'rica-smoke-worker', version: '1.0.0', config: { fail } },
+  ] }))
+  await mkdir(fixturePackage, { recursive: true })
+  await Promise.all([
+    writeManifest(true),
+    writeFile(join(fixturePackage, 'package.json'), JSON.stringify({ name: 'rica-smoke-worker', version: '1.0.0',
+      type: 'module', exports: { './package.json': './package.json', './rica': './worker.js' } })),
+    writeFile(join(fixturePackage, 'worker.js'), `
+      export const ricaPlugin = { id: 'smoke-worker', sdkVersion: 1, worker(config) {
+        return { start() { if (config.fail) throw new Error('fixture failure') }, stop() {} }
+      } }
+    `),
+  ])
+  const failedPlugin = launchWorker({ RICA_PLUGIN_MANIFEST: manifest })
+  try {
+    await waitFor(async () => failedPlugin.child.exitCode !== null, 'Worker leaked resources after a plugin failed to start')
+    const [code] = await failedPlugin.closed
+    assert.equal(code, 1)
+    assert.match(failedPlugin.output(), /"kind":"package-worker","id":"smoke-worker","version":"1.0.0","code":"START_FAILED"/)
+    assert.doesNotMatch(failedPlugin.output(), /"event":"ready"|fixture failure/)
+  } finally {
+    if (failedPlugin.child.exitCode === null) failedPlugin.child.kill('SIGKILL')
+    await failedPlugin.closed
+  }
+
+  await writeManifest(false)
   const pending = await Promise.all([1, 2].map(() => db.outboxEvent.create({ data: { type: smokeEvent } })))
   const ids = pending.map(({ eventId }) => eventId)
   await queue.pause()
   try {
-    const relay = launchWorker()
+    const relay = launchWorker({ RICA_PLUGIN_MANIFEST: manifest })
     try {
       await waitFor(async () => {
         const persisted = await db.outboxEvent.count({
@@ -81,7 +114,8 @@ try {
         })
         return persisted === ids.length && (await Promise.all(ids.map((id) => queue.getJob(id)))).every(Boolean)
       }, 'Worker did not enqueue both outbox jobs before the crash')
-      assert.match(relay.output(), /"event":"ready","modelId":"simulated"/)
+      await waitFor(async () => /"event":"ready","modelId":"simulated"/.test(relay.output()), 'Worker did not become ready')
+      assert.match(relay.output(), /"kind":"package-worker","id":"smoke-worker","version":"1.0.0","code":"READY"[\s\S]*"event":"ready"/)
       await waitFor(async () => (await workerReport())?.plugins.some(({ id, kind }) => id === 'simulated' && kind === 'model') === true,
         'Worker did not publish its own plugin status')
     } finally {
@@ -107,7 +141,7 @@ try {
       where: { eventId: { in: ids }, enqueuedAt: { not: null }, processedAt: { not: null } },
     }) === ids.length, 'Expected the surviving and re-published jobs to be processed after restart')
     await waitFor(async () => await workerReport() === null, 'Stopped Worker report did not expire', 25_000)
-    console.info('Outbox crash recovery, worker readiness, and plugin status expiry passed')
+    console.info('Outbox crash recovery, Worker readiness, external plugin startup, and status expiry passed')
   } finally {
     await worker.close()
     await plugins.stop()
@@ -117,6 +151,6 @@ try {
     await queue.close()
   } finally {
     redis.disconnect()
-    await db.$disconnect()
+    await Promise.all([db.$disconnect(), rm(deployment, { recursive: true, force: true })])
   }
 }

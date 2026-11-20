@@ -12,6 +12,8 @@ import { observationError, reportPluginResult, startPluginHeartbeat } from '../p
 import { createAutoReviewer } from '../auto-review.js'
 import { createDiscussionAssessor } from '../discussion-assessment.js'
 import { connectNewbiSettings, createNewbiOperations, startNewbiBackground } from '@ricajs/plugin-newbi'
+import { startPackageWorkers } from '../package-plugins.js'
+import { PluginHostError } from '@ricajs/plugin-host'
 
 async function main() {
   const config = loadConfig()
@@ -65,7 +67,6 @@ async function main() {
     return
   }
 
-  observation = startPluginHeartbeat(config.redisUrl, 'worker', [...platforms.plugins, selected.metadata], platforms.source)
   const newbi = connectNewbiSettings(plugins.readConfiguration)
   const backgroundEndpoint = async () => await plugins.isEnabled(hostedModelsPluginId) ? newbi.readBackground() : undefined
   const backgroundDb = createDatabase(config.databaseUrl, 'rica_admin_api')
@@ -83,18 +84,39 @@ async function main() {
   const assessDiscussion = createDiscussionAssessor(async (assess, profile) => assess((await getModel(profile)).implementation))
   const stopBackground = startNewbiBackground(backgroundDb, backgroundEndpoint, { pollConnector, readConnectorThread, assessDiscussion },
     () => console.error(JSON.stringify({ service: 'worker', event: 'newbi_background_failed' })))
-  async function shutdown() {
-    observation?.stop()
-    try {
-      await Promise.all([worker.close(), stopBackground()])
-    } catch {
-      process.exitCode = 1
-    } finally {
-      await Promise.all([selected.stop(), platforms.stop(), usageDb.$disconnect(), backgroundDb.$disconnect()])
-    }
+  const stopping = new AbortController()
+  const packageStartup = startPackageWorkers(process.env.RICA_PLUGIN_MANIFEST, stopping.signal, (diagnostic) => {
+    console.info(JSON.stringify({ service: 'worker', event: 'plugin_status', ...diagnostic }))
+    if (diagnostic.code === 'STOP_FAILED') process.exitCode = 1
+  })
+  let closing: Promise<void> | undefined
+  function shutdown() {
+    stopping.abort()
+    return closing ??= (async () => {
+      observation?.stop()
+      const stopped = await Promise.allSettled([packageStartup.then(host => host.stop(), () => {}), worker.close(), stopBackground()])
+      const released = await Promise.allSettled([selected.stop(), platforms.stop(), usageDb.$disconnect(), backgroundDb.$disconnect()])
+      if ([...stopped, ...released].some(({ status }) => status === 'rejected')) process.exitCode = 1
+      process.off('SIGINT', shutdown)
+      process.off('SIGTERM', shutdown)
+    })()
   }
-  process.once('SIGINT', shutdown)
-  process.once('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+  try {
+    await packageStartup
+  } catch (error) {
+    const cancelled = stopping.signal.aborted
+    await shutdown()
+    if (cancelled) return
+    if (error instanceof PluginHostError) {
+      console.error(JSON.stringify({ service: 'worker', event: 'plugin_status', ...error.diagnostic }))
+    }
+    await reportPluginResult(config.redisUrl, 'worker', 'START_FAILED')
+    throw error
+  }
+  if (stopping.signal.aborted) return
+  observation = startPluginHeartbeat(config.redisUrl, 'worker', [...platforms.plugins, selected.metadata], platforms.source)
   console.info(JSON.stringify({ service: 'worker', event: 'ready', modelId: selected.metadata.id, modelVersion: selected.metadata.version }))
 }
 

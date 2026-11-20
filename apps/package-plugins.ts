@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
-import { startPluginHost, type PluginDefinition } from '@ricajs/plugin-host'
+import { startPluginHost, type PluginDefinition, type PluginHostError } from '@ricajs/plugin-host'
 import type { PluginManagement, RicaPlugin } from '@ricajs/plugin-host/sdk'
 
 const pluginId = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(50)
@@ -65,15 +65,27 @@ export function packageDatabaseUrl(id: string, source: string) {
   return value
 }
 
-export async function loadPackageManagement(manifestPath: string | undefined) {
-  const definitions: PluginDefinition<PluginManagement>[] = []
+async function readPackageModules(manifestPath: string | undefined) {
+  const modules = []
   for (const entry of await readPackagePlugins(manifestPath)) {
-    const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
     const { ricaPlugin }: { ricaPlugin?: RicaPlugin } = await import(pathToFileURL(entry.resolveExport('/rica')).href)
-    if (ricaPlugin?.id !== entry.id || ricaPlugin.sdkVersion !== 1 || typeof ricaPlugin.management !== 'function') {
+    if (ricaPlugin?.id !== entry.id || ricaPlugin.sdkVersion !== 1 ||
+        (typeof ricaPlugin.management !== 'function' && typeof ricaPlugin.worker !== 'function') ||
+        (ricaPlugin.management !== undefined && typeof ricaPlugin.management !== 'function') ||
+        (ricaPlugin.worker !== undefined && typeof ricaPlugin.worker !== 'function')) {
       throw new Error('Unsupported Rica plugin SDK or capabilities: ' + entry.id)
     }
+    modules.push({ entry, ricaPlugin })
+  }
+  return modules
+}
+
+export async function loadPackageManagement(manifestPath: string | undefined) {
+  const definitions: PluginDefinition<PluginManagement>[] = []
+  for (const { entry, ricaPlugin } of await readPackageModules(manifestPath)) {
     const createManagement = ricaPlugin.management
+    if (!createManagement) continue
+    const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
     definitions.push({
       id: entry.id, version: entry.version, contractVersion: ricaPlugin.sdkVersion,
       create() {
@@ -93,4 +105,44 @@ export async function loadPackageManagement(manifestPath: string | undefined) {
   }
   const host = await startPluginHost('package-management', definitions, definitions.map(({ id }) => ({ id })))
   return { plugins: definitions.map(({ id }) => host.find(id)!), stop: host.stop }
+}
+
+export async function startPackageWorkers(manifestPath: string | undefined, shutdown: AbortSignal,
+  report?: (diagnostic: PluginHostError['diagnostic']) => void) {
+  const controller = new AbortController()
+  const signal = AbortSignal.any([shutdown, controller.signal])
+  const definitions: PluginDefinition<undefined>[] = []
+  for (const { entry, ricaPlugin } of await readPackageModules(manifestPath)) {
+    const createWorker = ricaPlugin.worker
+    if (!createWorker) continue
+    const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
+    definitions.push({
+      id: entry.id, version: entry.version, contractVersion: ricaPlugin.sdkVersion,
+      create() {
+        signal.throwIfAborted()
+        const worker = createWorker(entry.config, { databaseUrl, signal })
+        return {
+          implementation: undefined,
+          async start() {
+            if (typeof worker?.start !== 'function' || typeof worker.stop !== 'function') {
+              throw new Error('Invalid Rica plugin Worker capability: ' + entry.id)
+            }
+            await worker.start()
+            signal.throwIfAborted()
+          },
+          async stop() {
+            controller.abort()
+            if (typeof worker?.stop === 'function') await worker.stop()
+          },
+        }
+      },
+    })
+  }
+  const host = await startPluginHost('package-worker', definitions, definitions.map(({ id }) => ({ id })), { report })
+  return {
+    stop() {
+      controller.abort()
+      return host.stop()
+    },
+  }
 }
