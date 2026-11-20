@@ -1,6 +1,8 @@
 import type { RicaPlugin } from '@ricajs/plugin-host/sdk'
 import { createNewbiWorker } from './worker.js'
 
+export { ricaManagement } from './management/adapter.js'
+
 export const ricaPlugin = {
   id: 'newbi',
   sdkVersion: 1,

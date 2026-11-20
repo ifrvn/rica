@@ -99,7 +99,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }))
   app.onError((err, c) => {
     const requestId = c.get('requestId')
-    if (err instanceof management.ManagementError) return c.json(error(requestId, err.code, err.message), err.status)
+    if (management.isManagementError(err)) return c.json(error(requestId, err.code, err.message), err.status)
     if (err instanceof HTTPException && err.status === 400) {
       return c.json(error(requestId, 'INVALID_BODY', 'Malformed request body'), 400)
     }

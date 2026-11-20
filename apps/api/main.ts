@@ -9,7 +9,8 @@ import { createApp } from './app.js'
 import { createHostedModelManagement, createModelSettingsStore, enabledModelSettings } from '@ricajs/plugin-hosted-models'
 import { hostedModelCatalog, hostedModelsPluginId, modelSettingsContracts } from '@ricajs/plugin-hosted-models/shared'
 import { denyPermission } from '@ricajs/persistence/management'
-import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@ricajs/plugin-newbi'
+import { ricaManagement as newbiManagement } from '@ricajs/plugin-newbi/rica'
+import newbiPackage from '@ricajs/plugin-newbi/package.json' with { type: 'json' }
 import { startObservedModelPlugin, startSimulationPlatforms } from '../runtime-plugins.js'
 import { hostedUsageRecorder, readHostedUsage } from '@ricajs/plugin-hosted-models/persistence/usage'
 import { modelSettingsDirectory } from '@ricajs/runtime/settings-directory'
@@ -20,12 +21,12 @@ import { createAutoReviewer } from '../auto-review.js'
 import { createDiscussionAssessor } from '../discussion-assessment.js'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import { loadPackageManagement } from '../package-plugins.js'
-import { packageManagementPlugins } from './package-management.js'
+import { packageManagementPlugins, startManagedApi } from './package-management.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
 const packageManagement = await loadPackageManagement(managementConfig ? process.env.RICA_PLUGIN_MANIFEST : undefined, {
-  newbi: '@ricajs/plugin-newbi',
+  [newbiManagement.id]: newbiPackage.name,
 })
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
@@ -47,7 +48,6 @@ redis.on('error', () => {})
 void redis.connect().catch(() => {})
 
 const auth = managementConfig && managementDb ? createAdminAuth(managementDb, redis, managementConfig) : undefined
-const newbi = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const modelSettings = createModelSettingsStore(settingsDirectory, modelSettingsContracts)
 const recordUsage = hostedUsageRecorder(db)
 const activeModel = async () => (await modelSettings.read()).configuration.provider
@@ -60,7 +60,20 @@ async function withHostedModel<T>(check: (model: ModelProvider) => Promise<T>, p
   finally { await selected.stop() }
 }
 const reviewReply = createAutoReviewer(withHostedModel)
-const management = managementConfig && managementDb && auth && platforms ? createManagementApp({
+const newbiApi = managementDb ? await startManagedApi(managementDb, packageManagement, newbiManagement, {
+  databaseUrl: config.databaseUrl,
+  readDeployment: () => deploymentPlugins.readConfiguration(newbiManagement.id),
+  reviewReply,
+  assessDiscussion: createDiscussionAssessor(withHostedModel),
+  reportConnectorOperation: (service, succeeded) =>
+    reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
+}).catch(async (error: unknown) => {
+  redis.disconnect()
+  await Promise.allSettled([packageManagement.stop(), platforms?.stop(), db.$disconnect(), managementDb.$disconnect()])
+  await reportPluginResult(config.redisUrl, 'api', 'START_FAILED')
+  throw error
+}) : undefined
+const management = managementConfig && managementDb && auth && platforms && newbiApi ? createManagementApp({
   db: managementDb, authenticate: auth.authenticate, origin: managementConfig.origin, cookie: managementConfig.cookie,
   resolveAdapter: platforms.resolveAdapter,
   pluginStatus: () => readPluginStatus(redis),
@@ -76,13 +89,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   deploymentPlugins,
   activityViews: packageManagement.activityViews,
   plugins: [
-    createNewbiManagement(managementDb, newbi, {
-      ...createNewbiOperations(db, newbi),
-      reviewReply,
-      assessDiscussion: createDiscussionAssessor(withHostedModel),
-      reportConnectorOperation: (service, succeeded) =>
-        reportPluginResult(config.redisUrl, service, succeeded ? undefined : 'OPERATION_FAILED'),
-    }),
+    newbiApi.plugin,
     createHostedModelManagement({ modelSettings,
       startModelPlugin: (configuration) => startObservedModelPlugin(configuration, recordUsage, undefined, 'CHECK'),
       readUsage: (query) => readHostedUsage(managementDb, query),
@@ -108,7 +115,7 @@ function shutdown() {
   observation?.stop()
   server.close(() => {
     redis.disconnect()
-    void Promise.all([packageManagement.stop(), platforms?.stop(), db.$disconnect(), managementDb?.$disconnect()]).catch(() => {
+    void Promise.all([newbiApi?.stop(), packageManagement.stop(), platforms?.stop(), db.$disconnect(), managementDb?.$disconnect()]).catch(() => {
       process.exitCode = 1
     })
   })

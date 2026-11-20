@@ -1,6 +1,9 @@
 import { z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
 import type { OpenAPIHono } from '@hono/zod-openapi'
+import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
+import type { PluginStage } from '@ricajs/contracts/deployment-plugins'
+import type { AssessDiscussion } from '@ricajs/contracts/discussion-selection'
 import { ManagementError, type ManagementCommandHandler, type PlatformAccountHooks, type Scope } from './index.js'
 import type { Prisma } from '../generated/client.js'
 
@@ -20,6 +23,21 @@ export type ManagementPlugin = {
   status?: { fields: z.ZodRawShape; read(characterId: string): Promise<object> }
   accountFields?: z.ZodRawShape
 }
+
+// Versioned integration contract for host-owned adapters. Portable packages use @ricajs/plugin-host/sdk.
+export type ManagementAdapterContext = Readonly<{
+  databaseUrl: string
+  readDeployment(): Promise<{ stage?: PluginStage; config: unknown }>
+  reviewReply?: ReviewPublicReply
+  assessDiscussion?: AssessDiscussion
+  reportConnectorOperation?(service: string, succeeded: boolean): void | Promise<void>
+}>
+
+export type ManagementAdapter = Readonly<{
+  id: string
+  hostApiVersion: 1
+  start(context: ManagementAdapterContext): Promise<{ plugin: ManagementPlugin; stop(): Promise<void> }>
+}>
 
 export function extensionFields(base: z.ZodRawShape, fields: readonly (z.ZodRawShape | undefined)[]) {
   const extensions: { -readonly [Key in keyof z.ZodRawShape]: z.ZodRawShape[Key] } = {}

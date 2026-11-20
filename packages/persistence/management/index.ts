@@ -15,7 +15,11 @@ type CommandApply = (tx: Tx) => Promise<CommandResult>
 export type ManagementCommandHandler = CommandApply | { prepare(): Promise<CommandApply> }
 type Input<T extends z.ZodType> = z.infer<T>
 
+const managementError = Symbol.for('@ricajs/persistence/ManagementError')
+
 export class ManagementError extends Error {
+  readonly [managementError] = true
+
   constructor(
     readonly status: 403 | 404 | 409 | 412 | 422 | 428,
     readonly code: string,
@@ -23,6 +27,10 @@ export class ManagementError extends Error {
   ) {
     super(message)
   }
+}
+
+export function isManagementError(value: unknown): value is ManagementError {
+  return value instanceof Error && managementError in value && value[managementError] === true
 }
 
 function unavailable(): never {

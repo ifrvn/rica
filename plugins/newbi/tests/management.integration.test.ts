@@ -7,9 +7,9 @@ import { join } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { newbiExecutorIdentity, newbiExecutorKey } from '../rica/runtime/identity.js'
-import { createNewbiReplyExecutor } from '../rica/runtime/agent-adapter.js'
+import { createNewbiReadClient, createNewbiReplyExecutor } from '../rica/runtime/agent-adapter.js'
 import { identifyNewbiAccount, startNewbiReader } from '../rica/runtime/reader.js'
-import { openSavedNewbiExecutor, openSavedNewbiReader, readSavedNewbiThread, scopedNewbiDatabase } from '../rica/persistence/database.js'
+import { openSavedNewbiReader, scopedNewbiDatabase } from '../rica/persistence/database.js'
 import { pollNewbiEvents } from '../rica/persistence/events.js'
 import { executeNewbiReply } from '../rica/persistence/execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -17,15 +17,17 @@ import { after, before, test } from 'node:test'
 import { actorId } from '../../../apps/api/admin-auth.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../../../apps/api/app.js'
+import { startManagedApi } from '../../../apps/api/package-management.js'
 import { createNewbiManagement, type NewbiManagementOptions } from '../rica/management/routes.js'
 import { assessNewbiBackground } from '../rica/management/background.js'
-import { ricaPlugin } from '../rica/plugin.js'
+import { ricaManagement, ricaPlugin } from '../rica/plugin.js'
 import { connectNewbiSettings } from '../rica/deployment/settings.js'
 import { createManagementApp } from '../../../apps/api/management.js'
 import { checkPackageRetention, sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
 import { workerDiscussionServices } from '../../../apps/worker/discussion-services.js'
 import { createDatabase } from '@ricajs/persistence/client'
 import { Prisma } from '@ricajs/persistence/prisma'
+import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { loadConfig } from '@ricajs/runtime/config'
 import { createDeploymentPluginStore } from '../../../apps/deployment-plugins.js'
 import { loadPackageManagement, loadPackageRetention } from '../../../apps/package-plugins.js'
@@ -47,16 +49,19 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
   readConnectorThread?: NewbiManagementOptions['readConnectorThread'],
   reportConnectorOperation?: NewbiManagementOptions['reportConnectorOperation'],
   reviewReply?: NewbiManagementOptions['reviewReply'], assessDiscussion?: NewbiManagementOptions['assessDiscussion']) =>
+  createTestApp(createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
+    identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
+      ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
+    pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply, assessDiscussion,
+  }), deploymentPlugins)
+
+const createTestApp = (plugin: ManagementPlugin, deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>) =>
   createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management,
     origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: simulationPlatforms.resolveAdapter,
     deploymentPlugins,
     activityViews: packageManagement.activityViews,
-    plugins: [createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
-      identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
-      ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
-      pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply, assessDiscussion,
-    })],
+    plugins: [plugin],
     authenticate: async (request) => {
       const subject = request.headers.get('Cookie')?.match(/^fixture-session=([a-z-]+)$/u)?.[1]
       return subject && subjects.has(subject) ? {
@@ -915,70 +920,65 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
   const executorUrl = new URL(config.databaseUrl)
   executorUrl.searchParams.set('options', '-c role=rica_newbi_executor')
   const executor = createDatabase(executorUrl.toString())
-  const runtime = createDatabase(runtimeUrl())
-  const executorDb = scopedNewbiDatabase(runtime, 'executor')
-  const readerDb = scopedNewbiDatabase(runtime, 'reader')
   const sendReports: boolean[] = []
-  const sendApp = testApp(settings, undefined, async (id, retry) => {
-    const host = await openSavedNewbiExecutor(executorDb, connectNewbiSettings(settings.readConfiguration), id)
-    if (!host) return { status: 'UNAVAILABLE' }
-    try { return await executeNewbiReply(executorDb, host.plugin.implementation, newbiExecutorKey(host.plugin), id, retry) }
-    finally { await host.stop() }
-  }, async (target, preview) => {
-    const thread = await readSavedNewbiThread(readerDb, connectNewbiSettings(settings.readConfiguration), target, preview)
-    if (thread) assert.equal(thread.post.sectionId, 42)
-    return thread
-  }, (service, succeeded) => {
-    assert.equal(service, 'connector-executor')
-    sendReports.push(succeeded)
+  t.after(async () => {
+    await executor.$disconnect()
+    server.closeAllConnections()
+    await new Promise<void>(resolve => server.close(() => resolve()))
   })
-  t.after(() => runtime.$disconnect())
+  const adapter = await startManagedApi(management, packageManagement, ricaManagement, {
+    databaseUrl: runtimeUrl(), readDeployment: () => settings.readConfiguration('newbi'),
+    reportConnectorOperation(service, succeeded) {
+      assert.equal(service, 'connector-executor')
+      sendReports.push(succeeded)
+    },
+  })
   try {
+    const sendApp = createTestApp(adapter.plugin, settings)
+    const sendRequest: typeof request = (method, path, options) => request(method, path, { ...options, target: sendApp })
     const identityId = await activeIdentity()
     const prefix = characterPath(a) + '/newbi'
-    connectorEndpoint = endpoint
-    const binding = await request('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId, credential: secret, agentId } })
+    const binding = await sendRequest('POST', prefix + '/accounts', { key: 'newbi-test-bind', data: { identityId, credential: secret, agentId } })
     assert.equal(binding.status, 201, JSON.stringify(binding.body))
     const accountId = binding.body.id
     assert.equal(binding.body.status, 'PAUSED')
-    const resume = (key: string, actor = 'admin-a') => request('POST', characterPath(a) + '/controls', { actor, key,
+    const resume = (key: string, actor = 'admin-a') => sendRequest('POST', characterPath(a) + '/controls', { actor, key,
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'RESUME', reason: 'Local protocol fixture' } })
     const checkPath = prefix + '/accounts/' + accountId + '/check'
-    assert.equal((await request('POST', checkPath, { actor: 'nonmember' })).status, 404)
-    assert.equal((await request('POST', characterPath(b) + '/newbi/accounts/' + accountId + '/check', { actor: 'admin-b' })).status, 404)
+    assert.equal((await sendRequest('POST', checkPath, { actor: 'nonmember' })).status, 404)
+    assert.equal((await sendRequest('POST', characterPath(b) + '/newbi/accounts/' + accountId + '/check', { actor: 'admin-b' })).status, 404)
     assert.equal((await resume('newbi-unassigned-resume', 'nonmember')).status, 404)
     currentAgent = randomUUID()
-    assert.equal((await request('POST', checkPath)).body.verified, false)
+    assert.equal((await sendRequest('POST', checkPath)).body.verified, false)
     const unverified = await resume('newbi-test-resume')
     assert.equal(unverified.status, 409, JSON.stringify(unverified.body))
     assert.equal(unverified.body.error.code, 'CONNECTOR_VERIFICATION_FAILED')
     assert.equal((await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })).status, 'PAUSED')
     currentAgent = agentId
-    const checked = await request('POST', checkPath)
+    const checked = await sendRequest('POST', checkPath)
     assert.equal(checked.status, 200, JSON.stringify(checked.body))
     assert.equal(checked.body.verified, true)
     assert.equal((await owner.platformAccount.findUniqueOrThrow({ where: { id: accountId } })).status, 'PAUSED')
     const resumed = await resume('newbi-test-resume')
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body))
-    connectorEndpoint = undefined
     assert.equal((await resume('newbi-test-resume')).status, 200)
     assert.equal(writes, 0)
     const client = createNewbiReplyExecutor(endpoint, secret)
     const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
     const propose = async (text: string, key: string) => {
-      const created = await request('POST', prefix + '/replies', { key, data: { accountId, postId, content: text } })
+      const created = await sendRequest('POST', prefix + '/replies', { key, data: { accountId, postId, content: text } })
       assert.equal(created.status, 201, JSON.stringify(created.body))
       const id: string = created.body.id
       const path = prefix + '/replies/' + id
-      const preview = await request('GET', path, { actor: 'reviewer' })
+      const preview = await sendRequest('GET', path, { actor: 'reviewer' })
       assert.equal(preview.status, 200, JSON.stringify(preview.body))
       assert.equal(preview.body.agentId, agentId)
       assert.equal(preview.body.identity, (await owner.identity.findUniqueOrThrow({ where: { id: identityId } })).slug)
       assert.equal(preview.body.postId, postId)
       assert.equal(preview.body.accountId, accountId)
       assert.equal(preview.body.content, text)
-      const decide = (decision: 'APPROVE' | 'REJECT', actor = 'reviewer') => request('POST', path + '/decision', {
+      const decide = (decision: 'APPROVE' | 'REJECT', actor = 'reviewer') => sendRequest('POST', path + '/decision', {
         actor, key: randomUUID(), data: { decision, reviewDigest: preview.body.reviewDigest, reason: 'Checked bound reply' },
       })
       return { id, path, decide, content: preview.body.content }
@@ -993,48 +993,50 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     const approved = await propose('Ordinary fixture reply', 'newbi-success')
     const threadPath = approved.path + '/thread'
     const readsBeforeThread = reads
-    assert.equal((await request('GET', threadPath, { target: sendApp, actor: 'nonmember' })).status, 404)
-    assert.equal((await request('GET', characterPath(b) + '/newbi/replies/' + approved.id + '/thread', { target: sendApp, actor: 'admin-b' })).status, 404)
+    assert.equal((await sendRequest('GET', threadPath, { actor: 'nonmember' })).status, 404)
+    assert.equal((await sendRequest('GET', characterPath(b) + '/newbi/replies/' + approved.id + '/thread', { actor: 'admin-b' })).status, 404)
     assert.equal(reads, readsBeforeThread)
     currentAgent = randomUUID()
-    assert.equal((await request('GET', threadPath, { target: sendApp, actor: 'reviewer' })).status, 503)
+    assert.equal((await sendRequest('GET', threadPath, { actor: 'reviewer' })).status, 503)
     assert.equal(reads, readsBeforeThread)
     currentAgent = agentId
-    const context = await request('GET', threadPath + '?postId=' + randomUUID(), { target: sendApp, actor: 'reviewer' })
+    const context = await sendRequest('GET', threadPath + '?postId=' + randomUUID(), { actor: 'reviewer' })
     assert.equal(context.status, 200, JSON.stringify(context.body))
     assert.deepEqual(context.body, { post: { title: 'Fixture discussion', content: 'Original context', isLocked: false },
       comments: [{ id: discussionComment.id, author: { username: 'fixture-user' }, content: discussionComment.content, replyToCommentId: null }],
       nextCursor: discussionCursor })
-    const next = await request('GET', threadPath + '?cursor=' + encodeURIComponent(discussionCursor), { target: sendApp, actor: 'reviewer' })
+    const next = await sendRequest('GET', threadPath + '?cursor=' + encodeURIComponent(discussionCursor), { actor: 'reviewer' })
     assert.equal(next.status, 200)
     assert.deepEqual(next.body.comments, [{
       id: laterComment.id, author: { username: 'fixture-user' }, content: laterComment.content, replyToCommentId: discussionComment.id,
     }])
     assert.equal(next.body.nextCursor, null)
+    const assessmentThread = await createNewbiReadClient(endpoint, secret, AbortSignal.timeout(2_000)).readThread(postId)
+    assert.equal(assessmentThread.post.sectionId, 42)
     assert.equal(writes, 0)
     const sendFromConsole = (path: string, actor = 'admin-a', retry = false) =>
-      request('POST', path + '/send', { actor, target: sendApp, data: { retry } })
+      sendRequest('POST', path + '/send', { actor, data: { retry } })
     assert.equal((await sendFromConsole(approved.path)).status, 409)
     const queuePath = prefix + '/replies'
-    const waitingQueue = await request('GET', queuePath + '?status=WAITING', { actor: 'reviewer' })
+    const waitingQueue = await sendRequest('GET', queuePath + '?status=WAITING', { actor: 'reviewer' })
     assert.equal(waitingQueue.status, 200, JSON.stringify(waitingQueue.body))
-    assert.deepEqual((await request('GET', queuePath + '?status=WAITING&accountId=' + accountId)).body, waitingQueue.body)
-    assert.deepEqual((await request('GET', queuePath + '?accountId=' + accountA)).body, { items: [], nextCursor: null })
+    assert.deepEqual((await sendRequest('GET', queuePath + '?status=WAITING&accountId=' + accountId)).body, waitingQueue.body)
+    assert.deepEqual((await sendRequest('GET', queuePath + '?accountId=' + accountA)).body, { items: [], nextCursor: null })
     assert.deepEqual(waitingQueue.body.items.map((item: { id: string }) => item.id), [approved.id])
     assert.deepEqual(Object.keys(waitingQueue.body.items[0]).sort(), ['agentId', 'createdAt', 'id', 'identity', 'postId', 'status'])
-    assert.equal((await request('GET', queuePath, { actor: 'admin-b' })).status, 404)
-    assert.equal((await request('GET', queuePath + '?status=WAITING&cursor=' + denied.id)).status, 422)
+    assert.equal((await sendRequest('GET', queuePath, { actor: 'admin-b' })).status, 404)
+    assert.equal((await sendRequest('GET', queuePath + '?status=WAITING&cursor=' + denied.id)).status, 422)
     const [newer, older] = [approved.id, denied.id].sort()
     await owner.$executeRaw`
       UPDATE rica_plugin_newbi.replies
       SET created_at = date_trunc('milliseconds', statement_timestamp()) +
         CASE WHEN id = ${newer}::uuid THEN interval '2 microseconds' ELSE interval '1 microsecond' END
       WHERE id IN (${newer}::uuid, ${older}::uuid)`
-    const firstPage = await request('GET', queuePath + '?limit=1')
+    const firstPage = await sendRequest('GET', queuePath + '?limit=1')
     assert.equal(firstPage.body.items.length, 1)
     assert.equal(firstPage.body.items[0].id, newer)
     assert.equal(firstPage.body.nextCursor, newer)
-    const secondPage = await request('GET', queuePath + '?limit=1&cursor=' + firstPage.body.nextCursor)
+    const secondPage = await sendRequest('GET', queuePath + '?limit=1&cursor=' + firstPage.body.nextCursor)
     assert.deepEqual(secondPage.body.items.map((item: { id: string }) => item.id), [older])
     assert.equal(secondPage.body.nextCursor, null)
     assert.equal((await approved.decide('APPROVE', 'admin-a')).status, 403)
@@ -1068,7 +1070,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.deepEqual(normal.filter(({ body }) => body.status === 'SENT').map(({ status, body }) => [status, body]),
       [[200, { status: 'SENT', commentId: sent.get(approved.id)?.id }]])
     assert.equal(normal.filter(({ status, body }) => (status === 200 && body.status === 'UNAVAILABLE') || status === 409).length, 1)
-    assert.equal((await request('GET', approved.path)).body.remoteCommentId, sent.get(approved.id)?.id)
+    assert.equal((await sendRequest('GET', approved.path)).body.remoteCommentId, sent.get(approved.id)?.id)
     assert.equal(sent.get(approved.id)?.content, 'Ordinary fixture reply')
     assert.equal(writes, 1)
 
@@ -1077,18 +1079,18 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     const pluginStatusPath = characterPath(a) + '/plugins'
     let inFlightDuringSend: unknown
     observeSend = async () => {
-      inFlightDuringSend = (await request('GET', pluginStatusPath, { target: sendApp })).body.newbiPendingDeliveries
+      inFlightDuringSend = (await sendRequest('GET', pluginStatusPath)).body.newbiPendingDeliveries
     }
     dropResponse = true
     assert.deepEqual((await sendFromConsole(lost.path)).body, { status: 'UNKNOWN' })
     observeSend = undefined
     assert.deepEqual(inFlightDuringSend, { inFlight: 1, unknown: 0 })
     assert.equal(sendReports.at(-1), false)
-    assert.equal((await request('GET', lost.path)).body.status, 'UNKNOWN')
-    const pending = await request('GET', pluginStatusPath, { target: sendApp })
+    assert.equal((await sendRequest('GET', lost.path)).body.status, 'UNKNOWN')
+    const pending = await sendRequest('GET', pluginStatusPath)
     assert.equal(pending.status, 200)
     assert.deepEqual(pending.body.newbiPendingDeliveries, { inFlight: 0, unknown: 1 })
-    assert.deepEqual((await request('GET', characterPath(b) + '/plugins', { target: sendApp, actor: 'admin-b' })).body.newbiPendingDeliveries,
+    assert.deepEqual((await sendRequest('GET', characterPath(b) + '/plugins', { actor: 'admin-b' })).body.newbiPendingDeliveries,
       { inFlight: 0, unknown: 0 })
     assert.equal(sent.get(lost.id)?.content, lost.content)
     const waiting = await propose('Fixture queued behind unknown result', 'newbi-waiting')
@@ -1103,16 +1105,16 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.equal(recovered.status, 200, JSON.stringify(recovered.body))
     assert.deepEqual(recovered.body, { status: 'SENT', commentId: sent.get(lost.id)?.id })
     assert.equal(sendReports.at(-1), true)
-    const receipt = await request('GET', lost.path)
+    const receipt = await sendRequest('GET', lost.path)
     assert.equal(receipt.body.remoteCommentId, sent.get(lost.id)?.id)
     assert.equal(receipt.body.attempts, 2)
-    assert.deepEqual((await request('GET', pluginStatusPath, { target: sendApp })).body.newbiPendingDeliveries, { inFlight: 0, unknown: 0 })
+    assert.deepEqual((await sendRequest('GET', pluginStatusPath)).body.newbiPendingDeliveries, { inFlight: 0, unknown: 0 })
     assert.equal(sent.size, 2)
     assert.equal(writes, 3)
     assert.ok(reads >= 8)
 
     const auditPath = characterPath(a) + '/audit?targetId=' + lost.id
-    const audit = await request('GET', auditPath)
+    const audit = await sendRequest('GET', auditPath)
     assert.equal(audit.status, 200)
     assert.deepEqual(audit.body.items.map(({ operation, targetId, actorId }: { operation: string; targetId: string; actorId: string }) =>
       [operation, targetId, actorId]), [
@@ -1121,18 +1123,18 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       ['newbi.reply.send', lost.id, actorId(issuer, 'admin-a')],
       ['newbi.reply.retry', lost.id, actorId(issuer, 'admin-a')],
     ])
-    assert.equal((await request('GET', auditPath, { actor: 'nonmember' })).status, 404)
-    assert.deepEqual((await request('GET', characterPath(b) + '/audit?targetId=' + lost.id, { actor: 'admin-b' })).body,
+    assert.equal((await sendRequest('GET', auditPath, { actor: 'nonmember' })).status, 404)
+    assert.deepEqual((await sendRequest('GET', characterPath(b) + '/audit?targetId=' + lost.id, { actor: 'admin-b' })).body,
       { items: [], nextCursor: null })
 
     // Invalid credentials and locked threads never reach the comment endpoint.
     const invalidClient = createNewbiReplyExecutor(endpoint, 'nbi_agent_' + 'y'.repeat(43))
     assert.deepEqual(await executeNewbiReply(executor, invalidClient, executorKey, waiting.id),
       { status: 'UNAVAILABLE', reason: 'CREDENTIAL_INVALID' })
-    assert.equal((await request('GET', waiting.path)).body.attempts, 0)
+    assert.equal((await sendRequest('GET', waiting.path)).body.attempts, 0)
     locked = true
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, waiting.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
-    assert.equal((await request('GET', waiting.path)).body.status, 'CLOSED')
+    assert.equal((await sendRequest('GET', waiting.path)).body.status, 'CLOSED')
     assert.equal(writes, 3)
     locked = false
 
@@ -1144,7 +1146,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     const preflight = await executeNewbiReply(executor, client, executorKey, limited.id)
     assert.equal(preflight.status, 'UNAVAILABLE')
     assert.ok('reason' in preflight && preflight.reason === 'RATE_LIMITED')
-    let preview = (await request('GET', limited.path)).body
+    let preview = (await sendRequest('GET', limited.path)).body
     assert.equal(preview.attempts, 0)
     assert.ok(Date.parse(preview.retryNotBefore) >= limitTime + 30_000)
     const unrelated = await propose('Fixture reply behind a cooldown', 'newbi-cooldown')
@@ -1160,7 +1162,7 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     const rateLimited = await executeNewbiReply(executor, client, executorKey, limited.id)
     assert.equal(rateLimited.status, 'UNKNOWN')
     assert.ok('reason' in rateLimited && rateLimited.reason === 'RATE_LIMITED')
-    preview = (await request('GET', limited.path)).body
+    preview = (await sendRequest('GET', limited.path)).body
     assert.equal(preview.attempts, 1)
     assert.ok(Date.parse(preview.retryNotBefore) > Date.now() + 29_000)
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true),
@@ -1179,13 +1181,13 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     assert.equal(writes, 6)
 
     const closeReason = 'Checked the discussion and ended delivery attempts'
-    const close = (actor: string, key: string, path = limited.path) => request('POST', path + '/close',
+    const close = (actor: string, key: string, path = limited.path) => sendRequest('POST', path + '/close',
       { actor, key, data: { reason: closeReason } })
     assert.equal((await close('nonmember', 'newbi-close-unassigned')).status, 404)
     assert.equal((await close('admin-a', 'newbi-close-ready', unrelated.path)).status, 409)
     assert.equal((await close('admin-a', 'newbi-close')).status, 200)
     assert.equal((await close('admin-a', 'newbi-close')).status, 200)
-    preview = (await request('GET', limited.path)).body
+    preview = (await sendRequest('GET', limited.path)).body
     assert.equal(preview.status, 'CLOSED')
     assert.equal(preview.attempts, 3)
     assert.equal(preview.closureReason, closeReason)
@@ -1195,20 +1197,17 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     dropResponse = false
     writeFailure = 'LOCKED'
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, unrelated.id), { status: 'CLOSED', reason: 'POST_LOCKED' })
-    assert.equal((await request('GET', unrelated.path)).body.status, 'CLOSED')
+    assert.equal((await sendRequest('GET', unrelated.path)).body.status, 'CLOSED')
     assert.equal(writes, 7)
     const paused = await propose('Pause blocks new permits', 'newbi-pause-fixture')
     assert.equal((await paused.decide('APPROVE')).status, 200)
-    assert.equal((await request('POST', characterPath(a) + '/controls', { key: 'newbi-test-pause',
+    assert.equal((await sendRequest('POST', characterPath(a) + '/controls', { key: 'newbi-test-pause',
       data: { scope: 'ACCOUNT', scopeId: accountId, operation: 'PAUSE', reason: 'Check claim boundary' } })).status, 200)
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, paused.id), { status: 'UNAVAILABLE' })
-    assert.equal((await request('GET', paused.path)).body.attempts, 0)
+    assert.equal((await sendRequest('GET', paused.path)).body.attempts, 0)
     assert.equal(writes, 7)
   } finally {
-    connectorEndpoint = undefined
-    await executor.$disconnect()
-    server.closeAllConnections()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await adapter.stop()
   }
 })
 

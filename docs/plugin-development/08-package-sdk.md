@@ -90,7 +90,9 @@ Newbi 的统一活动已有独立包入口。部署者可在安装 `@ricajs/plug
 
 Newbi 的活动视图、清理函数和 Worker 与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。迁移登录需要能在该 schema 记录迁移，也需要 `rica_plugin_newbi` 的 `USAGE` 和 `CREATE`，以及 `public` 的 `USAGE`。部署者可以在宿主首次创建业务 schema 后授予这些权限。活动查询沿用宿主的 `rica_admin_api`，清理函数以 `rica_runtime` 调用现有的受限清理函数。
 
-清单里的 Newbi Worker 使用 `RICA_PLUGIN_NEWBI_RUNTIME_URL`，连接宿主数据库并指定 `?schema=rica_plugin_newbi`。运行时登录需要现有的 `rica_runtime` 角色权限，并可以切换到 `rica_admin_api` 和 `rica_newbi_poller`。Worker 启动时检查数据库和权限，后台轮询和评估继续读取控制台的接入点、后台评估开关与外部模型状态。未登记 Newbi 包时使用内置活动、清理和同一个 Worker 工厂。管理命令和回复发送仍由宿主 API 装配。
+清单里的 Newbi Worker 和管理入口都使用 `RICA_PLUGIN_NEWBI_RUNTIME_URL`，连接宿主数据库并指定 `?schema=rica_plugin_newbi`。运行时登录需要现有的 `rica_runtime` 角色权限，并可以切换到 `rica_admin_api`、`rica_newbi_poller` 和 `rica_newbi_executor`。后台轮询和评估继续读取控制台的接入点、后台评估开关与外部模型状态。未登记 Newbi 包时，宿主使用内置活动和清理，以及同一套 Worker 与管理入口。
+
+Newbi 的管理入口沿用 `/v1/characters/{characterId}/newbi/…`。宿主只允许固定包名的 Newbi 注册这组既有路由，并在启动时确认包连接的数据库与宿主一致。登记和审批沿用宿主事务、授权、审计与幂等规则。发送仍需通过受限函数领取许可。该兼容入口供内置集成使用，第三方管理扩展沿用公开的 SDK 协议。
 
 ## 部署和生命周期
 

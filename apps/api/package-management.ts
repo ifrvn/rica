@@ -1,12 +1,40 @@
 import { z } from 'zod'
+import { randomBytes } from 'node:crypto'
 import { resourceId } from '@ricajs/contracts/management'
 import type { Plugin } from '@ricajs/plugin-host'
 import type { PluginManagement } from '@ricajs/plugin-host/sdk'
 import { authorize, denyPermission, ManagementError } from '@ricajs/persistence/management'
-import type { ManagementPlugin } from '@ricajs/persistence/management-http'
+import type { ManagementAdapter, ManagementAdapterContext, ManagementPlugin } from '@ricajs/persistence/management-http'
+import { createDatabase } from '@ricajs/persistence/client'
 import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { loadPackageManagement } from '../package-plugins.js'
 import { packageAccountHooks } from './package-accounts.js'
+
+export async function startManagedApi(db: PrismaClient, host: Awaited<ReturnType<typeof loadPackageManagement>>,
+  fallback: ManagementAdapter, context: ManagementAdapterContext) {
+  const selected = host.adapters.get(fallback.id)
+  if (!selected) return fallback.start(context)
+  const probe = createDatabase(selected.databaseUrl)
+  try {
+    // The lock is shared only by sessions connected to the same PostgreSQL database.
+    const key = randomBytes(8).readBigInt64BE()
+    await db.$transaction(async (tx) => {
+      const [hostLock] = await tx.$queryRaw<{ acquired: boolean }[]>`SELECT pg_try_advisory_xact_lock(${key}::bigint) AS acquired`
+      if (!hostLock?.acquired) throw new Error('Could not verify the host management database')
+      const [packageLock] = await probe.$queryRaw<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(${key}::bigint) AS acquired`
+      if (packageLock?.acquired !== false) throw new Error('Management adapter must use the host database: ' + fallback.id)
+    })
+  } finally {
+    await probe.$disconnect()
+  }
+  const running = await selected.adapter.start({ ...context, databaseUrl: selected.databaseUrl })
+  if (running.plugin.id !== fallback.id) {
+    await running.stop()
+    throw new Error('Unexpected management adapter ID: ' + fallback.id)
+  }
+  return running
+}
 
 export function packageManagementPlugins(db: PrismaClient, host: Awaited<ReturnType<typeof loadPackageManagement>>) {
   const plugins = new Map(host.accountPlugins.map(entry => [entry.id, packageAccountHooks(entry)]))

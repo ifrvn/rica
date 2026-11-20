@@ -63,6 +63,26 @@ test('an installed package exposes scoped reads only at its pinned version', asy
   }
   assert.ok((await stat(stopped)).isFile())
 })
+
+test('an unapproved package cannot mount a host management adapter', async (t) => {
+  const deployment = await mkdtemp(join(tmpdir(), 'rica-management-adapter-'))
+  t.after(() => rm(deployment, { recursive: true, force: true }))
+  const folder = join(deployment, 'node_modules', 'fixture-adapter')
+  const manifest = join(deployment, 'plugins.json')
+  await mkdir(folder, { recursive: true })
+  await Promise.all([
+    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ id: 'newbi', package: 'fixture-adapter', version: '1.0.0',
+      database: { migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv: 'RICA_PLUGIN_FIXTURE_RUNTIME_URL' } }] })),
+    writeFile(join(folder, 'package.json'), JSON.stringify({ name: 'fixture-adapter', version: '1.0.0', type: 'module',
+      exports: { './package.json': './package.json', './rica': './plugin.js' } })),
+    writeFile(join(folder, 'plugin.js'), `
+      export const ricaPlugin = { id: 'newbi', sdkVersion: 1, activity: { view: 'run_activity' } }
+      export const ricaManagement = { id: 'newbi', hostApiVersion: 1, start() { throw new Error('Unexpected startup') } }
+    `),
+  ])
+  await assert.rejects(loadPackageManagement(manifest, { newbi: '@ricajs/plugin-newbi' }), /Unsupported host management adapter/)
+})
+
 const fixturePlugin = (id: string, field: string): ManagementPlugin => ({
   id,
   registerRoutes(app) {
