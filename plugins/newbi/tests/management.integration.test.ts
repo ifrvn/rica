@@ -187,12 +187,24 @@ async function activeIdentity(roleProfile: Record<string, unknown> = {}, charact
 
 test('Newbi database permissions are scoped to each host operation', async () => {
   await owner.$transaction(async (tx) => {
-    const [{ installed }] = await tx.$queryRaw<[{ installed: boolean }]>`
-      SELECT to_regprocedure('rica_plugin_newbi.sweep_retention()') IS NOT NULL AS installed`
+    const [{ installed, pollingOwned }] = await tx.$queryRaw<[{ installed: boolean; pollingOwned: boolean }]>`
+      SELECT to_regprocedure('rica_plugin_newbi.sweep_retention()') IS NOT NULL AS installed,
+        (SELECT count(*) = 2 FROM pg_proc p
+          JOIN pg_class c ON c.oid = 'rica_plugin_newbi.events'::regclass
+          WHERE p.oid IN ('rica_plugin_newbi.claim_event_page(uuid,text)'::regprocedure,
+            'rica_plugin_newbi.finish_event_page(uuid,uuid,integer,integer,jsonb,integer,text)'::regprocedure)
+            AND p.proowner = c.relowner AND p.prosecdef
+            AND has_function_privilege(c.relowner, 'public.rica_newbi_lock_poll_binding_v1(uuid)', 'EXECUTE')
+            AND NOT has_table_privilege(c.relowner, 'public.platform_accounts', 'SELECT')
+            AND NOT has_table_privilege(c.relowner, 'public.characters', 'UPDATE')) AS "pollingOwned"`
+    assert.equal(pollingOwned, true)
     await tx.$executeRaw`SET LOCAL SESSION AUTHORIZATION rica_runtime`
     const grants = () => tx.$queryRaw`
-      SELECT has_function_privilege('public.rica_claim_newbi_event_page(uuid,text)', 'EXECUTE') AS reader,
-        has_function_privilege('public.rica_finish_newbi_event_page(uuid,uuid,integer,integer,jsonb,integer,text)', 'EXECUTE') AS "finishPage",
+      SELECT EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace
+          AND proname = 'claim_event_page' AND has_function_privilege(oid, 'EXECUTE')) AS reader,
+        EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace
+          AND proname = 'finish_event_page' AND has_function_privilege(oid, 'EXECUTE')) AS "finishPage",
+        has_function_privilege('public.rica_newbi_lock_poll_binding_v1(uuid)', 'EXECUTE') AS "hostBinding",
         has_function_privilege('public.rica_sweep_newbi_events()', 'EXECUTE') AS "sweepEvents",
         has_function_privilege('public.rica_claim_newbi_reply(uuid,boolean,uuid,text,text)', 'EXECUTE') AS sender,
         has_function_privilege('public.rica_newbi_poll_connection(uuid)', 'EXECUTE') AS "readConnection",
@@ -205,12 +217,12 @@ test('Newbi database permissions are scoped to each host operation', async () =>
         EXISTS (SELECT FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace AND proname = 'sweep_retention'
           AND has_function_privilege(oid, 'EXECUTE')) AS "packageSweep"
     `
-    const unscoped = { reader: false, finishPage: false, sweepEvents: false, sender: false,
+    const unscoped = { reader: false, finishPage: false, hostBinding: false, sweepEvents: false, sender: false,
       readConnection: false, sendConnection: false, pluginSchema: false, credentialRead: false, ownsPluginData: false, packageSweep: false }
     const runtime = { ...unscoped, sweepEvents: true, pluginSchema: true, packageSweep: installed }
     assert.deepEqual(await grants(), [runtime])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
-    assert.deepEqual(await grants(), [{ ...unscoped, reader: true, finishPage: true, readConnection: true }])
+    assert.deepEqual(await grants(), [{ ...unscoped, reader: true, finishPage: true, readConnection: true, pluginSchema: true }])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_executor`
     assert.deepEqual(await grants(), [{ ...unscoped, sender: true, sendConnection: true }])
     await tx.$executeRaw`RESET ROLE`

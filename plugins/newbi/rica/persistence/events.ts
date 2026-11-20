@@ -13,7 +13,7 @@ type PollResult =
 export async function pollNewbiEvents(db: RawQueryClient, reader: PlatformEventReader, accountId: string, stop?: AbortSignal): Promise<PollResult> {
   if (stop?.aborted) return { status: 'STOPPED' }
   const [claimed] = await db.$queryRaw<{ claim: Claim | Deferred | null }[]>`
-    SELECT public.rica_claim_newbi_event_page(${accountId}::uuid,${reader.endpoint}) AS claim
+    SELECT rica_plugin_newbi.claim_event_page(${accountId}::uuid,${reader.endpoint}) AS claim
   `
   const claim = claimed.claim
   if (!claim) return { status: 'STOPPED' }
@@ -21,7 +21,7 @@ export async function pollNewbiEvents(db: RawQueryClient, reader: PlatformEventR
 
   async function finish(ticket: Claim, page: PlatformEventPage | null, delay: number, failure?: NewbiReadError) {
     const [row] = await db.$queryRaw<{ committed: Committed | null }[]>`
-      SELECT public.rica_finish_newbi_event_page(${accountId}::uuid,${ticket.ticket}::uuid,
+      SELECT rica_plugin_newbi.finish_event_page(${accountId}::uuid,${ticket.ticket}::uuid,
         ${ticket.bindingVersion}::int,${ticket.authEpoch}::int,${page ? JSON.stringify(page) : null}::jsonb,${delay}::int,${failure ?? null}::text) AS committed
     `
     return row.committed && { ...row.committed, nextAt: new Date(row.committed.nextAt).toISOString() }

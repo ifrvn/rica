@@ -21,6 +21,13 @@ export function scopedNewbiDatabase(db: PrismaClient, role: 'reader' | 'executor
   }
 }
 
+export function checkNewbiReader(db: PrismaClient) {
+  return scopedNewbiDatabase(db, 'reader').$queryRaw`
+    SELECT (SELECT endpoint FROM public.rica_newbi_poll_connection(NULL::uuid)),
+      rica_plugin_newbi.claim_event_page(NULL::uuid, NULL::text)
+  `
+}
+
 export async function openSavedNewbiReader(db: RawQueryClient, store: NewbiConnectionStore,
   accountId: string, signal?: AbortSignal) {
   const [saved] = await db.$queryRaw<NewbiConnection[]>`SELECT * FROM public.rica_newbi_poll_connection(${accountId}::uuid)`

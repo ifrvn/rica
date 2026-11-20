@@ -1,7 +1,7 @@
 import { createDatabase } from '@ricajs/persistence/client'
 import type { ManagementAdapter } from '@ricajs/persistence/management-http'
 import { connectNewbiSettings } from '../deployment/settings.js'
-import { scopedNewbiDatabase } from '../persistence/database.js'
+import { checkNewbiReader, scopedNewbiDatabase } from '../persistence/database.js'
 import { createNewbiOperations } from './operations.js'
 import { createNewbiManagement } from './routes.js'
 
@@ -15,7 +15,7 @@ export const ricaManagement = {
     try {
       await Promise.all([
         management.$queryRaw`SELECT id FROM rica_plugin_newbi.replies LIMIT 0`,
-        scopedNewbiDatabase(runtime, 'reader').$queryRaw`SELECT endpoint FROM public.rica_newbi_poll_connection(NULL::uuid)`,
+        checkNewbiReader(runtime),
         scopedNewbiDatabase(runtime, 'executor').$queryRaw`SELECT endpoint FROM public.rica_newbi_send_connection(NULL::uuid)`,
       ])
       const settings = connectNewbiSettings(readDeployment)

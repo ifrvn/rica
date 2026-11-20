@@ -3,7 +3,7 @@ import { createDatabase } from '@ricajs/persistence/client'
 import { connectNewbiSettings } from './deployment/settings.js'
 import { startNewbiBackground } from './management/background.js'
 import { createNewbiOperations } from './management/operations.js'
-import { scopedNewbiDatabase } from './persistence/database.js'
+import { checkNewbiReader } from './persistence/database.js'
 
 export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorkerContext): PluginWorker {
   const { readDeployment, discussion } = services ?? {}
@@ -24,7 +24,7 @@ export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorke
       management = createDatabase(databaseUrl, 'rica_admin_api')
       await Promise.all([
         management.$queryRaw`SELECT id FROM rica_plugin_newbi.discussion_assessments LIMIT 0`,
-        scopedNewbiDatabase(runtime, 'reader').$queryRaw`SELECT endpoint FROM public.rica_newbi_poll_connection(NULL::uuid)`,
+        checkNewbiReader(runtime),
       ])
       shutdown.throwIfAborted()
       const operations = createNewbiOperations(runtime, {
