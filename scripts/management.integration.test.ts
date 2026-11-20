@@ -1,12 +1,13 @@
 import { startCognitionPlugins, startConfiguredModel, startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import { localSimulationModel } from '@ricajs/simulation/model'
 import { createHostedModelManagement, createModelSettingsStore } from '@ricajs/plugin-hosted-models'
 import { hostedUsageRecorder, readHostedUsage } from '@ricajs/plugin-hosted-models/persistence/usage'
@@ -171,19 +172,50 @@ after(async () => {
   }
 })
 
-test('external activity view preserves character scope and microseconds in unified pagination', async (t) => {
+test('an external package migrates independently and its activity preserves scope and microseconds', { timeout: 45_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'rica-activity-package-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  await owner.$executeRaw`CREATE SCHEMA rica_plugin_activity_fixture`
-  t.after(() => owner.$executeRaw`DROP SCHEMA rica_plugin_activity_fixture CASCADE`)
-  await owner.$executeRaw`
+  const migrationRole = 'rica_activity_fixture_' + randomUUID().replaceAll('-', '')
+  const password = randomUUID()
+  await owner.$executeRawUnsafe(`CREATE ROLE ${migrationRole} LOGIN PASSWORD '${password}'`)
+  let schemaCreated = false
+  t.after(async () => {
+    if (schemaCreated) await owner.$executeRaw`DROP SCHEMA rica_plugin_activity_fixture CASCADE`
+    await owner.$executeRawUnsafe(`DROP ROLE ${migrationRole}`)
+  })
+  await owner.$executeRawUnsafe(`CREATE SCHEMA rica_plugin_activity_fixture AUTHORIZATION ${migrationRole}`)
+  schemaCreated = true
+
+  const manifest = join(directory, 'plugins.json')
+  const plugin = join(directory, 'node_modules', 'rica-activity-fixture')
+  const migrations = join(plugin, 'migrations')
+  const initial = join(migrations, '20261120000000_entries')
+  await mkdir(initial, { recursive: true })
+  await Promise.all([
+    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ id: 'activity-fixture', package: 'rica-activity-fixture', version: '1.0.0',
+      database: { migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv: 'RICA_PLUGIN_FIXTURE_RUNTIME_URL' } }] })),
+    writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'rica-activity-fixture', version: '1.0.0', type: 'module',
+      exports: { './package.json': './package.json', './rica': './plugin.js', './rica/prisma': './prisma.config.js' } })),
+    writeFile(join(plugin, 'plugin.js'), `export const ricaPlugin = { id: 'activity-fixture', sdkVersion: 1, activity: { view: 'run_activity' } }`),
+    writeFile(join(plugin, 'prisma.config.js'), `export default { schema: './schema.prisma', migrations: { path: './migrations' },
+      datasource: { url: process.env.RICA_PLUGIN_DATABASE_URL } }`),
+    writeFile(join(plugin, 'schema.prisma'), 'datasource db {\n  provider = "postgresql"\n}\n'),
+    writeFile(join(migrations, 'migration_lock.toml'), 'provider = "postgresql"\n'),
+    writeFile(join(initial, 'migration.sql'), `
     CREATE TABLE rica_plugin_activity_fixture.entries (
       character_id uuid NOT NULL, id uuid NOT NULL, kind text NOT NULL, identity text NOT NULL,
       account text NOT NULL, account_id uuid NOT NULL, state text NOT NULL, created_at timestamptz NOT NULL
-    )`
-  await owner.$executeRaw`CREATE VIEW rica_plugin_activity_fixture.run_activity AS SELECT * FROM rica_plugin_activity_fixture.entries`
-  await owner.$executeRaw`GRANT USAGE ON SCHEMA rica_plugin_activity_fixture TO rica_admin_api`
-  await owner.$executeRaw`GRANT SELECT ON rica_plugin_activity_fixture.run_activity TO rica_admin_api`
+    );`),
+  ])
+  const migrationUrl = new URL(config.databaseUrl)
+  migrationUrl.username = migrationRole
+  migrationUrl.password = password
+  migrationUrl.searchParams.set('schema', 'rica_plugin_activity_fixture')
+  const migrate = () => promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/migrate.ts'], {
+    env: { ...process.env, MIGRATION_DATABASE_URL: config.databaseUrl,
+      RICA_PLUGIN_MANIFEST: manifest, RICA_PLUGIN_FIXTURE_MIGRATE_URL: migrationUrl.href },
+  })
+  await migrate()
   const { body: foreignAccount } = await request('POST', characterPath(b) + '/accounts', {
     actor: 'admin-b', key: 'activity-account', data: {
       identityId: identityB, platform: 'mock-b', instanceKey: 'integration', remoteAccountId: prefix + '-activity',
@@ -198,16 +230,18 @@ test('external activity view preserves character scope and microseconds in unifi
       (${a}::uuid, ${randomUUID()}::uuid, 'PROPOSAL', 'foreign', 'foreign', ${foreignAccount.id}::uuid, 'WAITING', now()),
       (${b}::uuid, ${randomUUID()}::uuid, 'ASSESSMENT', 'foreign', 'foreign', ${foreignAccount.id}::uuid, 'DONE', now())`
 
-  const manifest = join(directory, 'plugins.json')
-  const plugin = join(directory, 'node_modules', 'rica-activity-fixture')
-  await mkdir(plugin, { recursive: true })
-  await Promise.all([
-    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ id: 'activity-fixture', package: 'rica-activity-fixture', version: '1.0.0',
-      database: { migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv: 'RICA_PLUGIN_FIXTURE_RUNTIME_URL' } }] })),
-    writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'rica-activity-fixture', version: '1.0.0', type: 'module',
-      exports: { './package.json': './package.json', './rica': './plugin.js' } })),
-    writeFile(join(plugin, 'plugin.js'), `export const ricaPlugin = { id: 'activity-fixture', sdkVersion: 1, activity: { view: 'run_activity' } }`),
-  ])
+  const upgrade = join(migrations, '20261120010000_activity')
+  await mkdir(upgrade)
+  await writeFile(join(upgrade, 'migration.sql'), `
+    CREATE VIEW rica_plugin_activity_fixture.run_activity AS SELECT * FROM rica_plugin_activity_fixture.entries;
+    GRANT USAGE ON SCHEMA rica_plugin_activity_fixture TO rica_admin_api;
+    GRANT SELECT ON rica_plugin_activity_fixture.run_activity TO rica_admin_api;
+  `)
+  await migrate()
+  assert.deepEqual(await owner.$queryRaw`
+    SELECT migration_name FROM rica_plugin_activity_fixture._prisma_migrations ORDER BY migration_name`,
+  [{ migration_name: '20261120000000_entries' }, { migration_name: '20261120010000_activity' }])
+  await assert.rejects(management.$queryRaw`SELECT id FROM rica_plugin_activity_fixture.entries LIMIT 0`, /permission denied/i)
   const host = await loadPackageManagement(manifest)
   t.after(() => host.stop())
   assert.deepEqual(host.plugins, [])

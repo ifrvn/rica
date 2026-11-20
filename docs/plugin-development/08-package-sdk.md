@@ -46,6 +46,17 @@ commands: [
 
 两个 URL 均指定 `?schema=rica_plugin_acme`。命名规则是 `rica_plugin_` 加插件 ID，连字符转为下划线。部署者预先建立 schema、迁移角色和运行时角色，并通过迁移授予业务操作所需权限。无额外参数的 `pnpm run db:migrate` 或 `rica migrate` 先运行宿主迁移，再依清单顺序运行插件迁移。附带参数时只调用宿主的 Prisma CLI，方便保留 `--help` 和单独指定宿主配置的用法。运行时用自己的 Client 连接该命名空间，使用 `PrismaPg` 时将对应 schema 传给驱动适配器。
 
+例如，首次安装 `acme` 时，由数据库管理员为该包准备两个独立登录和业务 schema。登录的认证方式由部署环境统一配置。
+
+```sql
+CREATE ROLE rica_acme_migrate LOGIN;
+CREATE ROLE rica_acme_runtime LOGIN;
+CREATE SCHEMA rica_plugin_acme AUTHORIZATION rica_acme_migrate;
+GRANT USAGE ON SCHEMA rica_plugin_acme TO rica_acme_runtime;
+```
+
+插件作者在包内编写表结构、索引和运行权限的迁移，生成该包自己的 Prisma Client。部署者在清单所在项目安装固定版本，配置两个连接变量，再运行 `rica migrate`。升级时更新安装版本和清单，继续使用同一个迁移 URL，Prisma 根据该 schema 的迁移记录应用新增迁移。
+
 首次接管已有插件 schema 时，可在 `database` 中声明 `"migrationJournal": "separate"`。迁移 URL 改用 `?schema=rica_migrate_acme`，运行时 URL 仍指向 `rica_plugin_acme`。由部署者创建迁移记录 schema 并授权迁移登录，迁移 SQL 显式限定业务对象的 schema。已经记录过迁移的部署应持续使用原来的记录位置。
 
 ### 统一运行活动
