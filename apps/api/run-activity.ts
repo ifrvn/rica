@@ -4,6 +4,7 @@ import { resourceId, runActivityItem, runActivityKind, type runActivityQuery } f
 import { authorize, ManagementError, type Scope } from '@ricajs/persistence/management'
 import type { ManagementPlugin } from '@ricajs/persistence/management-http'
 import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
+import type { PackageActivityView } from '../package-plugins.js'
 
 const cursorSchema = z.tuple([z.iso.datetime(), resourceId, runActivityKind, z.string()])
 
@@ -17,7 +18,7 @@ function decodeCursor(cursor: string | undefined) {
 }
 
 export async function listRunActivity(db: PrismaClient, scope: Scope, query: z.infer<typeof runActivityQuery>,
-  plugins: readonly ManagementPlugin[]) {
+  plugins: readonly ManagementPlugin[], activityViews: readonly PackageActivityView[]) {
   const cursor = decodeCursor(query.cursor)
   const [time, id, kind, platform] = cursor ?? []
   const { characterId } = scope
@@ -29,6 +30,21 @@ export async function listRunActivity(db: PrismaClient, scope: Scope, query: z.i
     for (const activity of query.kind ? [query.kind] : runActivityKind.options) {
       const source = plugin.runActivity?.[activity]
       if (source) sources.push(source(characterId))
+    }
+  }
+  if (query.kind !== 'SIMULATION') {
+    for (const source of activityViews) {
+      // PostgreSQL does not support binding identifiers. Quote each name separately.
+      const relation = Prisma.raw([source.schema, source.view].map(name => '"' + name.replaceAll('"', '""') + '"').join('.'))
+      sources.push(Prisma.sql`
+        SELECT v.id, v.kind, ${'plugin:' + source.id}::text AS platform,
+          v.identity, v.account, v.account_id, v.state, v.created_at
+        FROM ${relation} v
+        JOIN public.platform_accounts a ON (a.character_id, a.id) = (v.character_id, v.account_id)
+        WHERE v.character_id = ${characterId}::uuid
+          AND v.kind IN ('ASSESSMENT', 'PROPOSAL')
+          ${query.kind ? Prisma.sql`AND v.kind = ${query.kind}` : Prisma.empty}
+      `)
     }
   }
   return db.$transaction(async (tx) => {

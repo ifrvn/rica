@@ -18,6 +18,9 @@ const manifestSchema = z.strictObject({
   })),
 })
 const packageIdentity = z.object({ name: packageName, version })
+const activityView = z.strictObject({ view: z.string().regex(/^[a-z][a-z0-9_]{0,62}$/) })
+
+export type PackageActivityView = Readonly<{ id: string; schema: string; view: string }>
 
 export async function readPackagePlugins(manifestPath: string | undefined) {
   if (!manifestPath) return []
@@ -53,11 +56,13 @@ export async function readPackagePlugins(manifestPath: string | undefined) {
   }))
 }
 
+function packageSchema(id: string) { return 'rica_plugin_' + id.replaceAll('-', '_') }
+
 export function packageDatabaseUrl(id: string, source: string) {
   const value = process.env[source]
   if (!value) throw new Error('Missing Rica plugin database setting: ' + source)
   const url = URL.parse(value)
-  const schema = 'rica_plugin_' + id.replaceAll('-', '_')
+  const schema = packageSchema(id)
   if (!url || !['postgres:', 'postgresql:'].includes(url.protocol) ||
       url.searchParams.getAll('schema').length !== 1 || url.searchParams.get('schema') !== schema) {
     throw new Error('Rica plugin database URL must target schema ' + schema + ': ' + id)
@@ -70,19 +75,25 @@ async function readPackageModules(manifestPath: string | undefined) {
   for (const entry of await readPackagePlugins(manifestPath)) {
     const { ricaPlugin }: { ricaPlugin?: RicaPlugin } = await import(pathToFileURL(entry.resolveExport('/rica')).href)
     if (ricaPlugin?.id !== entry.id || ricaPlugin.sdkVersion !== 1 ||
-        (typeof ricaPlugin.management !== 'function' && typeof ricaPlugin.worker !== 'function') ||
+        (ricaPlugin.management === undefined && ricaPlugin.worker === undefined && ricaPlugin.activity === undefined) ||
         (ricaPlugin.management !== undefined && typeof ricaPlugin.management !== 'function') ||
         (ricaPlugin.worker !== undefined && typeof ricaPlugin.worker !== 'function')) {
       throw new Error('Unsupported Rica plugin SDK or capabilities: ' + entry.id)
     }
-    modules.push({ entry, ricaPlugin })
+    const activity = activityView.optional().safeParse(ricaPlugin.activity)
+    if (!activity.success || (activity.data && !entry.database)) {
+      throw new Error('Invalid Rica plugin activity view: ' + entry.id)
+    }
+    modules.push({ entry, ricaPlugin, activity: activity.data })
   }
   return modules
 }
 
 export async function loadPackageManagement(manifestPath: string | undefined) {
   const definitions: PluginDefinition<PluginManagement>[] = []
-  for (const { entry, ricaPlugin } of await readPackageModules(manifestPath)) {
+  const activityViews: PackageActivityView[] = []
+  for (const { entry, ricaPlugin, activity } of await readPackageModules(manifestPath)) {
+    if (activity) activityViews.push({ id: entry.id, schema: packageSchema(entry.id), view: activity.view })
     const createManagement = ricaPlugin.management
     if (!createManagement) continue
     const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
@@ -104,7 +115,7 @@ export async function loadPackageManagement(manifestPath: string | undefined) {
     })
   }
   const host = await startPluginHost('package-management', definitions, definitions.map(({ id }) => ({ id })))
-  return { plugins: definitions.map(({ id }) => host.find(id)!), stop: host.stop }
+  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, stop: host.stop }
 }
 
 export async function startPackageWorkers(manifestPath: string | undefined, shutdown: AbortSignal,

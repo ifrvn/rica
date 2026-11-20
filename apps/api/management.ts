@@ -27,6 +27,7 @@ import { localIssuer, type Authenticate, type Principal } from './admin-auth.js'
 import { deploymentChangeOwner, deploymentPluginChange, deploymentPluginsView } from '../deployment-plugin-contracts.js'
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../deployment-plugins.js'
 import { listRunActivity } from './run-activity.js'
+import type { PackageActivityView } from '../package-plugins.js'
 
 import { body, character, characterParams, error, errors, extensionFields, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin } from '@ricajs/persistence/management-http'
 
@@ -39,6 +40,7 @@ type Options = {
   modelProfileExists?: (id: string) => Promise<boolean>
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   plugins?: readonly ManagementPlugin[]
+  activityViews?: readonly PackageActivityView[]
 }
 
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
@@ -55,7 +57,7 @@ function runVersion(header: string) {
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
   activeModel = async () => 'simulated', reviewModel = async () => null,
-  modelProfileExists = async () => false, deploymentPlugins, plugins = [] }: Options) {
+  modelProfileExists = async () => false, deploymentPlugins, plugins = [], activityViews = [] }: Options) {
   async function validateDraftModel(profile?: string, retained?: () => Promise<boolean>) {
     if (profile && profile !== 'simulated' && !await modelProfileExists(profile) && !await retained?.()) {
       throw new management.ManagementError(422, 'MODEL_NOT_CONFIGURED', 'Draft model profile is unavailable')
@@ -1039,7 +1041,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     responses: { ...errors, 200: success(schema.pageView(schema.runActivityItem)) },
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
-    return c.json(await listRunActivity(db, scope, c.req.valid('query'), plugins), 200)
+    return c.json(await listRunActivity(db, scope, c.req.valid('query'), plugins, activityViews), 200)
   })
 
   app.openapi(createRoute({

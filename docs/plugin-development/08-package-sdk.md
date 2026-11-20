@@ -2,13 +2,13 @@
 
 Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Worker、迁移任务和前端构建的共同输入。新版 SDK 按能力独立演进，公共签名使用可序列化的数据，插件各自管理 Prisma schema 和生成的 Client。
 
-当前实现覆盖部署清单加载、只读管理接口、Worker 生命周期和独立 Prisma 迁移。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
+当前实现覆盖部署清单加载、只读管理接口、Worker 生命周期、独立 Prisma 迁移和统一活动分页。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
 
 ```json
 {"version": 1, "plugins": [{"id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0", "config": {"label": "Acme"}}]}
 ```
 
-包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management` 或 `worker` 其中一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
+包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`worker` 或 `activity` 其中一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
 
 `management(config, context)` 可异步创建实例，返回 `read(request)` 和可选的 `stop()`。`read` 接收角色 ID、调用者 ID、插件内路径和保留重复项的查询参数，返回 JSON 值。宿主只转发已通过权限校验的 GET 请求。插件写查询时仍应使用已授权的 `characterId` 筛选插件数据。
 
@@ -30,6 +30,18 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 
 两个 URL 均指定 `?schema=rica_plugin_acme`。命名规则是 `rica_plugin_` 加插件 ID，连字符转为下划线。部署者预先建立 schema、迁移角色和运行时角色，并通过迁移授予业务操作所需权限。无额外参数的 `pnpm run db:migrate` 或 `rica migrate` 先运行宿主迁移，再依清单顺序运行插件迁移。附带参数时只调用宿主的 Prisma CLI，方便保留 `--help` 和单独指定宿主配置的用法。运行时用自己的 Client 连接该命名空间，使用 `PrismaPg` 时将对应 schema 传给驱动适配器。
 
+### 统一运行活动
+
+插件可以单独声明 `activity: { view: 'run_activity' }`。它需要清单中的 `database` 配置，并在**宿主所在数据库**的插件 schema 中创建同名视图。视图名由小写字母开头，后续允许小写字母、数字和下划线，最多 63 个字符。视图应提供以下非空列。
+
+| 列 | PostgreSQL 类型 |
+| --- | --- |
+| `character_id`、`account_id`、`id` | `uuid` |
+| `kind`、`identity`、`account`、`state` | `text`，`kind` 取 `ASSESSMENT` 或 `PROPOSAL` |
+| `created_at` | `timestamptz`，保留微秒 |
+
+每条记录引用当前 Rica 角色的已绑定账号。同一插件在一个角色下的 `(created_at, id, kind)` 必须唯一。宿主验证账号归属后，与其他活动来源统一排序和分页，并将来源标记为 `plugin:<id>`。授予 `rica_admin_api` 插件 schema 的 `USAGE` 和该视图的 `SELECT` 即可，插件可通过视图只公开摘要字段。控制台目前展示外部插件的摘要，详情随插件 UI 接入提供。
+
 ## 部署和生命周期
 
 - `RICA_PLUGIN_MANIFEST` 指向部署目录中的 JSON 文件。清单版本为 `1`。第一批接入项包含 `id`、npm `package`、固定 `version` 和 JSON `config`。清单中省略某个包即停用其对外能力。部署者通过锁文件固定实际安装内容。
@@ -41,7 +53,7 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 
 1. **读能力**以业务对象为单位。宿主在授权后提供按账号批量查询的能力，插件返回公开资料；对展示字段沿用先分页再补资料的模式。任务资格判断由数据库在排序和限制条数前完成。
 2. **事务能力**按业务操作发放。登记、解绑、审批和任务领取使用同一个宿主事务。需要插件内写入时，宿主调用声明过的、带权限边界的数据库操作，限制到当前角色和账号。参数用绑定传递。插件日常查询可继续用自己的 Prisma Client。
-3. **活动和统一列表**使用版本化记录结构。受信插件可注册一个只读视图，宿主负责校验登记信息、控制权限、施加角色和类型过滤，并在同一个查询中合并记录。沿用 `(created_at, id, kind, platform)` 全序和微秒时间精度。远程插件可通过带幂等键的事件发布摘要，供宿主维护统一读模型。
+3. **活动和统一列表**使用版本化记录结构。宿主在同一个查询中合并记录，使用 `(created_at, id, kind, platform)` 全序和微秒时间精度。后续远程插件可通过带幂等键的事件发布摘要，供宿主维护统一读模型。
 4. **可选能力**按清单登记管理 API、Worker、公开状态、UI 构建入口及事件订阅。事件包含版本、作用域和幂等键。审批和真实执行的许可仍由宿主控制。远程接入使用相同业务数据契约，另行提供服务身份和授权。
 
 ## 实施顺序与验收

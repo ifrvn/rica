@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -21,6 +21,7 @@ import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
+import { loadPackageManagement } from '../apps/package-plugins.js'
 import { createAutoReviewer } from '../apps/auto-review.js'
 import { deriveMemory, revokeMemoryAccess } from '@ricajs/persistence/memory'
 import { reviewTarget } from '@ricajs/simulation/contracts/review'
@@ -167,6 +168,69 @@ after(async () => {
   } finally {
     await Promise.all([management.$disconnect(), owner.$disconnect()])
   }
+})
+
+test('external activity view preserves character scope and microseconds in unified pagination', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-activity-package-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await owner.$executeRaw`CREATE SCHEMA rica_plugin_activity_fixture`
+  t.after(() => owner.$executeRaw`DROP SCHEMA rica_plugin_activity_fixture CASCADE`)
+  await owner.$executeRaw`
+    CREATE TABLE rica_plugin_activity_fixture.entries (
+      character_id uuid NOT NULL, id uuid NOT NULL, kind text NOT NULL, identity text NOT NULL,
+      account text NOT NULL, account_id uuid NOT NULL, state text NOT NULL, created_at timestamptz NOT NULL
+    )`
+  await owner.$executeRaw`CREATE VIEW rica_plugin_activity_fixture.run_activity AS SELECT * FROM rica_plugin_activity_fixture.entries`
+  await owner.$executeRaw`GRANT USAGE ON SCHEMA rica_plugin_activity_fixture TO rica_admin_api`
+  await owner.$executeRaw`GRANT SELECT ON rica_plugin_activity_fixture.run_activity TO rica_admin_api`
+  const { body: foreignAccount } = await request('POST', characterPath(b) + '/accounts', {
+    actor: 'admin-b', key: 'activity-account', data: {
+      identityId: identityB, platform: 'mock-b', instanceKey: 'integration', remoteAccountId: prefix + '-activity',
+    },
+  })
+  assert.equal(typeof foreignAccount.id, 'string')
+  const id = randomUUID()
+  await owner.$executeRaw`
+    INSERT INTO rica_plugin_activity_fixture.entries VALUES
+      (${a}::uuid, ${id}::uuid, 'PROPOSAL', 'one', 'local', ${accountA}::uuid, 'WAITING', '2026-01-01T00:00:00.123457Z'),
+      (${a}::uuid, ${id}::uuid, 'ASSESSMENT', 'one', 'local', ${accountA}::uuid, 'DONE', '2026-01-01T00:00:00.123456Z'),
+      (${a}::uuid, ${randomUUID()}::uuid, 'PROPOSAL', 'foreign', 'foreign', ${foreignAccount.id}::uuid, 'WAITING', now()),
+      (${b}::uuid, ${randomUUID()}::uuid, 'ASSESSMENT', 'foreign', 'foreign', ${foreignAccount.id}::uuid, 'DONE', now())`
+
+  const manifest = join(directory, 'plugins.json')
+  const plugin = join(directory, 'node_modules', 'rica-activity-fixture')
+  await mkdir(plugin, { recursive: true })
+  await Promise.all([
+    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ id: 'activity-fixture', package: 'rica-activity-fixture', version: '1.0.0',
+      database: { migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv: 'RICA_PLUGIN_FIXTURE_RUNTIME_URL' } }] })),
+    writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'rica-activity-fixture', version: '1.0.0', type: 'module',
+      exports: { './package.json': './package.json', './rica': './plugin.js' } })),
+    writeFile(join(plugin, 'plugin.js'), `export const ricaPlugin = { id: 'activity-fixture', sdkVersion: 1, activity: { view: 'run_activity' } }`),
+  ])
+  const host = await loadPackageManagement(manifest)
+  t.after(() => host.stop())
+  assert.deepEqual(host.plugins, [])
+  const target = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
+    db: management, origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: () => undefined,
+    activityViews: host.activityViews,
+    authenticate: async (req) => {
+      const subject = req.headers.get('Cookie')?.replace('fixture-session=', '')
+      return subject ? { issuer, subject, id: actorId(issuer, subject) } : null
+    },
+  }))
+  const path = characterPath(a) + '/run-activity'
+  assert.equal((await request('GET', path, { target, actor: 'admin-b' })).status, 404)
+  const first = await request('GET', path + '?limit=1', { target })
+  assert.equal(first.status, 200, JSON.stringify(first.body))
+  assert.deepEqual(first.body.items.map((row: { id: string; platform: string; createdAt: string }) => [row.id, row.platform, row.createdAt]),
+    [[id, 'plugin:activity-fixture', '2026-01-01T00:00:00.123457Z']])
+  assert.ok(first.body.nextCursor)
+  const second = await request('GET', path + '?limit=1&cursor=' + first.body.nextCursor, { target })
+  assert.equal(second.status, 200)
+  assert.equal(second.body.items[0]?.createdAt, '2026-01-01T00:00:00.123456Z')
+  assert.equal(second.body.nextCursor, null)
+  const filtered = await request('GET', path + '?kind=ASSESSMENT', { target })
+  assert.deepEqual(filtered.body.items.map((row: { kind: string }) => row.kind), ['ASSESSMENT'])
 })
 
 test('local authentication enforces origin, membership and session revocation', { timeout: 30_000 }, async () => {

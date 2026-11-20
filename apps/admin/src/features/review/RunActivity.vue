@@ -14,6 +14,7 @@ const emit = defineEmits<{ expired: []; open: [entry: Entry] }>()
 const kindLabels = { SIMULATION: '模拟运行', ASSESSMENT: '仅评估', PROPOSAL: '真实提案' }
 const simulationStates: Readonly<Record<string, string>> = runStateLabels
 const platform = (id: string) => platformReviews.find((plugin) => plugin.id === id)?.activity
+const platformLabel = (id: string) => platform(id)?.title ?? id.replace(/^plugin:/u, '')
 function stateLabel(entry: Entry) {
   const labels = entry.kind === 'SIMULATION' ? simulationStates : platform(entry.platform)?.states[entry.kind]
   return labels?.[entry.state] ?? entry.state
@@ -81,10 +82,10 @@ onMounted(() => load())
       <li v-for="row in rows" :key="row.kind + '/' + row.platform + '/' + row.id">
         <div class="activity-entry">
           <div class="activity-heading"><strong>{{ row.identity }}</strong><UiBadge>{{ kindLabels[row.kind] }}</UiBadge></div>
-          <span>{{ platform(row.platform)?.title ?? row.platform }} · {{ row.account }}</span>
+          <span>{{ platformLabel(row.platform) }} · {{ row.account }}</span>
           <div class="activity-meta"><span>{{ stateLabel(row) }}</span><time :datetime="row.createdAt">{{ formatTime(row.createdAt) }}</time></div>
         </div>
-        <UiButton size="small" variant="soft" @click="emit('open', row)">查看详情</UiButton>
+        <UiButton v-if="row.kind === 'SIMULATION' || platform(row.platform)" size="small" variant="soft" @click="emit('open', row)">查看详情</UiButton>
       </li>
     </ul>
     <UiButton v-if="cursor" size="small" variant="quiet" :disabled="busy" @click="load(true)">加载更多</UiButton>

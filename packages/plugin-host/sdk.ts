@@ -23,8 +23,10 @@ export type PluginWorker = Readonly<{
 
 type ManagementFactory = (config: PluginJson, context: PluginContext) => PluginManagement | Promise<PluginManagement>
 type WorkerFactory = (config: PluginJson, context: PluginWorkerContext) => PluginWorker
+export type PluginActivity = Readonly<{ view: string }>
 
 export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1 } & (
-  { management: ManagementFactory; worker?: WorkerFactory } |
-  { management?: ManagementFactory; worker: WorkerFactory }
+  { management: ManagementFactory; worker?: WorkerFactory; activity?: PluginActivity } |
+  { management?: ManagementFactory; worker: WorkerFactory; activity?: PluginActivity } |
+  { management?: ManagementFactory; worker?: WorkerFactory; activity: PluginActivity }
 )>

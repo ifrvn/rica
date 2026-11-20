@@ -72,6 +72,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
   },
   modelProfileExists: async (id) => Object.hasOwn((await modelSettings.readSettings()).profiles, id),
   deploymentPlugins,
+  activityViews: packageManagement.activityViews,
   plugins: [
     createNewbiManagement(managementDb, newbi, {
       ...createNewbiOperations(db, newbi),
