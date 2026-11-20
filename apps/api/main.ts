@@ -19,9 +19,12 @@ import { readPluginRelease } from '../plugin-releases.js'
 import { createAutoReviewer } from '../auto-review.js'
 import { createDiscussionAssessor } from '../discussion-assessment.js'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
+import { loadPackageManagement } from '../package-plugins.js'
+import { packageManagementRoute } from './package-management.js'
 
 const config = loadConfig()
 const managementConfig = loadManagementConfig()
+const packageManagement = await loadPackageManagement(managementConfig ? process.env.RICA_PLUGIN_MANIFEST : undefined)
 const settingsDirectory = modelSettingsDirectory(config.databaseUrl)
 const deploymentPlugins = createDeploymentPluginStore(settingsDirectory)
 const platforms = managementConfig ? await deploymentPlugins.readSimulationPlatforms()
@@ -83,6 +86,7 @@ const management = managementConfig && managementDb && auth && platforms ? creat
       authorize(actor) { if (actor.issuer !== localIssuer || !actor.canCreate) denyPermission() },
       isEnabled: () => deploymentPlugins.isEnabled(hostedModelsPluginId),
     }),
+    ...packageManagement.plugins.map((plugin) => packageManagementRoute(managementDb, plugin)),
   ],
 }) : undefined
 
@@ -101,7 +105,7 @@ function shutdown() {
   observation?.stop()
   server.close(() => {
     redis.disconnect()
-    void Promise.all([platforms?.stop(), db.$disconnect(), managementDb?.$disconnect()]).catch(() => {
+    void Promise.all([packageManagement.stop(), platforms?.stop(), db.$disconnect(), managementDb?.$disconnect()]).catch(() => {
       process.exitCode = 1
     })
   })

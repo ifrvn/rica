@@ -7,12 +7,58 @@ import { createManagementApp } from './management.js'
 import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { startSimulationPlatforms } from '../runtime-plugins.js'
 import { localIssuer } from './admin-auth.js'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { loadPackageManagement } from '../package-plugins.js'
+import { packageManagementRoute } from './package-management.js'
 
 const origin = 'http://localhost:5173'
 const characterId = '10000000-0000-4000-8000-000000000001'
+
+test('an installed package exposes scoped reads only at its pinned version', async (t) => {
+  const deployment = await mkdtemp(join(tmpdir(), 'rica-package-plugin-'))
+  t.after(() => rm(deployment, { recursive: true, force: true }))
+  const pluginDirectory = join(deployment, 'node_modules', '@acme', 'fixture')
+  await mkdir(pluginDirectory, { recursive: true })
+  const manifestPath = join(deployment, 'plugins.json')
+  const stopped = join(deployment, 'stopped')
+  const entry = { id: 'acme', package: '@acme/fixture', version: '1.0.0', config: { name: 'Fixture', stopped } }
+  const writeManifest = (version: string) => writeFile(manifestPath, JSON.stringify({ version: 1, plugins: [{ ...entry, version }] }))
+  await Promise.all([
+    writeManifest('2.0.0'),
+    writeFile(join(pluginDirectory, 'package.json'), JSON.stringify({ name: entry.package, version: entry.version, type: 'module',
+      exports: { './package.json': './package.json', './rica': './plugin.js' } })),
+    writeFile(join(pluginDirectory, 'plugin.js'), `
+      import { writeFile } from 'node:fs/promises'
+      export const ricaPlugin = { id: 'acme', sdkVersion: 1, async management(config) {
+        return { async read(request) { return { name: config.name, ...request } },
+          stop() { return writeFile(config.stopped, '') } }
+      } }
+    `),
+  ])
+  await assert.rejects(loadPackageManagement(manifestPath), /version does not match/)
+  await writeManifest(entry.version)
+  const host = await loadPackageManagement(manifestPath)
+  try {
+    const db = { $transaction: (work: (tx: object) => unknown) => work({
+      managementMembership: { findUnique: async ({ where }: { where: { characterId_issuer_subject: { characterId: string } } }) =>
+        where.characterId_issuer_subject.characterId === characterId ? { subject: 'operator' } : null },
+    }) } as unknown as PrismaClient
+    const app = fixture(host.plugins.map((plugin) => packageManagementRoute(db, plugin)))
+    const headers = { Cookie: 'session=fixture' }
+    const path = `/characters/${characterId}/plugins/acme/records?tag=a&tag=b`
+    assert.equal((await app.request(path)).status, 401)
+    assert.equal((await app.request(path.replace(characterId, '10000000-0000-4000-8000-000000000002'), { headers })).status, 404)
+    const result = await app.request(path, { headers })
+    assert.equal(result.status, 200)
+    assert.deepEqual(await result.json(), { characterId, actorId: 'operator', path: '/records',
+      query: [['tag', 'a'], ['tag', 'b']], name: 'Fixture' })
+  } finally {
+    await host.stop()
+  }
+  assert.ok((await stat(stopped)).isFile())
+})
 const fixturePlugin = (id: string, field: string): ManagementPlugin => ({
   id,
   registerRoutes(app) {

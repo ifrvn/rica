@@ -55,7 +55,7 @@ for (const [index, dir] of directories.entries()) {
     for (const file of readdirSync(join(build, 'apps')).filter((name) => name.endsWith('.js'))) {
       copy(join(build, 'apps', file), join(destination, 'apps', file))
     }
-    for (const name of ['admin-user', 'plugin-release-manifest']) {
+    for (const name of ['admin-user', 'plugin-release-manifest', 'migrate']) {
       copy(join(build, 'scripts', name + '.js'), join(destination, 'scripts', name + '.js'))
     }
     copy('bin/rica.js', join(destination, 'bin/rica.js'))

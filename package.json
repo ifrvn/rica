@@ -11,7 +11,7 @@
   },
   "scripts": {
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
+    "db:migrate": "tsx scripts/migrate.ts",
     "dev:api": "tsx watch apps/api/main.ts",
     "dev:worker": "tsx watch apps/worker/main.ts",
     "maintenance:retention": "tsx apps/worker/retention.ts",
