@@ -259,7 +259,7 @@ export async function closeNewbiReply(tx: Prisma.TransactionClient, scope: Scope
     SELECT id FROM rica_plugin_newbi.replies WHERE id = ${id}::uuid AND character_id = ${scope.characterId}::uuid`
   if (!reply) missing()
   const [result] = await tx.$queryRaw<{ closed: boolean }[]>`
-    SELECT public.rica_close_newbi_reply(${id}::uuid, ${scope.characterId}::uuid, ${input.reason}) AS closed
+    SELECT rica_plugin_newbi.close_reply(${id}::uuid, ${scope.characterId}::uuid, ${input.reason}) AS closed
   `
   if (!result.closed) conflict()
   return { id, status: 'CLOSED' }

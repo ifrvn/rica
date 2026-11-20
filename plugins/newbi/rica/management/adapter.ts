@@ -16,7 +16,10 @@ export const ricaManagement = {
       await Promise.all([
         management.$queryRaw`SELECT id FROM rica_plugin_newbi.replies LIMIT 0`,
         checkNewbiReader(runtime),
-        scopedNewbiDatabase(runtime, 'executor').$queryRaw`SELECT endpoint FROM public.rica_newbi_send_connection(NULL::uuid)`,
+        scopedNewbiDatabase(runtime, 'executor').$queryRaw`
+          SELECT (SELECT endpoint FROM public.rica_newbi_send_connection(NULL::uuid)),
+            rica_plugin_newbi.execution_target(NULL::uuid, NULL::text)
+        `,
       ])
       const settings = connectNewbiSettings(readDeployment)
       const plugin = createNewbiManagement(management, settings, {

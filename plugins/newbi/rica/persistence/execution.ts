@@ -12,7 +12,7 @@ type Outcome =
 
 export async function executeNewbiReply(db: RawQueryClient, client: PlatformReplyExecutor, executorKey: string, id: string, retry = false): Promise<Outcome> {
   const [row] = await db.$queryRaw<{ target: Target | null }[]>`
-    SELECT public.rica_newbi_execution_target(${id}::uuid, ${executorKey}) AS target
+    SELECT rica_plugin_newbi.execution_target(${id}::uuid, ${executorKey}) AS target
   `
   const target = row.target
   if (!target || target.endpoint !== client.endpoint || target.attempts >= 3 || (target.status !== 'READY' && !retry)
@@ -35,7 +35,7 @@ export async function executeNewbiReply(db: RawQueryClient, client: PlatformRepl
     let closed = false
     if (error.retrySeconds || locked) {
       const [result] = await db.$queryRaw<{ changed: boolean }[]>`
-        SELECT public.rica_newbi_reply_preflight(${id}::uuid,${executorKey},${error.retrySeconds}::int,${locked}) AS changed
+        SELECT rica_plugin_newbi.reply_preflight(${id}::uuid,${executorKey},${error.retrySeconds}::int,${locked}) AS changed
       `
       closed = locked && result.changed
     }
@@ -46,7 +46,7 @@ export async function executeNewbiReply(db: RawQueryClient, client: PlatformRepl
   }
 
   const [claim] = await db.$queryRaw<{ payload: Claim | null }[]>`
-    SELECT public.rica_claim_newbi_reply(${id}::uuid, ${retry}, ${agentId}::uuid, ${client.endpoint}, ${executorKey}) AS payload
+    SELECT rica_plugin_newbi.claim_reply(${id}::uuid, ${retry}, ${agentId}::uuid, ${client.endpoint}, ${executorKey}) AS payload
   `
   if (!claim.payload) return { status: 'UNAVAILABLE' }
 
@@ -62,7 +62,7 @@ export async function executeNewbiReply(db: RawQueryClient, client: PlatformRepl
   const locked = failure?.reason === 'POST_LOCKED'
   const seconds = failure?.retrySeconds ?? 0
   const [result] = await db.$queryRaw<{ recorded: boolean }[]>`
-    SELECT public.rica_finish_newbi_reply(${id}::uuid, ${attempt}::int, ${commentId}::uuid, ${seconds}::int, ${locked}) AS recorded
+    SELECT rica_plugin_newbi.finish_reply(${id}::uuid, ${attempt}::int, ${commentId}::uuid, ${seconds}::int, ${locked}) AS recorded
   `
   if (result.recorded && commentId) return { status: 'SENT', commentId }
   return {
