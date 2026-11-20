@@ -6,11 +6,11 @@ import { newbiExecutorKey } from '../runtime/identity.js'
 import type { PrismaClient } from '@ricajs/persistence/prisma'
 import type { NewbiManagementOptions } from './routes.js'
 
-export function createNewbiOperations(db: PrismaClient, deploymentPlugins: NewbiConnectionStore) {
+export function createNewbiOperations(db: PrismaClient, deploymentPlugins: NewbiConnectionStore, shutdown?: AbortSignal) {
   const newbiReaderDb = scopedNewbiDatabase(db, 'reader')
   const newbiExecutorDb = scopedNewbiDatabase(db, 'executor')
   const operations: Required<Pick<NewbiManagementOptions, 'identifyConnector' | 'pollConnector' | 'readConnectorThread' | 'sendConnector'>> = {
-    readConnectorThread: (target, preview) => readSavedNewbiThread(newbiReaderDb, deploymentPlugins, target, preview),
+    readConnectorThread: (target, preview) => readSavedNewbiThread(newbiReaderDb, deploymentPlugins, target, preview, shutdown),
     sendConnector: async (id, retry) => {
       const host = await openSavedNewbiExecutor(newbiExecutorDb, deploymentPlugins, id, AbortSignal.timeout(7000))
       if (!host) return { status: 'UNAVAILABLE' }
@@ -21,7 +21,8 @@ export function createNewbiOperations(db: PrismaClient, deploymentPlugins: Newbi
       }
     },
     pollConnector: async (accountId) => {
-      const stop = AbortSignal.timeout(7000)
+      const timeout = AbortSignal.timeout(7000)
+      const stop = shutdown ? AbortSignal.any([shutdown, timeout]) : timeout
       const host = await openSavedNewbiReader(newbiReaderDb, deploymentPlugins, accountId, stop)
       if (!host) return
       try {

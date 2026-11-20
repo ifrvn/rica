@@ -1,3 +1,6 @@
+import type { AssessDiscussion } from '@ricajs/contracts/discussion-selection'
+import type { PluginStage } from '@ricajs/contracts/deployment-plugins'
+
 export type PluginJson = null | boolean | number | string | PluginJson[] | { [key: string]: PluginJson }
 
 export type PluginReadRequest = Readonly<{
@@ -27,7 +30,17 @@ export type PluginReadServices = Readonly<{
 
 export type PluginContext = Readonly<{ databaseUrl?: string }>
 
-export type PluginWorkerContext = PluginContext & Readonly<{ signal: AbortSignal }>
+export type PluginWorkerServices = Readonly<{
+  readDeployment?(): Promise<{ stage?: PluginStage; config: unknown }>
+  discussion?: Readonly<{
+    isEnabled(): Promise<boolean>
+    assess(input: Parameters<AssessDiscussion>[0], profile: Parameters<AssessDiscussion>[1],
+      identity: Pick<Parameters<AssessDiscussion>[2], 'characterId' | 'identityId'>,
+      capture: Parameters<AssessDiscussion>[3]): Promise<unknown>
+  }>
+}>
+
+export type PluginWorkerContext = PluginContext & Readonly<{ signal: AbortSignal; services?: PluginWorkerServices }>
 
 export type PluginWorker = Readonly<{
   start(): void | Promise<void>
@@ -62,4 +75,5 @@ type Capabilities = {
 }
 type DeclaredCapability = { [K in keyof Capabilities]: Pick<Capabilities, K> }[keyof Capabilities]
 
-export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1 } & Partial<Capabilities> & DeclaredCapability>
+export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1; workerServices?: { discussion: true } } &
+  Partial<Capabilities> & DeclaredCapability>

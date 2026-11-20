@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import { identityProfile } from '@ricajs/contracts/management'
-import { discussionSelection, type DiscussionSelectionInput } from '@ricajs/contracts/discussion-selection'
-import { resolveParticipation, type ModelAttribution } from '@ricajs/contracts/model-provider'
+import { discussionSelection, type AssessDiscussion, type DiscussionSelectionInput } from '@ricajs/contracts/discussion-selection'
+import { resolveParticipation } from '@ricajs/contracts/model-provider'
 import { authorize, lockCharacter, ManagementError, type Scope } from '@ricajs/persistence/management'
 import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import { newbiAssessmentResult, newbiAssessmentView, newbiAssessmentThread } from '../management/contracts.js'
@@ -14,8 +14,6 @@ type Result = Exclude<z.infer<typeof newbiAssessmentResult>, { status: 'PENDING'
 type Thread = z.infer<typeof newbiAssessmentThread>
 type DiscussionTarget = { accountId: string; agentId: string; endpoint: string; postId: string }
 type AssessmentScope = Scope | { characterId: string; background: true }
-type AssessDiscussion = (input: DiscussionSelectionInput, profile: string | undefined, attribution: ModelAttribution,
-  capture: (prompt: string, model: string) => Promise<void>) => Promise<unknown>
 
 const unavailable = (reason: Extract<Result, { status: 'UNAVAILABLE' }>['reason'], note: string): Result => ({ status: 'UNAVAILABLE', reason, note })
 const timedOut = unavailable('TIMED_OUT', '评估超时，请重新评估讨论。')

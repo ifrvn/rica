@@ -11,7 +11,9 @@ import { createDeploymentPluginStore } from '../deployment-plugins.js'
 import { observationError, reportPluginResult, startPluginHeartbeat } from '../plugin-observation.js'
 import { createAutoReviewer } from '../auto-review.js'
 import { createDiscussionAssessor } from '../discussion-assessment.js'
-import { connectNewbiSettings, createNewbiOperations, startNewbiBackground } from '@ricajs/plugin-newbi'
+import { ricaPlugin as newbi } from '@ricajs/plugin-newbi/rica'
+import newbiPackage from '@ricajs/plugin-newbi/package.json' with { type: 'json' }
+import { workerDiscussionServices } from './discussion-services.js'
 import { loadPackageWorkerDeployment } from '../package-plugins.js'
 import { PluginHostError } from '@ricajs/plugin-host'
 
@@ -73,35 +75,27 @@ async function main() {
     return
   }
 
-  const newbi = connectNewbiSettings(plugins.readConfiguration)
-  const backgroundEndpoint = async () => await plugins.isEnabled(hostedModelsPluginId) ? newbi.readBackground() : undefined
-  const backgroundDb = createDatabase(config.databaseUrl, 'rica_admin_api')
-  const { pollConnector, readConnectorThread } = createNewbiOperations(usageDb, {
-    async openNewbi(credential, endpoint) {
-      const current = await backgroundEndpoint()
-      if (!current || (endpoint && current !== endpoint)) return
-      const opened = await newbi.openNewbi(credential, current)
-      return opened && { ...opened, async beforeRequest() {
-        await opened.beforeRequest()
-        if (await backgroundEndpoint() !== current) throw new Error('Newbi background configuration changed')
-      } }
-    },
-  })
   const assessDiscussion = createDiscussionAssessor(async (assess, profile) => assess((await getModel(profile)).implementation))
-  const stopBackground = startNewbiBackground(backgroundDb, backgroundEndpoint, { pollConnector, readConnectorThread, assessDiscussion },
-    () => console.error(JSON.stringify({ service: 'worker', event: 'newbi_background_failed' })))
   const stopping = new AbortController()
   const packageStartup = packageDeployment.start(stopping.signal, (diagnostic) => {
     console.info(JSON.stringify({ service: 'worker', event: 'plugin_status', ...diagnostic }))
     if (diagnostic.code === 'STOP_FAILED') process.exitCode = 1
+  }, {
+    builtIn: { id: newbi.id, package: newbiPackage.name, version: newbiPackage.version, factory: newbi.worker,
+      databaseUrl: config.databaseUrl, workerServices: newbi.workerServices },
+    services: (id, requested) => ({
+      readDeployment: id === newbi.id ? () => plugins.readConfiguration(id) : undefined,
+      discussion: requested?.discussion ? workerDiscussionServices(usageDb, id,
+        () => plugins.isEnabled(hostedModelsPluginId), assessDiscussion, stopping.signal) : undefined,
+    }),
   })
   let closing: Promise<void> | undefined
   function shutdown() {
     stopping.abort()
     return closing ??= (async () => {
       observation?.stop()
-      const stopped = await Promise.allSettled([packageStartup.then(host => host.stop(), () => {}), worker.close(), stopBackground()])
-      const released = await Promise.allSettled([selected.stop(), platforms.stop(), usageDb.$disconnect(), backgroundDb.$disconnect()])
+      const stopped = await Promise.allSettled([packageStartup.then(host => host.stop(), () => {}), worker.close()])
+      const released = await Promise.allSettled([selected.stop(), platforms.stop(), usageDb.$disconnect()])
       if ([...stopped, ...released].some(({ status }) => status === 'rejected')) process.exitCode = 1
       process.off('SIGINT', shutdown)
       process.off('SIGTERM', shutdown)

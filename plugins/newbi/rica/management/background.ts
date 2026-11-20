@@ -27,6 +27,7 @@ export async function assessNewbiBackground(db: PrismaClient, readEndpoint: () =
   if (due && !stop?.aborted && await readEndpoint() === endpoint) {
     await operations.pollConnector(due.id).catch(onError)
   }
+  if (stop?.aborted) return
 
   const candidates = await db.$queryRaw<BackgroundDiscussion[]>(backgroundDiscussions(endpoint))
   for (const candidate of candidates) {
@@ -41,12 +42,14 @@ export async function assessNewbiBackground(db: PrismaClient, readEndpoint: () =
   }
 }
 
-export function startNewbiBackground(db: PrismaClient, readEndpoint: () => Promise<string | undefined>, operations: Operations, onError: () => void) {
+export function startNewbiBackground(db: PrismaClient, readEndpoint: () => Promise<string | undefined>, operations: Operations, onError: () => void,
+  shutdown?: AbortSignal) {
   const stop = new AbortController()
+  const signal = shutdown ? AbortSignal.any([shutdown, stop.signal]) : stop.signal
   const running = (async () => {
-    while (!stop.signal.aborted) {
-      await assessNewbiBackground(db, readEndpoint, operations, onError, stop.signal).catch(onError)
-      await sleep(15_000, undefined, { signal: stop.signal }).catch(() => {})
+    while (!signal.aborted) {
+      await assessNewbiBackground(db, readEndpoint, operations, onError, signal).catch(onError)
+      await sleep(15_000, undefined, { signal }).catch(() => {})
     }
   })()
   return async () => {

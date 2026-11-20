@@ -1,5 +1,5 @@
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
-import type { AssessDiscussion } from '@ricajs/plugin-newbi'
+import type { AssessDiscussion } from '@ricajs/contracts/discussion-selection'
 
 export function createDiscussionAssessor(useModel: (assess: (model: ModelProvider) => Promise<unknown>,
   profile?: string) => Promise<unknown>): AssessDiscussion {

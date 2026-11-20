@@ -60,3 +60,22 @@ test('failed or cancelled Worker startup drains the partially started packages',
   await assert.rejects(startup, /START_FAILED: package-worker\/second/)
   assert.deepEqual(await cancelled.events(), ['first:start', 'second:start', 'second:stop:true', 'first:stop:true'])
 })
+
+test('the configured package owns its reserved Worker and replaces the built-in instance', async (t) => {
+  const fixture = await workerDeployment(t, { first: 'ready' })
+  let builtInStarted = 0
+  const options = { builtIn: { id: 'first', package: 'fixture-first', version: '1.0.0', databaseUrl: 'fixture-unused',
+    factory: () => ({ start() { builtInStarted++ }, stop() {} }) } }
+  const signal = new AbortController().signal
+  const defaults = await loadPackageWorkerDeployment(undefined)
+  await (await defaults.start(signal, undefined, options)).stop()
+  assert.equal(builtInStarted, 1)
+
+  const installed = await loadPackageWorkerDeployment(fixture.manifest)
+  await assert.rejects(installed.start(signal, undefined, {
+    builtIn: { ...options.builtIn, package: 'different-owner' },
+  }), /Worker ID is reserved/)
+  await (await installed.start(signal, undefined, options)).stop()
+  assert.equal(builtInStarted, 1)
+  assert.deepEqual(await fixture.events(), ['first:start', 'first:stop:true'])
+})

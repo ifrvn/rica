@@ -19,9 +19,11 @@ import { Redis } from 'ioredis'
 import { createApp } from '../../../apps/api/app.js'
 import { createNewbiManagement, type NewbiManagementOptions } from '../rica/management/routes.js'
 import { assessNewbiBackground } from '../rica/management/background.js'
+import { ricaPlugin } from '../rica/plugin.js'
 import { connectNewbiSettings } from '../rica/deployment/settings.js'
 import { createManagementApp } from '../../../apps/api/management.js'
 import { checkPackageRetention, sweepRuntimeRetention } from '../../../apps/worker/runtime-retention.js'
+import { workerDiscussionServices } from '../../../apps/worker/discussion-services.js'
 import { createDatabase } from '@ricajs/persistence/client'
 import { Prisma } from '@ricajs/persistence/prisma'
 import { loadConfig } from '@ricajs/runtime/config'
@@ -633,6 +635,14 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
   let enabled = false
   let polls = 0
   let calls = 0
+  const runtime = createDatabase(runtimeUrl())
+  const discussionService = workerDiscussionServices(runtime, 'newbi', async () => enabled, async (_input, _profile, attribution, capture) => {
+    assert.deepEqual(attribution, { characterId, identityId, platform: 'newbi' })
+    calls++
+    await capture('Fixture background system prompt', 'fixture/glossary')
+    if (calls === 2) enabled = false
+    return { status: 'SUGGEST_REPLY', commentId: comment.id, reason: 'DIRECT_QUESTION', note: '对方询问活动时间。' }
+  }, new AbortController().signal)
   const operations: Parameters<typeof assessNewbiBackground>[2] = {
     async pollConnector(id) {
       assert.equal(id, accountId)
@@ -646,12 +656,7 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
       assert.ok(postId === discussion || postId === secondDiscussion)
       return { post: { title: '活动安排', content: '讨论活动时间', isLocked: false }, comments: [comment], nextCursor: null }
     },
-    async assessDiscussion(_input, _profile, _attribution, capture) {
-      calls++
-      await capture('Fixture background system prompt', 'fixture/glossary')
-      if (calls === 2) enabled = false
-      return { status: 'SUGGEST_REPLY', commentId: comment.id, reason: 'DIRECT_QUESTION', note: '对方询问活动时间。' }
-    },
+    assessDiscussion: discussionService.assess,
   }
   const step = () => assessNewbiBackground(management, async () => enabled ? endpoint : undefined, operations, () => assert.fail('Unexpected poll error'))
   await owner.$executeRaw`
@@ -661,6 +666,8 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
     await step()
     assert.equal(polls, 0)
     enabled = true
+    assert.equal(await discussionService.assess({ title: '', post: '', participation: 'balanced', comments: [] },
+      undefined, { characterId: b, identityId }, async () => assert.fail('Foreign binding must not reach the model')), undefined)
     await step()
     assert.equal(polls, 1)
     assert.equal(calls, 0)
@@ -691,8 +698,52 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
       SELECT count(*)::integer AS count FROM rica_plugin_newbi.replies WHERE character_id = ${characterId}::uuid`
     assert.equal(count, 0)
   } finally {
+    await runtime.$disconnect()
     await owner.$executeRaw`DELETE FROM rica_plugin_newbi.credentials WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
   }
+})
+
+test('the Newbi Worker drains a leased event poll without advancing its cursor on shutdown', { timeout: 10_000 }, async (t) => {
+  const agentId = randomUUID()
+  const credential = 'nbi_agent_' + 'w'.repeat(43)
+  const entered = Promise.withResolvers<void>()
+  const server = createServer((req, res) => {
+    const reply = (data: unknown) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ code: 0, data }))
+    const path = new URL(req.url ?? '/', 'http://localhost').pathname
+    if (path.endsWith('/status')) return reply({ state: 'READ_ONLY', protocolVersion: 1 })
+    if (req.headers.authorization !== 'Bearer ' + credential) return res.writeHead(401).end()
+    if (path.endsWith('/me')) return reply({ id: agentId, username: 'worker-fixture', accessStatus: 'ACTIVE' })
+    if (path.endsWith('/rules')) return reply({ idempotencyDays: 7, pollIntervalSeconds: 30 })
+    if (path.endsWith('/quota')) return reply({ comments: [{ remaining: 0 }] })
+    if (!path.endsWith('/events')) return res.writeHead(404).end()
+    entered.resolve()
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const endpoint = 'http://localhost:' + (server.address() as { port: number }).port + '/agent-api/v1'
+  const worker = ricaPlugin.worker(null, { databaseUrl: runtimeUrl(), signal: new AbortController().signal,
+    services: { readDeployment: async () => ({ stage: 'ENABLED', config: { endpoint, backgroundAssessments: true } }),
+      discussion: { isEnabled: async () => true, assess: async () => assert.fail('No event page reached the Worker') } } })
+  t.after(async () => {
+    try { await worker.stop() }
+    finally {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      await owner.$executeRaw`DELETE FROM rica_plugin_newbi.credentials WHERE endpoint = ${endpoint} AND agent_id = ${agentId}::uuid`
+    }
+  })
+  const identityId = await activeIdentity({})
+  const { id: accountId } = await owner.platformAccount.create({ data: { characterId: a, identityId, status: 'ACTIVE',
+    platform: 'newbi', instanceKey: endpoint, remoteAccountId: agentId } })
+  await owner.$executeRaw`
+    INSERT INTO rica_plugin_newbi.credentials (endpoint, agent_id, credential) VALUES (${endpoint}, ${agentId}::uuid, ${credential})`
+  await worker.start()
+  await Promise.race([entered.promise, sleep(5_000, undefined, { ref: false }).then(() => assert.fail('Worker did not claim an event page'))])
+  await worker.stop()
+  const [checkpoint] = await owner.$queryRaw<{ cursor: string | null; leaseUntil: Date | null; succeededAt: Date | null }[]>`
+    SELECT cursor, lease_until AS "leaseUntil", last_succeeded_at AS "succeededAt"
+    FROM rica_plugin_newbi.event_checkpoints WHERE account_id = ${accountId}::uuid`
+  assert.deepEqual(checkpoint, { cursor: null, leaseUntil: null, succeededAt: null })
 })
 
 test('Newbi auto-approval requires a confirmed prior reply in the same discussion and never sends on creation', async () => {

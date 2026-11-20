@@ -16,7 +16,7 @@ Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Wo
 
 `worker(config, context)` 同步返回 `start()` 和 `stop()`，实例在 `start()` 内获取资源、确认就绪并启动后台任务。`context.signal` 用于中止初始化和停止领取新任务。`stop()` 等待在途任务结束并释放已获取的资源，也要能清理只初始化了一部分的实例。宿主等所有插件启动成功后报告 Worker 就绪。单个插件启动失败时，宿主触发取消，并按相反顺序关闭已经开始初始化的插件。
 
-插件的 Worker 随每个 Rica Worker 进程启动。需要单独领取的任务由插件管理租约、去重和重试。第一版提供生命周期入口，统一的事件订阅和任务协议在后续阶段实现。
+插件的 Worker 随每个 Rica Worker 进程启动。需要单独领取的任务由插件管理租约、去重和重试。需要讨论评估时声明 `workerServices: { discussion: true }`，通过 `context.services?.discussion` 调用宿主模型。宿主用已注册的插件 ID 作为平台归属，只接受该平台下的有效角色和身份绑定。模型请求前再次检查绑定及部署开关，宿主负责模型选择和用量归属。统一事件订阅和任务协议在后续阶段实现。
 
 ### Prisma 插件的部署配置
 
@@ -88,7 +88,9 @@ Newbi 的统一活动已有独立包入口。部署者可在安装 `@ricajs/plug
 }
 ```
 
-Newbi 的活动视图和清理函数与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。迁移登录需要能在该 schema 记录迁移，也需要 `rica_plugin_newbi` 的 `USAGE` 和 `CREATE`，以及 `public` 的 `USAGE`。部署者可以在宿主首次创建业务 schema 后授予这些权限。活动查询沿用宿主的 `rica_admin_api`，清理函数以 `rica_runtime` 调用现有的受限清理函数。未登记 Newbi 包时继续使用内置清理。清单里的运行时 URL 留给需要独立连接的能力。管理命令、轮询与发送仍按内置方式装配。
+Newbi 的活动视图、清理函数和 Worker 与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。迁移登录需要能在该 schema 记录迁移，也需要 `rica_plugin_newbi` 的 `USAGE` 和 `CREATE`，以及 `public` 的 `USAGE`。部署者可以在宿主首次创建业务 schema 后授予这些权限。活动查询沿用宿主的 `rica_admin_api`，清理函数以 `rica_runtime` 调用现有的受限清理函数。
+
+清单里的 Newbi Worker 使用 `RICA_PLUGIN_NEWBI_RUNTIME_URL`，连接宿主数据库并指定 `?schema=rica_plugin_newbi`。运行时登录需要现有的 `rica_runtime` 角色权限，并可以切换到 `rica_admin_api` 和 `rica_newbi_poller`。Worker 启动时检查数据库和权限，后台轮询和评估继续读取控制台的接入点、后台评估开关与外部模型状态。未登记 Newbi 包时使用内置活动、清理和同一个 Worker 工厂。管理命令和回复发送仍由宿主 API 装配。
 
 ## 部署和生命周期
 

@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { startPluginHost, type PluginDefinition, type PluginHostError } from '@ricajs/plugin-host'
-import type { PluginAccounts, PluginManagement, RicaPlugin } from '@ricajs/plugin-host/sdk'
+import type { PluginAccounts, PluginManagement, PluginWorkerServices, RicaPlugin } from '@ricajs/plugin-host/sdk'
 
 const pluginId = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(50)
 const packageName = z.string().regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/).max(214)
@@ -23,6 +23,7 @@ const packageIdentity = z.object({ name: packageName, version })
 const identifier = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/)
 const activityView = z.strictObject({ view: identifier })
 const retentionOperation = z.strictObject({ sweep: identifier })
+const workerServicesContract = z.strictObject({ discussion: z.literal(true) })
 const accountOperations = z.strictObject({
   register: identifier, profiles: identifier.optional(), remove: identifier.optional(), verifyResume: identifier.optional(),
   prepareRegistration: z.custom<NonNullable<PluginAccounts['prepareRegistration']>>(value => typeof value === 'function').optional(),
@@ -103,7 +104,12 @@ async function readPackageModules(manifestPath: string | undefined) {
     if (!retention.success || (retention.data && !entry.database)) {
       throw new Error('Invalid Rica plugin retention operation: ' + entry.id)
     }
-    modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data, retention: retention.data })
+    const workerServices = workerServicesContract.optional().safeParse(ricaPlugin.workerServices)
+    if (!workerServices.success || (workerServices.data && !ricaPlugin.worker)) {
+      throw new Error('Invalid Rica plugin Worker services: ' + entry.id)
+    }
+    modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data, retention: retention.data,
+      workerServices: workerServices.data })
   }
   return modules
 }
@@ -143,6 +149,18 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
 }
 
 type PackageModules = Awaited<ReturnType<typeof readPackageModules>>
+type BuiltInWorker = Readonly<{
+  id: string
+  package: string
+  version: string
+  factory: NonNullable<RicaPlugin['worker']>
+  databaseUrl: string
+  workerServices?: RicaPlugin['workerServices']
+}>
+type WorkerOptions = Readonly<{
+  builtIn?: BuiltInWorker
+  services?(id: string, requested: RicaPlugin['workerServices']): PluginWorkerServices
+}>
 
 function retentionSources(modules: PackageModules): PackageRetention[] {
   return modules.flatMap(({ entry, retention }) => retention ?
@@ -156,29 +174,37 @@ export async function loadPackageRetention(manifestPath: string | undefined) {
 export async function loadPackageWorkerDeployment(manifestPath: string | undefined) {
   const modules = await readPackageModules(manifestPath)
   return { retention: retentionSources(modules),
-    start: (shutdown: AbortSignal, report?: (diagnostic: PluginHostError['diagnostic']) => void) =>
-      startPackageWorkers(modules, shutdown, report) }
+    start: (shutdown: AbortSignal, report?: (diagnostic: PluginHostError['diagnostic']) => void, options?: WorkerOptions) =>
+      startPackageWorkers(modules, shutdown, report, options) }
 }
 
 async function startPackageWorkers(modules: PackageModules, shutdown: AbortSignal,
-  report?: (diagnostic: PluginHostError['diagnostic']) => void) {
+  report?: (diagnostic: PluginHostError['diagnostic']) => void, options?: WorkerOptions) {
   const controller = new AbortController()
   const signal = AbortSignal.any([shutdown, controller.signal])
   const definitions: PluginDefinition<undefined>[] = []
-  for (const { entry, ricaPlugin } of modules) {
-    const createWorker = ricaPlugin.worker
-    if (!createWorker) continue
-    const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
+  const builtIn = options?.builtIn
+  const workers = modules.flatMap(({ entry, ricaPlugin, workerServices }) => ricaPlugin.worker ? [{
+    id: entry.id, package: entry.package, version: entry.version, config: entry.config, factory: ricaPlugin.worker, workerServices,
+    databaseUrl: entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv),
+  }] : [])
+  const replacement = builtIn && workers.find(({ id }) => id === builtIn.id)
+  if (replacement && replacement.package !== builtIn?.package) {
+    throw new Error('Rica plugin Worker ID is reserved: ' + replacement.id)
+  }
+  if (builtIn && !replacement) workers.unshift({ ...builtIn, config: null, workerServices: builtIn.workerServices })
+
+  for (const { id, version, config, factory, databaseUrl, workerServices } of workers) {
     definitions.push({
-      id: entry.id, version: entry.version, contractVersion: ricaPlugin.sdkVersion,
+      id, version, contractVersion: 1,
       create() {
         signal.throwIfAborted()
-        const worker = createWorker(entry.config, { databaseUrl, signal })
+        const worker = factory(config, { databaseUrl, signal, services: options?.services?.(id, workerServices) })
         return {
           implementation: undefined,
           async start() {
             if (typeof worker?.start !== 'function' || typeof worker.stop !== 'function') {
-              throw new Error('Invalid Rica plugin Worker capability: ' + entry.id)
+              throw new Error('Invalid Rica plugin Worker capability: ' + id)
             }
             await worker.start()
             signal.throwIfAborted()

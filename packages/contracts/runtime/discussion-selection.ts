@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import type { Participation } from './model-provider.js'
+import type { ModelAttribution, Participation } from './model-provider.js'
 import type { GlossaryReference } from './glossary.js'
 
 const note = z.string().trim().min(1).max(200).regex(/^[^\p{Cc}]+$/u)
@@ -16,3 +16,6 @@ export type DiscussionSelectionInput = Readonly<{
   comments: readonly { id: string; replyToCommentId: string | null; speaker: number; text: string; own: boolean; eligible: boolean;
     signal: 'MENTION' | 'REPLY' | null }[]
 }>
+
+export type AssessDiscussion = (input: DiscussionSelectionInput, profile: string | undefined, attribution: ModelAttribution,
+  capture: (prompt: string, model: string) => Promise<void>) => Promise<unknown>

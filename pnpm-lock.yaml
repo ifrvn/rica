@@ -313,7 +313,11 @@ importers:
         specifier: workspace:*
         version: link:../runtime
 
-  packages/plugin-host: {}
+  packages/plugin-host:
+    dependencies:
+      '@ricajs/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/runtime:
     dependencies:
