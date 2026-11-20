@@ -522,10 +522,12 @@ test('Newbi learns corroborated author slang and isolates it across authors and 
   assert.deepEqual((await assess(firstAccount.id, 21, '博主甲')).glossaryUsed, [])
   assert.deepEqual((await assess(secondAccount.id, 20, '博主甲')).glossaryUsed, [])
   assert.deepEqual(audiences, [false, true, false, false, false])
-  await owner.newbiDiscussionAssessment.update({ where: { id: learned.id }, data: { createdAt: new Date(0) } })
+  await owner.$executeRaw`UPDATE rica_plugin_newbi.discussion_assessments SET created_at = ${new Date(0)} WHERE id = ${learned.id}::uuid`
   assert.deepEqual((await assess(firstAccount.id, 20, '博主甲')).glossaryUsed, [])
   await sweepRuntimeRetention(owner)
-  assert.equal(await owner.newbiAuthorTerm.count({ where: { accountId: firstAccount.id } }), 0)
+  const [{ count }] = await owner.$queryRaw<[{ count: number }]>`
+    SELECT count(*)::integer AS count FROM rica_plugin_newbi.author_terms WHERE account_id = ${firstAccount.id}::uuid`
+  assert.equal(count, 0)
 })
 
 test('Newbi section slang requires separate post authors and keeps author meanings and sections isolated', async () => {
@@ -582,9 +584,9 @@ test('Newbi section slang requires separate post authors and keeps author meanin
   assert.deepEqual((await assess(99, 1, undefined, second.id)).glossaryUsed, [])
   const conflicting = await assess(24, 1, '提交签到留言')
   assert.deepEqual((await assess(99, 1)).glossaryUsed, [])
-  await owner.newbiDiscussionAssessment.update({ where: { id: conflicting.id }, data: { createdAt: new Date(0) } })
+  await owner.$executeRaw`UPDATE rica_plugin_newbi.discussion_assessments SET created_at = ${new Date(0)} WHERE id = ${conflicting.id}::uuid`
   assert.equal((await assess(99, 1)).glossaryUsed[0].meaning, meaning)
-  await owner.newbiDiscussionAssessment.update({ where: { id: firstSample.id }, data: { createdAt: new Date(0) } })
+  await owner.$executeRaw`UPDATE rica_plugin_newbi.discussion_assessments SET created_at = ${new Date(0)} WHERE id = ${firstSample.id}::uuid`
   assert.deepEqual((await assess(99, 1)).glossaryUsed, [])
 })
 
@@ -646,7 +648,10 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
     await Promise.all([step(), step()])
     await step()
     assert.equal(calls, 1)
-    const row = await owner.newbiDiscussionAssessment.findFirstOrThrow({ where: { accountId, postId: discussion } })
+    const [row] = await owner.$queryRaw<{ id: string; triggerSeq: string }[]>`
+      SELECT id, trigger_seq AS "triggerSeq" FROM rica_plugin_newbi.discussion_assessments
+      WHERE account_id = ${accountId}::uuid AND post_id = ${discussion}::uuid`
+    assert.ok(row)
     assert.equal(row.triggerSeq, '10')
     const detail = await request('GET', characterPath(characterId) + '/newbi/assessments/' + row.id)
     assert.equal(detail.body.origin, 'BACKGROUND')
@@ -656,7 +661,10 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
 
     await seed('12', secondDiscussion, ready)
     await step()
-    const blocked = await owner.newbiDiscussionAssessment.findFirstOrThrow({ where: { accountId, postId: secondDiscussion } })
+    const [blocked] = await owner.$queryRaw<{ id: string }[]>`
+      SELECT id FROM rica_plugin_newbi.discussion_assessments
+      WHERE account_id = ${accountId}::uuid AND post_id = ${secondDiscussion}::uuid`
+    assert.ok(blocked)
     assert.equal((await request('GET', characterPath(characterId) + '/newbi/assessments/' + blocked.id)).body.result.reason, 'BACKGROUND_DISABLED')
     assert.equal(await owner.newbiReply.count({ where: { characterId } }), 0)
   } finally {

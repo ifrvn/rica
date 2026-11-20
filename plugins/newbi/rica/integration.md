@@ -6,6 +6,8 @@ Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在
 
 轮询写入 `rica_plugin_newbi.events` 和 `rica_plugin_newbi.event_checkpoints`。两个表随宿主发布迁移，保留账号外键、事件去重键和轮询进度。读取组件通过受限函数领取和提交事件页，管理端读取事件摘要及检查点状态，游标和租约由轮询函数使用。
 
+讨论评估和词库分别写入 `rica_plugin_newbi.discussion_assessments`、`rica_plugin_newbi.author_terms` 和 `rica_plugin_newbi.section_glossary_samples`。评估结果和本轮词库证据在同一事务中提交。保留期任务通过受限函数清理超过 30 天的评估，来源评估删除时级联清理词库证据。
+
 ## Newbi 服务端装配 API
 
 下表描述 Newbi 包的具体调用接口。开发其他平台时，用自己的连接配置和协议实现相应能力。通用宿主接入通过 [ManagementPlugin](../../../docs/plugin-development/03-management.md#managementplugin) 完成。

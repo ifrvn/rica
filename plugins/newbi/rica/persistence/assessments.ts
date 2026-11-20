@@ -4,10 +4,9 @@ import { identityProfile } from '@ricajs/contracts/management'
 import { discussionSelection, type DiscussionSelectionInput } from '@ricajs/contracts/discussion-selection'
 import { resolveParticipation, type ModelAttribution } from '@ricajs/contracts/model-provider'
 import { authorize, lockCharacter, ManagementError, type Scope } from '@ricajs/persistence/management'
-import { Prisma, type NewbiDiscussionAssessment, type PrismaClient } from '@ricajs/persistence/prisma'
+import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import { newbiAssessmentResult, newbiAssessmentView, newbiAssessmentThread } from '../management/contracts.js'
-import { authorTermSelect, prepareDiscussionGlossary } from './discussion-glossary.js'
-import { sectionSampleSelect } from './section-glossary.js'
+import { prepareDiscussionGlossary } from './discussion-glossary.js'
 
 const leaseMs = 45_000
 const retentionMs = 30 * 86_400_000
@@ -23,16 +22,44 @@ const timedOut = unavailable('TIMED_OUT', '评估超时，请重新评估讨论�
 const contextChanged = unavailable('CONTEXT_CHANGED', '评估期间账号绑定或身份配置发生变化。')
 const backgroundDisabled = unavailable('BACKGROUND_DISABLED', '评估期间后台开关、外部模型或 Newbi 接入点发生变化。')
 
-const glossaryHistory = {
-  learnedTerms: { select: authorTermSelect, orderBy: { term: 'asc' as const } },
-  sectionGlossarySamples: { select: sectionSampleSelect, orderBy: { term: 'asc' as const } },
+type AssessmentContext = {
+  id: string
+  accountId: string
+  characterId: string
+  identityId: string
+  postId: string
+  authEpoch: number
+  bindingVersion: number
+  participation: string
+  createdAt: Date
+}
+type AssessmentHistory = Pick<AssessmentContext, 'id' | 'accountId' | 'postId' | 'participation' | 'createdAt'> & {
+  identity: string
+  triggerSeq: string | null
+  model: string | null
+  systemPrompt: string | null
+  finishedAt: Date | null
+  result: unknown
+  glossaryUsed: unknown
+  glossaryLearned: unknown
+  sectionGlossarySamples: unknown
 }
 
-function assessmentView(row: Prisma.NewbiDiscussionAssessmentGetPayload<{ include: typeof glossaryHistory }>, now = Date.now()) {
+const assessmentHistory = Prisma.sql`
+  a.id, a.account_id AS "accountId", a.post_id AS "postId", a.identity, a.participation, a.trigger_seq AS "triggerSeq",
+  a.created_at AS "createdAt", a.finished_at AS "finishedAt", a.model, a.system_prompt AS "systemPrompt",
+  a.result, a.glossary_used AS "glossaryUsed",
+  coalesce((SELECT jsonb_agg(jsonb_build_object('id', g.id, 'term', g.term, 'meaning', g.meaning, 'tone', g.tone,
+    'sourceComments', g.source_comments, 'version', 1) ORDER BY g.term)
+    FROM rica_plugin_newbi.author_terms g WHERE (g.account_id, g.source_assessment_id) = (a.account_id, a.id)), '[]') AS "glossaryLearned",
+  coalesce((SELECT jsonb_agg(jsonb_build_object('id', g.id, 'term', g.term, 'meaning', g.meaning, 'tone', g.tone,
+    'sourceComments', g.source_comments, 'sectionId', g.section_id, 'version', 1) ORDER BY g.term)
+    FROM rica_plugin_newbi.section_glossary_samples g WHERE (g.account_id, g.source_assessment_id) = (a.account_id, a.id)), '[]') AS "sectionGlossarySamples"`
+
+function assessmentView(row: AssessmentHistory, now = Date.now()) {
   return newbiAssessmentView.parse({ ...row, createdAt: row.createdAt.toISOString(), finishedAt: row.finishedAt?.toISOString() ?? null,
     origin: row.triggerSeq === null ? 'ADMIN' : 'BACKGROUND',
-    glossaryUsed: row.glossaryUsed ?? [], glossaryLearned: row.learnedTerms.map((term) => ({ ...term, version: 1 })),
-    sectionGlossarySamples: row.sectionGlossarySamples.map((term) => ({ ...term, version: 1 })),
+    glossaryUsed: row.glossaryUsed ?? [],
     result: row.result ?? (now - row.createdAt.getTime() >= leaseMs ? timedOut : { status: 'PENDING' }) })
 }
 
@@ -51,7 +78,7 @@ function active(account: Awaited<ReturnType<typeof boundAccount>>) {
   return account.status === 'ACTIVE' && account.identity.status === 'ACTIVE' && account.identity.character.status === 'ACTIVE'
 }
 
-function matches(row: NewbiDiscussionAssessment, account: Awaited<ReturnType<typeof boundAccount>>) {
+function matches(row: AssessmentContext, account: Awaited<ReturnType<typeof boundAccount>>) {
   return active(account) && row.identityId === account.identityId && row.bindingVersion === account.bindingVersion
     && row.authEpoch === account.identity.character.authEpoch
 }
@@ -76,17 +103,25 @@ export async function claimNewbiAssessment(tx: Prisma.TransactionClient, scope: 
 async function createAssessment(tx: Prisma.TransactionClient, characterId: string,
   account: Awaited<ReturnType<typeof boundAccount>>, postId: string, triggerSeq?: string) {
   const accountId = account.id
-  const binding = { characterId, accountId, postId, identityId: account.identityId,
-    bindingVersion: account.bindingVersion, authEpoch: account.identity.character.authEpoch }
+  const { identityId, bindingVersion } = account
+  const { authEpoch } = account.identity.character
   // The management command holds the character lock while reserving an attempt.
-  const pending = await tx.newbiDiscussionAssessment.findFirst({ where: { ...binding, result: { equals: Prisma.DbNull },
-    createdAt: { gt: new Date(Date.now() - leaseMs) } }, select: { id: true } })
+  const [pending] = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM rica_plugin_newbi.discussion_assessments
+    WHERE character_id = ${characterId}::uuid AND account_id = ${accountId}::uuid AND post_id = ${postId}::uuid
+      AND identity_id = ${identityId}::uuid AND binding_version = ${bindingVersion} AND auth_epoch = ${authEpoch}
+      AND result IS NULL AND created_at > ${new Date(Date.now() - leaseMs)}
+    LIMIT 1`
   if (pending) return { id: pending.id, status: 'PENDING' }
   const profile = identityProfile.pick({ displayName: true, participation: true, writingPrompt: true }).strip()
     .parse(account.identity.activeProfile?.roleProfile ?? {})
-  const row = await tx.newbiDiscussionAssessment.create({ data: { ...binding, triggerSeq,
-    identity: profile.displayName ?? account.identity.slug,
-    participation: resolveParticipation(profile.participation, profile.writingPrompt) }, select: { id: true } })
+  const [row] = await tx.$queryRaw<[{ id: string }]>`
+    INSERT INTO rica_plugin_newbi.discussion_assessments
+      (character_id, account_id, post_id, identity_id, binding_version, auth_epoch, trigger_seq, identity, participation)
+    VALUES (${characterId}::uuid, ${accountId}::uuid, ${postId}::uuid, ${identityId}::uuid, ${bindingVersion},
+      ${authEpoch}, ${triggerSeq ?? null}, ${profile.displayName ?? account.identity.slug},
+      ${resolveParticipation(profile.participation, profile.writingPrompt)})
+    RETURNING id`
   return { id: row.id, status: 'STARTED' }
 }
 
@@ -113,7 +148,7 @@ export function backgroundDiscussions(endpoint: string, target?: Pick<Background
     FROM latest e
     WHERE e.received_at <= statement_timestamp() - interval '30 seconds'
       AND NOT EXISTS (
-        SELECT 1 FROM public.newbi_discussion_assessments r
+        SELECT 1 FROM rica_plugin_newbi.discussion_assessments r
         WHERE r.account_id = e.account_id AND r.post_id = e.post_id
           AND (r.created_at >= e.received_at OR r.created_at > statement_timestamp() - interval '5 minutes')
       )
@@ -141,11 +176,11 @@ export async function listNewbiAssessments(db: PrismaClient, scope: Scope, accou
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
     await boundAccount(tx, scope, accountId)
-    const rows = await tx.newbiDiscussionAssessment.findMany({
-      where: { characterId: scope.characterId, accountId, postId, createdAt: { gt: new Date(Date.now() - retentionMs) } },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 10,
-      include: glossaryHistory,
-    })
+    const rows = await tx.$queryRaw<AssessmentHistory[]>`
+      SELECT ${assessmentHistory} FROM rica_plugin_newbi.discussion_assessments a
+      WHERE a.character_id = ${scope.characterId}::uuid AND a.account_id = ${accountId}::uuid
+        AND a.post_id = ${postId}::uuid AND a.created_at > ${new Date(Date.now() - retentionMs)}
+      ORDER BY a.created_at DESC, a.id DESC LIMIT 10`
     return { items: rows.map((row) => assessmentView(row)) }
   }, { isolationLevel: 'RepeatableRead' })
 }
@@ -153,10 +188,10 @@ export async function listNewbiAssessments(db: PrismaClient, scope: Scope, accou
 export async function readNewbiAssessment(db: PrismaClient, scope: Scope, id: string) {
   return db.$transaction(async (tx) => {
     await authorize(tx, scope)
-    const row = await tx.newbiDiscussionAssessment.findFirst({
-      where: { id, characterId: scope.characterId, createdAt: { gt: new Date(Date.now() - retentionMs) } },
-      include: glossaryHistory,
-    })
+    const [row] = await tx.$queryRaw<AssessmentHistory[]>`
+      SELECT ${assessmentHistory} FROM rica_plugin_newbi.discussion_assessments a
+      WHERE a.id = ${id}::uuid AND a.character_id = ${scope.characterId}::uuid
+        AND a.created_at > ${new Date(Date.now() - retentionMs)}`
     if (!row) throw new ManagementError(404, 'NOT_FOUND', 'Newbi discussion assessment not found')
     return assessmentView(row)
   }, { isolationLevel: 'RepeatableRead' })
@@ -168,7 +203,7 @@ export function newbiAssessmentActivity(characterId: string) {
       coalesce(nullif(c.username, ''), a.remote_account_id) AS account, r.account_id,
       coalesce(r.result->>'status', CASE WHEN r.created_at > ${new Date(Date.now() - leaseMs)}::timestamptz
         THEN 'PENDING' ELSE 'UNAVAILABLE' END) AS state, r.created_at
-    FROM public.newbi_discussion_assessments r
+    FROM rica_plugin_newbi.discussion_assessments r
     JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
     LEFT JOIN rica_plugin_newbi.account_profiles c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
     WHERE r.character_id = ${characterId}::uuid AND r.created_at > ${new Date(Date.now() - retentionMs)}::timestamptz
@@ -179,10 +214,14 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
   readThread: ((target: DiscussionTarget) => Promise<Thread | undefined>) | undefined,
   assess: AssessDiscussion | undefined, requireConnector: (endpoint: string) => Promise<void>,
 ) {
-  const where = { id, characterId: scope.characterId }
+  const assessmentScope = Prisma.sql`id = ${id}::uuid AND character_id = ${scope.characterId}::uuid`
   const initial = await db.$transaction(async (tx) => {
     if ('actor' in scope) await authorize(tx, scope)
-    const row = await tx.newbiDiscussionAssessment.findUniqueOrThrow({ where })
+    const [row] = await tx.$queryRaw<AssessmentContext[]>`
+      SELECT id, account_id AS "accountId", character_id AS "characterId", identity_id AS "identityId", post_id AS "postId",
+        auth_epoch AS "authEpoch", binding_version AS "bindingVersion", participation, created_at AS "createdAt"
+      FROM rica_plugin_newbi.discussion_assessments WHERE ${assessmentScope}`
+    if (!row) throw new ManagementError(404, 'NOT_FOUND', 'Newbi discussion assessment not found')
     const account = await boundAccount(tx, scope, row.accountId)
     const received = 'background' in scope ? Prisma.sql`AND received_at <= ${row.createdAt}` : Prisma.empty
     const [events, receipts] = await Promise.all([
@@ -249,10 +288,10 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
         await db.$transaction(async (tx) => {
           await lockAssessmentScope(tx, scope)
           if (!matches(row, await boundAccount(tx, scope, row.accountId))) throw new Error('Assessment binding changed')
-          const { count } = await tx.newbiDiscussionAssessment.updateMany({
-            where: { ...where, result: { equals: Prisma.DbNull }, systemPrompt: null,
-              createdAt: { gt: new Date(Date.now() - leaseMs) } }, data: { systemPrompt, model, glossaryUsed: glossary?.used ?? [] },
-          })
+          const count = await tx.$executeRaw`
+            UPDATE rica_plugin_newbi.discussion_assessments
+            SET system_prompt = ${systemPrompt}, model = ${model}, glossary_used = ${JSON.stringify(glossary?.used ?? [])}::jsonb
+            WHERE ${assessmentScope} AND result IS NULL AND system_prompt IS NULL AND created_at > ${new Date(Date.now() - leaseMs)}`
           if (!count) throw new Error('Assessment no longer accepts a model call')
         })
       }).catch(() => undefined)
@@ -263,7 +302,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     if (!decision || (decision.status === 'SUGGEST_REPLY' && !comments.some(({ id, eligible }) => id === decision.commentId && eligible))) {
       return unavailable('INVALID_SELECTION', '评估结果没有指向本轮可回应的评论。')
     }
-    if (glossary?.canLearn) saveLearning = (tx) => glossary.save(tx, row, glossaryCandidates)
+    if (glossary?.canLearn) saveLearning = (tx) => glossary.save(tx, row.id, glossaryCandidates)
     if (decision.status === 'SUGGEST_REPLY') {
       const comment = byId.get(decision.commentId)!
       return { ...decision, target: { author: comment.author.username.slice(0, 64), excerpt: comment.content.slice(0, 220) } }
@@ -279,8 +318,10 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     const valid = Date.now() - row.createdAt.getTime() < leaseMs
     const unchanged = matches(row, current)
     const completed = !valid ? timedOut : !enabled ? backgroundDisabled : unchanged ? result : contextChanged
-    const { count } = await tx.newbiDiscussionAssessment.updateMany({ where: { ...where, result: { equals: Prisma.DbNull } },
-      data: { result: completed, finishedAt: new Date() } })
+    const count = await tx.$executeRaw`
+      UPDATE rica_plugin_newbi.discussion_assessments
+      SET result = ${JSON.stringify(completed)}::jsonb, finished_at = ${new Date()}
+      WHERE ${assessmentScope} AND result IS NULL`
     if (count && valid && enabled && unchanged) await saveLearning?.(tx)
   })
 }
