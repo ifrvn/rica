@@ -313,10 +313,33 @@ model PlatformAccount {
   planParticipants SimulationPlanParticipant[]
   commitmentCollaborations CommitmentCollaborator[]
   pluginActivityEvents PluginActivityEvent[]
+  remotePluginTasks RemotePluginTask[]
 
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
   @@map("platform_accounts")
+}
+
+model RemotePluginTask {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pluginId       String    @map("plugin_id") @db.VarChar(50)
+  taskType       String    @map("task_type") @db.VarChar(50)
+  characterId    String    @map("character_id") @db.Uuid
+  identityId     String    @map("identity_id") @db.Uuid
+  accountId      String    @map("account_id") @db.Uuid
+  bindingVersion Int       @map("binding_version")
+  authEpoch      Int       @map("auth_epoch")
+  data           Json
+  createdAt      DateTime  @default(dbgenerated("statement_timestamp()")) @map("created_at") @db.Timestamptz
+  expiresAt      DateTime  @default(dbgenerated("(statement_timestamp() + '00:15:00'::interval)")) @map("expires_at") @db.Timestamptz
+  lease          String?   @db.Uuid
+  leaseUntil     DateTime? @map("lease_until") @db.Timestamptz
+  status         String    @default("PENDING")
+  result         Json?
+  account        PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Cascade, onUpdate: NoAction, map: "remote_plugin_tasks_account_fkey")
+
+  @@index([pluginId, accountId, createdAt, id], map: "remote_plugin_tasks_queue_idx")
+  @@map("remote_plugin_tasks")
 }
 
 model PluginActivityEvent {

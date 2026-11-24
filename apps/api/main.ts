@@ -23,6 +23,7 @@ import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import { loadPackageManagement } from '../package-plugins.js'
 import { packageManagementPlugins, startManagedApi } from './package-management.js'
 import { createRemotePluginEvents } from './remote-plugin-events.js'
+import { createRemotePluginTasks } from './remote-plugin-tasks.js'
 import { loadRemotePluginServices } from './remote-plugin-services.js'
 
 const config = loadConfig()
@@ -93,6 +94,7 @@ const management = managementConfig && managementDb && auth && platforms && newb
   deploymentPlugins,
   activityViews: packageManagement.activityViews,
   consolePlugins: packageManagement.consolePlugins,
+  remoteServices,
   plugins: [
     newbiApi.plugin,
     createHostedModelManagement({ modelSettings,
@@ -111,7 +113,8 @@ const app = createApp({
     managementDb && managementDb.$queryRaw`SELECT 1 FROM public.management_memberships,public.admin_users LIMIT 0`,
   ]),
   redis: () => redis.ping(),
-}, management, auth?.app, remoteServices && createRemotePluginEvents(db, remoteServices))
+}, management, auth?.app, remoteServices && createRemotePluginEvents(db, remoteServices),
+remoteServices && createRemotePluginTasks(db, remoteServices))
 const server = serve({ fetch: app.fetch, port: config.port, hostname: '127.0.0.1' })
 const observation = platforms && startPluginHeartbeat(config.redisUrl, 'api', platforms.plugins, platforms.source)
 console.info(JSON.stringify({ service: 'api', event: 'started', port: config.port }))

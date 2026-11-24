@@ -198,6 +198,14 @@ console: {
 
 订阅者以自己的服务 ID 调用 `GET /v1/plugin-events/{pluginId}/accounts/{accountId}?bindingVersion=1&after=0&limit=25`。返回 `{ items, nextOffset }`。事件含来源 `pluginId` 和字符串 `offset`。订阅者按账号和绑定版本保存游标，处理成功后以 `nextOffset` 继续读取。空页保留原游标。绑定版本变化后用新版本和 `after=0` 开始。服务只收到清单中 `subscribeTo` 允许的远程活动摘要。
 
+## 独立服务任务
+
+在远程服务清单中声明 `"tasks": ["analyze"]`，限定该服务可领取的任务类型。角色成员用宿主管理 API 调用 `POST /v1/characters/{characterId}/remote-plugins/{pluginId}/tasks`，提供 `Idempotency-Key` 和 `{ accountId, bindingVersion, type, data }`。宿主验证账号范围和任务类型，审计入队并返回任务 ID。可用同路径加 `/{taskId}` 的 GET 查询状态和处理结果。
+
+独立服务用自己的令牌调用 `POST /v1/plugin-tasks/{pluginId}/accounts/{accountId}/claim` 并提交 `{ bindingVersion }`。响应是 `{ task: null }` 或一条含 `id`、`type`、`characterId`、`accountId`、`bindingVersion`、`data`、`lease` 和 `leaseUntil` 的任务。任务有效期 15 分钟，每次领取最多租用 30 秒，租约到期后可重新领取。服务以任务 ID 去重，按可重试任务设计。
+
+向 `POST /v1/plugin-tasks/{pluginId}/accounts/{accountId}/{taskId}/receipt` 提交 `{ bindingVersion, lease, status, result }`。状态为 `SUCCEEDED` 或 `FAILED`，结果使用 JSON。相同回执可安全重试，旧租约或不同内容返回 `409`。账号撤销、身份或角色停用以及授权版本变化会使待办任务失效。任务协议用于可重试的读取和计算，真实发送仍通过宿主审批和执行许可。
+
 ## 数据接口
 
 1. **读能力**以业务对象为单位。宿主在授权后提供按账号批量查询的能力，插件返回公开资料；对展示字段沿用先分页再补资料的模式。任务资格判断由数据库在排序和限制条数前完成。

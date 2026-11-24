@@ -2,20 +2,13 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z } from '@hono/zod-openapi'
 import { pluginAccountId, pluginActivityEvent, pluginEventPage, pluginEventQuery, remotePluginId } from '@ricajs/contracts/plugin-events'
-import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
-import type { RemotePluginService, RemotePluginServices } from './remote-plugin-services.js'
+import type { PrismaClient } from '@ricajs/persistence/prisma'
+import { withRemotePluginRole, type RemotePluginService, type RemotePluginServices } from './remote-plugin-services.js'
 
 export function createRemotePluginEvents(db: PrismaClient, services: RemotePluginServices) {
   const app = new Hono<{ Variables: { service: RemotePluginService; pluginId: string; accountId: string } }>()
   const accountPath = '/:pluginId/accounts/:accountId'
   const target = z.object({ pluginId: remotePluginId, accountId: pluginAccountId })
-
-  function forService<T>(run: (tx: Prisma.TransactionClient) => Promise<T>) {
-    return db.$transaction(async tx => {
-      await tx.$executeRaw`SET LOCAL ROLE rica_plugin_event_api`
-      return run(tx)
-    })
-  }
 
   app.use(accountPath, async (c, next) => {
     c.header('Cache-Control', 'no-store')
@@ -46,7 +39,7 @@ export function createRemotePluginEvents(db: PrismaClient, services: RemotePlugi
     const input = pluginActivityEvent.safeParse(await c.req.json().catch(() => null))
     if (!input.success) return c.json({ code: 'INVALID_EVENT' }, 422)
     const { id, characterId, bindingVersion, occurredAt, payload } = input.data
-    const [{ outcome }] = await forService(tx => tx.$queryRaw<[{ outcome: string }]>`
+    const [{ outcome }] = await withRemotePluginRole(db, tx => tx.$queryRaw<[{ outcome: string }]>`
       SELECT public.rica_publish_plugin_activity_v1(${c.get('pluginId')}, ${id}::uuid, ${characterId}::uuid,
         ${c.get('accountId')}::uuid, ${bindingVersion}::integer, ${occurredAt}::timestamptz,
         ${payload.kind}, ${payload.state}) AS outcome`)
@@ -66,7 +59,7 @@ export function createRemotePluginEvents(db: PrismaClient, services: RemotePlugi
     const query = pluginEventQuery.safeParse(c.req.query())
     if (!query.success) return c.json({ code: 'INVALID_CURSOR' }, 422)
     const { bindingVersion, after, limit } = query.data
-    const [{ items }] = await forService(tx => tx.$queryRaw<[{ items: unknown[] | null }]>`
+    const [{ items }] = await withRemotePluginRole(db, tx => tx.$queryRaw<[{ items: unknown[] | null }]>`
       SELECT public.rica_read_plugin_activity_v1(${c.get('accountId')}::uuid, ${bindingVersion}::integer,
         ${after}::bigint, ${subscribeTo}::text[], ${limit}::integer) AS items`)
     if (items === null) return c.json({ code: 'NOT_FOUND' }, 404)

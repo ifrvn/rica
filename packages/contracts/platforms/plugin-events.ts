@@ -34,3 +34,18 @@ export const pluginEventPage = z.strictObject({
   })),
   nextOffset: pluginEventOffset,
 })
+
+export const remoteTaskType = remotePluginId
+export const remoteTaskInput = z.strictObject({
+  accountId: pluginAccountId, bindingVersion, type: remoteTaskType, data: z.json(),
+})
+export const remoteTaskClaim = z.strictObject({ bindingVersion })
+export const remoteTaskReceipt = z.strictObject({
+  bindingVersion, lease: pluginAccountId, status: z.enum(['SUCCEEDED', 'FAILED']), result: z.json(),
+})
+export const remoteTaskLeaseView = z.strictObject({
+  task: remoteTaskInput.extend({
+    id: pluginAccountId, characterId: pluginAccountId, lease: pluginAccountId, leaseUntil: z.iso.datetime({ offset: true }),
+  }).nullable(),
+})
+export const remoteTaskReceiptView = remoteTaskReceipt.pick({ status: true }).extend({ id: pluginAccountId })

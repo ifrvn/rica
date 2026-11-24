@@ -23,6 +23,7 @@ import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
 import { createRemotePluginEvents } from '../apps/api/remote-plugin-events.js'
+import { createRemotePluginTasks } from '../apps/api/remote-plugin-tasks.js'
 import { loadRemotePluginServices } from '../apps/api/remote-plugin-services.js'
 import { pluginEventPage, type PluginActivityEvent } from '@ricajs/contracts/plugin-events'
 import { loadPackageManagement } from '../apps/package-plugins.js'
@@ -4242,7 +4243,7 @@ test('remote plugin publishers and subscribers are restricted to authorized acco
   const otherToken = randomBytes(32).toString('base64url')
   const readToken = randomBytes(32).toString('base64url')
   await writeFile(manifest, JSON.stringify({ version: 1, plugins: [
-    { id: publishers[0], tokenEnv: 'RICA_REMOTE_PLUGIN_SOURCE_A', accounts: [account.id], publishActivity: true },
+    { id: publishers[0], tokenEnv: 'RICA_REMOTE_PLUGIN_SOURCE_A', accounts: [account.id], publishActivity: true, tasks: ['analyze'] },
     { id: publishers[1], tokenEnv: 'RICA_REMOTE_PLUGIN_SOURCE_B', accounts: [account.id], publishActivity: true },
     { id: 'consumer', tokenEnv: 'RICA_REMOTE_PLUGIN_CONSUMER', accounts: [account.id], subscribeTo: [publishers[0]] },
   ] }))
@@ -4252,13 +4253,13 @@ test('remote plugin publishers and subscribers are restricted to authorized acco
   const runtime = createDatabase(scheduleRuntimeUrl())
   t.after(() => runtime.$disconnect())
   const target = createApp({ postgres: async () => true, redis: async () => true },
-    createManagementApp({ db: management, origin: fixtureOrigin, cookie: 'fixture-session',
+    createManagementApp({ db: management, origin: fixtureOrigin, cookie: 'fixture-session', remoteServices: services,
       resolveAdapter: simulationPlatforms.resolveAdapter,
       async authenticate(req) {
         const subject = req.headers.get('Cookie')?.replace('fixture-session=', '')
         return subject ? { issuer, subject, id: actorId(issuer, subject) } : null
       },
-    }), undefined, createRemotePluginEvents(runtime, services))
+    }), undefined, createRemotePluginEvents(runtime, services), createRemotePluginTasks(runtime, services))
   const sourcePath = (pluginId: string, id = account.id) => '/v1/plugin-events/' + pluginId + '/accounts/' + id
   const event: PluginActivityEvent = { id: randomUUID(), type: 'activity.recorded.v1', characterId, bindingVersion: account.bindingVersion,
     occurredAt: '2026-01-01T00:00:00.123456Z', payload: { kind: 'ASSESSMENT', state: 'DONE' } }
@@ -4308,9 +4309,51 @@ test('remote plugin publishers and subscribers are restricted to authorized acco
       SELECT has_table_privilege('public.plugin_activity_events', 'SELECT,INSERT') AS direct`
     assert.equal(direct, false)
   })
+  const tasksPath = characterPath(characterId) + '/remote-plugins/source-a/tasks'
+  const taskInput = { accountId: account.id, bindingVersion: account.bindingVersion, type: 'analyze', data: { text: 'sample' } }
+  const queue = (key: string, data = taskInput, actor = 'admin-a') => request('POST', tasksPath, { target, key, actor, data })
+  const taskCall = (suffix: string, data: object, token = publishToken, id: string = publishers[0]) =>
+    target.request('/v1/plugin-tasks/' + id + '/accounts/' + account.id + suffix, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    })
+  const claim = (token = publishToken) => taskCall('/claim', { bindingVersion: account.bindingVersion }, token)
+  assert.equal((await queue('unlisted-task', { ...taskInput, type: 'other' })).status, 404)
+  assert.equal((await queue('foreign-task', taskInput, 'admin-b')).status, 404)
+  assert.equal((await claim(otherToken)).status, 401)
+  assert.equal((await taskCall('/claim', { bindingVersion: account.bindingVersion }, otherToken, publishers[1])).status, 403)
+  const queued = await queue('queue-task')
+  assert.equal(queued.status, 200)
+  assert.equal((await queue('queue-task')).body.id, queued.body.id)
+  const claims = await Promise.all([claim(), claim()].map(async response => (await response).json()))
+  const job = claims.find(value => value.task)?.task
+  assert.equal(claims.filter(value => value.task).length, 1)
+  assert.equal(job.id, queued.body.id)
+  assert.deepEqual(job.data, taskInput.data)
+  await owner.$executeRaw`UPDATE public.remote_plugin_tasks SET lease_until = clock_timestamp()-interval '1 second'
+    WHERE id = ${job.id}::uuid`
+  const replacement = (await (await claim()).json()).task
+  assert.notEqual(replacement.lease, job.lease)
+  const receipt = (lease: string, result = { count: 1 }) => taskCall('/' + job.id + '/receipt', {
+    bindingVersion: account.bindingVersion, lease, status: 'SUCCEEDED', result,
+  })
+  assert.equal((await receipt(job.lease)).status, 409)
+  assert.equal((await receipt(replacement.lease)).status, 200)
+  assert.equal((await receipt(replacement.lease)).status, 200)
+  assert.equal((await receipt(replacement.lease, { count: 2 })).status, 409)
+  assert.deepEqual((await request('GET', tasksPath + '/' + job.id, { target })).body,
+    { id: job.id, status: 'SUCCEEDED', result: { count: 1 } })
+  const cancelled = await queue('queue-cancelled-task')
+  const cancelledJob = (await (await claim()).json()).task
+  assert.equal(cancelledJob.id, cancelled.body.id)
   const revoked = await request('POST', characterPath(characterId) + '/controls', { target, key: 'revoke-remote-event-account',
     data: { scope: 'ACCOUNT', scopeId: account.id, operation: 'REVOKE_ACCOUNT', reason: 'Verify remote event scope' } })
   assert.equal(revoked.status, 200)
   assert.equal((await send(event)).status, 404)
   assert.equal((await feed(page.nextOffset)).status, 404)
+  assert.equal((await queue('queue-cancelled-task')).status, 404)
+  assert.equal((await claim()).status, 404)
+  assert.equal((await taskCall('/' + cancelledJob.id + '/receipt', {
+    bindingVersion: account.bindingVersion, lease: cancelledJob.lease, status: 'SUCCEEDED', result: null,
+  })).status, 404)
+  assert.equal((await request('GET', tasksPath + '/' + cancelledJob.id, { target })).body.status, 'CANCELLED')
 })

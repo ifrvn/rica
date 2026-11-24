@@ -29,6 +29,8 @@ import { DeploymentPluginError, type createDeploymentPluginStore } from '../depl
 import { listRunActivity } from './run-activity.js'
 import type { PackageActivityView } from '../package-plugins.js'
 import { pluginConsoleEntry, type PluginConsoleEntry } from '@ricajs/contracts/plugin-console'
+import { registerRemoteTaskManagement } from './remote-plugin-tasks.js'
+import type { RemotePluginServices } from './remote-plugin-services.js'
 
 import { body, character, characterParams, error, errors, extensionFields, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin } from '@ricajs/persistence/management-http'
 
@@ -43,6 +45,7 @@ type Options = {
   plugins?: readonly ManagementPlugin[]
   activityViews?: readonly PackageActivityView[]
   consolePlugins?: readonly PluginConsoleEntry[]
+  remoteServices?: RemotePluginServices
 }
 
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
@@ -59,7 +62,7 @@ function runVersion(header: string) {
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
   activeModel = async () => 'simulated', reviewModel = async () => null,
-  modelProfileExists = async () => false, deploymentPlugins, plugins = [], activityViews = [], consolePlugins = [] }: Options) {
+  modelProfileExists = async () => false, deploymentPlugins, plugins = [], activityViews = [], consolePlugins = [], remoteServices }: Options) {
   async function validateDraftModel(profile?: string, retained?: () => Promise<boolean>) {
     if (profile && profile !== 'simulated' && !await modelProfileExists(profile) && !await retained?.()) {
       throw new management.ManagementError(422, 'MODEL_NOT_CONFIGURED', 'Draft model profile is unavailable')
@@ -1127,6 +1130,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     await db.$transaction(tx => management.authorize(tx, { ...c.req.valid('param'), actor: c.get('actor') }))
     return c.json([...consolePlugins], 200)
   })
+  if (remoteServices) registerRemoteTaskManagement(app, db, remoteServices)
   for (const plugin of plugins) plugin.registerRoutes(app)
 
   app.doc31('/openapi.json', {

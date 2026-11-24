@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { z } from '@hono/zod-openapi'
-import { pluginAccountId, remotePluginId } from '@ricajs/contracts/plugin-events'
+import { pluginAccountId, remotePluginId, remoteTaskType } from '@ricajs/contracts/plugin-events'
+import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 
 const token = /^[A-Za-z0-9_-]{43}$/
 const manifest = z.strictObject({
@@ -12,16 +13,19 @@ const manifest = z.strictObject({
     accounts: z.array(pluginAccountId).min(1),
     publishActivity: z.boolean().default(false),
     subscribeTo: z.array(remotePluginId).default([]),
-  }).refine(service => service.publishActivity || service.subscribeTo.length > 0)),
+    tasks: z.array(remoteTaskType).max(50).default([]),
+  }).refine(service => service.publishActivity || service.subscribeTo.length > 0 || service.tasks.length > 0)),
 })
 
 export type RemotePluginService = Readonly<{
   accounts: ReadonlySet<string>
   publishActivity: boolean
   subscribeTo: readonly string[]
+  tasks: readonly string[]
 }>
 export type RemotePluginServices = Readonly<{
   authenticate(id: string, authorization: string | undefined): RemotePluginService | undefined
+  canQueue(id: string, accountId: string, type: string): boolean
 }>
 
 function digest(value: string) {
@@ -33,13 +37,13 @@ export async function loadRemotePluginServices(path: string, env = process.env):
   if (!result.success) throw new Error('Invalid Rica remote plugin manifest')
   const services = new Map<string, RemotePluginService & { tokenHash: Buffer }>()
   const hashes = new Set<string>()
-  for (const { id, tokenEnv, accounts, publishActivity, subscribeTo } of result.data.plugins) {
+  for (const { id, tokenEnv, accounts, publishActivity, subscribeTo, tasks } of result.data.plugins) {
     const value = env[tokenEnv]
     if (!value || !token.test(value)) throw new Error('Invalid service token setting for remote plugin ' + id)
     const tokenHash = digest(value)
     const hash = tokenHash.toString('hex')
     if (services.has(id) || hashes.has(hash)) throw new Error('Duplicate remote plugin identity or token: ' + id)
-    services.set(id, { accounts: new Set(accounts), publishActivity, subscribeTo, tokenHash })
+    services.set(id, { accounts: new Set(accounts), publishActivity, subscribeTo, tasks, tokenHash })
     hashes.add(hash)
   }
   function authenticate(id: string, authorization: string | undefined): RemotePluginService | undefined {
@@ -47,5 +51,15 @@ export async function loadRemotePluginServices(path: string, env = process.env):
     const value = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(authorization ?? '')?.[1]
     if (service && value && timingSafeEqual(service.tokenHash, digest(value))) return service
   }
-  return { authenticate }
+  return { authenticate, canQueue(id, accountId, type) {
+    const service = services.get(id)
+    return service?.accounts.has(accountId) === true && service.tasks.includes(type)
+  } }
+}
+
+export function withRemotePluginRole<T>(db: PrismaClient, run: (tx: Prisma.TransactionClient) => Promise<T>) {
+  return db.$transaction(async tx => {
+    await tx.$executeRaw`SET LOCAL ROLE rica_plugin_event_api`
+    return run(tx)
+  })
 }
