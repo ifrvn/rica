@@ -8,6 +8,7 @@ import { pluginCards as cards, pluginServiceNames, registrationAvailable } from 
 import { pluginNames as labels, usePluginStatus } from './plugin-status.js'
 import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
 import { SimulationComponents } from '@ricajs/simulation/console'
+import PackageConsole from './PackageConsole.vue'
 
 const props = defineProps<{ characterId: string; canConfigureModel: boolean; canStartSimulation: boolean; canReview: boolean }>()
 const emit = defineEmits<{
@@ -263,6 +264,7 @@ function changeStage(id: DeploymentPluginId) {
         </div>
       </template>
     </UiDialog>
+    <PackageConsole :character-id="characterId" @expired="expired" />
   </div>
 </template>
 

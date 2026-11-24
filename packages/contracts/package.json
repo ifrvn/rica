@@ -11,6 +11,7 @@
     "./platform-reader": "./platforms/reader.ts",
     "./platform-reply-executor": "./platforms/reply-executor.ts",
     "./plugin-events": "./platforms/plugin-events.ts",
+    "./plugin-console": "./deployment/plugin-console.ts",
     "./management": "./management/index.ts",
     "./deployment-plugins": "./deployment/plugins.ts",
     "./health": "./deployment/health.ts",

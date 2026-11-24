@@ -28,6 +28,7 @@ import { deploymentChangeOwner, deploymentPluginChange, deploymentPluginsView } 
 import { DeploymentPluginError, type createDeploymentPluginStore } from '../deployment-plugins.js'
 import { listRunActivity } from './run-activity.js'
 import type { PackageActivityView } from '../package-plugins.js'
+import { pluginConsoleEntry, type PluginConsoleEntry } from '@ricajs/contracts/plugin-console'
 
 import { body, character, characterParams, error, errors, extensionFields, failure, security, success, version, type ManagementEnvironment, type ManagementPlugin } from '@ricajs/persistence/management-http'
 
@@ -41,6 +42,7 @@ type Options = {
   deploymentPlugins?: ReturnType<typeof createDeploymentPluginStore>
   plugins?: readonly ManagementPlugin[]
   activityViews?: readonly PackageActivityView[]
+  consolePlugins?: readonly PluginConsoleEntry[]
 }
 
 const identityParams = characterParams.extend({ identityId: schema.resourceId })
@@ -57,7 +59,7 @@ function runVersion(header: string) {
 
 export function createManagementApp({ db, authenticate, origin, cookie, resolveAdapter, pluginStatus = readPluginStatus, pluginRelease,
   activeModel = async () => 'simulated', reviewModel = async () => null,
-  modelProfileExists = async () => false, deploymentPlugins, plugins = [], activityViews = [] }: Options) {
+  modelProfileExists = async () => false, deploymentPlugins, plugins = [], activityViews = [], consolePlugins = [] }: Options) {
   async function validateDraftModel(profile?: string, retained?: () => Promise<boolean>) {
     if (profile && profile !== 'simulated' && !await modelProfileExists(profile) && !await retained?.()) {
       throw new management.ManagementError(422, 'MODEL_NOT_CONFIGURED', 'Draft model profile is unavailable')
@@ -1118,6 +1120,13 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     db, { ...c.req.valid('param'), actor: c.get('actor') },
   ), 200))
 
+  app.openapi(createRoute({
+    method: 'get', path: '/characters/{characterId}/package-console', security, request: { params: characterParams },
+    responses: { ...errors, 200: success(z.array(pluginConsoleEntry)) },
+  }), async c => {
+    await db.$transaction(tx => management.authorize(tx, { ...c.req.valid('param'), actor: c.get('actor') }))
+    return c.json([...consolePlugins], 200)
+  })
   for (const plugin of plugins) plugin.registerRoutes(app)
 
   app.doc31('/openapi.json', {

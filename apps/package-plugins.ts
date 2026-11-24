@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
+import { pluginConsole, type PluginConsoleEntry } from '@ricajs/contracts/plugin-console'
 import { startPluginHost, type PluginDefinition, type PluginHostError } from '@ricajs/plugin-host'
 import type { PluginAccounts, PluginCommand, PluginManagement, PluginWorkerServices, RicaPlugin } from '@ricajs/plugin-host/sdk'
 import type { ManagementAdapter } from '@ricajs/persistence/management-http'
@@ -121,8 +122,14 @@ async function readPackageModules(manifestPath: string | undefined) {
     if (!commands.success || (commands.data && !entry.database)) {
       throw new Error('Invalid Rica plugin commands: ' + entry.id)
     }
+    const console = pluginConsole.optional().safeParse(ricaPlugin.console)
+    if (!console.success || (console.data?.summaryPath && !ricaPlugin.management) ||
+        (console.data?.accountDetailPath && (!ricaPlugin.management || !accounts.data)) ||
+        (console.data?.accountFields && !accounts.data)) {
+      throw new Error('Invalid Rica plugin console contribution: ' + entry.id)
+    }
     modules.push({ entry, ricaPlugin, activity: activity.data, accounts: accounts.data, retention: retention.data,
-      workerServices: workerServices.data, ricaManagement, commands: commands.data })
+      workerServices: workerServices.data, ricaManagement, commands: commands.data, console: console.data })
   }
   return modules
 }
@@ -132,8 +139,9 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
   const activityViews: PackageActivityView[] = []
   const accountPlugins: PackageAccounts[] = []
   const commandPlugins: PackageCommands[] = []
+  const consolePlugins: PluginConsoleEntry[] = []
   const adapters = new Map<string, { adapter: ManagementAdapter; databaseUrl: string }>()
-  for (const { entry, ricaPlugin, activity, accounts, ricaManagement, commands } of await readPackageModules(manifestPath)) {
+  for (const { entry, ricaPlugin, activity, accounts, ricaManagement, commands, console } of await readPackageModules(manifestPath)) {
     const ownsBuiltIn = Object.hasOwn(builtInPackages, entry.id) && builtInPackages[entry.id] === entry.package
     if (commands && Object.hasOwn(builtInPackages, entry.id)) throw new Error('Rica plugin command ID is reserved: ' + entry.id)
     if (ricaManagement !== undefined) {
@@ -148,6 +156,7 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
     }
     if (accounts) accountPlugins.push({ id: entry.id, schema: packageSchema(entry.id), operations: accounts })
     if (commands) commandPlugins.push({ id: entry.id, schema: packageSchema(entry.id), commands })
+    if (console) consolePlugins.push({ ...console, id: entry.id })
     const createManagement = ricaPlugin.management
     if (!createManagement) continue
     const databaseUrl = entry.database && packageDatabaseUrl(entry.id, entry.database.runtimeUrlEnv)
@@ -169,7 +178,7 @@ export async function loadPackageManagement(manifestPath: string | undefined, bu
     })
   }
   const host = await startPluginHost('package-management', definitions, definitions.map(({ id }) => ({ id })))
-  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, accountPlugins, commandPlugins, adapters, stop: host.stop }
+  return { plugins: definitions.map(({ id }) => host.find(id)!), activityViews, accountPlugins, commandPlugins, consolePlugins, adapters, stop: host.stop }
 }
 
 type PackageModules = Awaited<ReturnType<typeof readPackageModules>>

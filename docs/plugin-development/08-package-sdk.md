@@ -79,7 +79,7 @@ GRANT USAGE ON SCHEMA rica_plugin_acme TO rica_acme_runtime;
 
 ### 账号接入和事务
 
-有 `accounts` 能力的包以插件 ID 作为平台名。账号池复用宿主的会话、权限、审计和幂等逻辑。登记使用 `POST /v1/characters/{characterId}/account-pool`，提交 `platform`、`instanceKey`、`remoteAccountId` 和可选 JSON `data`。关联账号仍使用账号池的 `associations` 路由。控制台表单可在后续 UI 扩展中接入。
+有 `accounts` 能力的包以插件 ID 作为平台名。账号池复用宿主的会话、权限、审计和幂等逻辑。登记使用 `POST /v1/characters/{characterId}/account-pool`，提交 `platform`、`instanceKey`、`remoteAccountId` 和可选 JSON `data`。关联账号仍使用账号池的 `associations` 路由。包可以在控制台卡片中声明登记字段。
 
 ```ts
 accounts: {
@@ -137,6 +137,23 @@ Newbi 的管理入口沿用 `/v1/characters/{characterId}/newbi/…`。宿主只
 - 宿主从清单所在目录解析插件包的 `./rica` 导出，核对包清单中的名称和版本，再载入导出的 `ricaPlugin`。插件声明 SDK 版本和能力，宿主拒绝重复 ID、版本不符或不支持的能力。API 扩展只挂在 `/v1/characters/{characterId}/plugins/{pluginId}/…` 下，复用现有会话、来源、请求大小和角色成员权限检查。
 - 数据库阶段在启动服务前先应用宿主迁移，再应用启用包的迁移。插件可用自己的 Prisma 迁移目录。部署配置给每个插件分配迁移身份和运行时身份，默认只授予其 PostgreSQL schema。迁移历史在各自命名空间记录。发布任务负责串行化迁移和版本切换，失败时中止部署。停用和卸载保留数据，清除数据由独立维护操作处理。
 - 插件代码在宿主进程中按受信代码部署。需要代码隔离的接入使用独立进程或远程服务。
+
+## 控制台贡献
+
+清单中的包可在 `ricaPlugin.console` 声明角色插件页的卡片。宿主通过已授权的 `GET /v1/characters/{characterId}/package-console` 提供卡片描述，在现有控制台渲染，无需修改宿主前端或重新构建。
+
+```ts
+console: {
+  title: 'Acme',
+  summaryPath: '/summary',
+  accountDetailPath: '/account-detail',
+  accountFields: [{ key: 'apiKey', label: '访问令牌', kind: 'secret' }],
+}
+```
+
+`summaryPath` 和 `accountDetailPath` 是同一包的管理读取路径，返回 `{ fields: [{ label, value }] }`，值按文本显示。详情路径收到 `accountId` 查询参数，应通过 `services.readAccounts` 核对角色和平台归属，再读取插件数据。详情和登记需要 `accounts` 能力。
+
+声明 `accountFields` 启用账号登记表单，宿主提供实例标识和远端账号 ID。附加字段以字符串提交到登记请求的 `data`，支持 `text` 和 `secret`。插件验证字段并负责凭据保存，摘要和详情只返回可展示字段。登记后在角色的账号池关联身份。
 
 ## 独立服务事件
 

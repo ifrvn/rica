@@ -92,6 +92,7 @@ const management = managementConfig && managementDb && auth && platforms && newb
   modelProfileExists: async (id) => Object.hasOwn((await modelSettings.readSettings()).profiles, id),
   deploymentPlugins,
   activityViews: packageManagement.activityViews,
+  consolePlugins: packageManagement.consolePlugins,
   plugins: [
     newbiApi.plugin,
     createHostedModelManagement({ modelSettings,

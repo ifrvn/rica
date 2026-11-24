@@ -1,5 +1,6 @@
 import type { AssessDiscussion } from '@ricajs/contracts/discussion-selection'
 import type { PluginStage } from '@ricajs/contracts/deployment-plugins'
+import type { PluginConsole } from '@ricajs/contracts/plugin-console'
 
 export type PluginJson = null | boolean | number | string | PluginJson[] | { [key: string]: PluginJson }
 
@@ -77,5 +78,5 @@ type Capabilities = {
 }
 type DeclaredCapability = { [K in keyof Capabilities]: Pick<Capabilities, K> }[keyof Capabilities]
 
-export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1; workerServices?: { discussion: true } } &
+export type RicaPlugin = Readonly<{ id: string; sdkVersion: 1; workerServices?: { discussion: true }; console?: PluginConsole } &
   Partial<Capabilities> & DeclaredCapability>

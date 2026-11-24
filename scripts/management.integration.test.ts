@@ -4096,6 +4096,8 @@ test('external account operations share the host transaction and enforce account
     writeFile(join(plugin, 'package.json'), JSON.stringify({ name: 'rica-account-fixture', version: '1.0.0', type: 'module',
       exports: { './package.json': './package.json', './rica': './plugin.js' } })),
     writeFile(join(plugin, 'plugin.js'), `export const ricaPlugin = { id: 'account-fixture', sdkVersion: 1,
+      console: { title: 'Fixture console', summaryPath: '/summary', accountDetailPath: '/detail',
+        accountFields: [{ key: 'label', label: 'Label', kind: 'text' }] },
       accounts: { register: 'register_account', profiles: 'account_profiles', remove: 'remove_account', verifyResume: 'verify_resume',
         async prepareRegistration({ data }) {
           if (data.label === 'RejectRemote') return { accepted: false }
@@ -4105,7 +4107,12 @@ test('external account operations share the host transaction and enforce account
         { id: 'record-account', function: 'record_command', scope: 'account' },
         { id: 'record-character', function: 'record_command', scope: 'character' },
       ],
-      management() { return { read(request, { readAccounts }) { return readAccounts(request.query.map(([, id]) => id)) } } }
+      management() { return { async read(request, { readAccounts }) {
+        if (request.path === '/summary') return { fields: [{ label: 'Status', value: 'Ready' }] }
+        const accounts = await readAccounts(request.query.map(([, id]) => id))
+        if (request.path === '/detail') return { fields: accounts.map(row => ({ label: 'Account', value: row.remoteAccountId })) }
+        return accounts
+      } } }
     }`),
   ])
   const fixtureUrl = new URL(config.databaseUrl)
@@ -4121,12 +4128,21 @@ test('external account operations share the host transaction and enforce account
   const target = createApp({ postgres: async () => true, redis: async () => true }, createManagementApp({
     db: management, origin: fixtureOrigin, cookie: 'fixture-session', resolveAdapter: () => undefined,
     plugins: packageManagementPlugins(management, host),
+    consolePlugins: host.consolePlugins,
     authenticate: async (req) => {
       const subject = req.headers.get('Cookie')?.replace('fixture-session=', '')
       return subject ? { issuer, subject, id: actorId(issuer, subject) } : null
     },
   }))
   assert.equal((await request('GET', '/openapi.json', { target })).status, 200)
+  const consolePath = characterPath(a) + '/package-console'
+  assert.equal((await request('GET', consolePath, { target, actor: 'admin-b' })).status, 404)
+  assert.deepEqual((await request('GET', consolePath, { target })).body, [{
+    id: 'account-fixture', title: 'Fixture console', summaryPath: '/summary', accountDetailPath: '/detail',
+    accountFields: [{ key: 'label', label: 'Label', kind: 'text' }],
+  }])
+  assert.deepEqual((await request('GET', characterPath(a) + '/plugins/account-fixture/summary', { target })).body,
+    { fields: [{ label: 'Status', value: 'Ready' }] })
   const pool = (characterId: string) => characterPath(characterId) + '/account-pool'
   const register = (characterId: string, actor: string, key: string, label: string) => request('POST', pool(characterId), {
     target, actor, key, data: { platform: 'account-fixture', instanceKey: 'fixture', remoteAccountId: key, data: { label } },
