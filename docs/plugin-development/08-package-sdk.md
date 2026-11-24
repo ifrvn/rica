@@ -32,7 +32,7 @@ commands: [
 
 `worker(config, context)` 同步返回 `start()` 和 `stop()`，实例在 `start()` 内获取资源、确认就绪并启动后台任务。`context.signal` 用于中止初始化和停止领取新任务。`stop()` 等待在途任务结束并释放已获取的资源，也要能清理只初始化了一部分的实例。宿主等所有插件启动成功后报告 Worker 就绪。单个插件启动失败时，宿主触发取消，并按相反顺序关闭已经开始初始化的插件。
 
-插件的 Worker 随每个 Rica Worker 进程启动。需要单独领取的任务由插件管理租约、去重和重试。需要讨论评估时声明 `workerServices: { discussion: true }`，通过 `context.services?.discussion` 调用宿主模型。宿主用已注册的插件 ID 作为平台归属，只接受该平台下的有效角色和身份绑定。模型请求前再次检查绑定及部署开关，宿主负责模型选择和用量归属。统一事件订阅和任务协议在后续阶段实现。
+插件的 Worker 随每个 Rica Worker 进程启动。需要单独领取的任务由插件管理租约、去重和重试。需要讨论评估时声明 `workerServices: { discussion: true }`，通过 `context.services?.discussion` 调用宿主模型。宿主用已注册的插件 ID 作为平台归属，只接受该平台下的有效角色和身份绑定。模型请求前再次检查绑定及部署开关，宿主负责模型选择和用量归属。独立进程可通过下文的事件接口交换活动摘要。
 
 ### Prisma 插件的部署配置
 
@@ -138,12 +138,55 @@ Newbi 的管理入口沿用 `/v1/characters/{characterId}/newbi/…`。宿主只
 - 数据库阶段在启动服务前先应用宿主迁移，再应用启用包的迁移。插件可用自己的 Prisma 迁移目录。部署配置给每个插件分配迁移身份和运行时身份，默认只授予其 PostgreSQL schema。迁移历史在各自命名空间记录。发布任务负责串行化迁移和版本切换，失败时中止部署。停用和卸载保留数据，清除数据由独立维护操作处理。
 - 插件代码在宿主进程中按受信代码部署。需要代码隔离的接入使用独立进程或远程服务。
 
+## 独立服务事件
+
+通过 `RICA_REMOTE_PLUGIN_MANIFEST` 为独立服务启用 HTTP 事件接口。API 启动时读取该文件。每个服务使用独立的 Bearer 令牌，将 32 字节随机值编码为无填充的 Base64URL 字符串，并通过 `tokenEnv` 指向的环境变量配置。清单只记录变量名。更新令牌或权限后重启 API。
+
+```json
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "insights",
+      "tokenEnv": "RICA_REMOTE_PLUGIN_INSIGHTS_TOKEN",
+      "accounts": ["572b58ca-0702-4b9e-a3c3-85a9cbd40026"],
+      "publishActivity": true
+    },
+    {
+      "id": "reports",
+      "tokenEnv": "RICA_REMOTE_PLUGIN_REPORTS_TOKEN",
+      "accounts": ["572b58ca-0702-4b9e-a3c3-85a9cbd40026"],
+      "subscribeTo": ["insights"]
+    }
+  ]
+}
+```
+
+每个服务可以发布、订阅或同时声明两种能力。部署者使用宿主已绑定的账号 ID 配置 `accounts`，并向服务提供账号 ID、角色 ID 和当前 `bindingVersion`。发布和订阅都要求账号、身份和角色处于启用状态。服务通过 HTTPS 连接 Rica API，使用 `Authorization: Bearer <token>`，无需浏览器会话、插件安装包或数据库连接。
+
+向 `POST /v1/plugin-events/{pluginId}/accounts/{accountId}` 提交 JSON。第一版接受 `activity.recorded.v1`。活动类别为 `ASSESSMENT` 或 `PROPOSAL`，状态由大写字母、数字和下划线组成，以字母开头，最多 64 个字符。事件时间使用 UTC，最多保留六位小数，最多可比宿主当前时间晚五分钟。
+
+```json
+{
+  "id": "e14b5de5-a282-4f70-a29b-c3d21c83d239",
+  "type": "activity.recorded.v1",
+  "characterId": "062e37d4-be1d-48e4-887f-90afe6f0665e",
+  "bindingVersion": 1,
+  "occurredAt": "2026-11-20T01:00:00.123456Z",
+  "payload": { "kind": "ASSESSMENT", "state": "DONE" }
+}
+```
+
+初次发布返回 `201`，同一发布者重试相同事件返回 `200`。同一发布者以同一个事件 ID 提交不同内容时返回 `409`。即使是重试，宿主也重新校验账号和绑定版本。摘要进入统一运行活动，来源标记为 `plugin:remote:<pluginId>`，身份和账号名称由宿主提供。
+
+订阅者以自己的服务 ID 调用 `GET /v1/plugin-events/{pluginId}/accounts/{accountId}?bindingVersion=1&after=0&limit=25`。返回 `{ items, nextOffset }`。事件含来源 `pluginId` 和字符串 `offset`。订阅者按账号和绑定版本保存游标，处理成功后以 `nextOffset` 继续读取。空页保留原游标。绑定版本变化后用新版本和 `after=0` 开始。服务只收到清单中 `subscribeTo` 允许的远程活动摘要。
+
 ## 数据接口
 
 1. **读能力**以业务对象为单位。宿主在授权后提供按账号批量查询的能力，插件返回公开资料；对展示字段沿用先分页再补资料的模式。任务资格判断由数据库在排序和限制条数前完成。
 2. **事务能力**按业务操作发放。登记、解绑、审批和任务领取使用同一个宿主事务。需要插件内写入时，宿主调用声明过的、带权限边界的数据库操作，限制到当前角色和账号。参数用绑定传递。插件日常查询可继续用自己的 Prisma Client。
-3. **活动和统一列表**使用版本化记录结构。宿主在同一个查询中合并记录，使用 `(created_at, id, kind, platform)` 全序和微秒时间精度。后续远程插件可通过带幂等键的事件发布摘要，供宿主维护统一读模型。
-4. **可选能力**按清单登记管理 API、Worker、公开状态、UI 构建入口及事件订阅。事件包含版本、作用域和幂等键。审批和真实执行的许可仍由宿主控制。远程接入使用相同业务数据契约，另行提供服务身份和授权。
+3. **活动和统一列表**使用版本化记录结构。宿主在同一个查询中合并记录，使用 `(created_at, id, kind, platform)` 全序和微秒时间精度。远程插件以事件 ID 幂等发布摘要，由宿主持久化并加入统一读模型。
+4. **可选能力**按清单登记管理 API、Worker、公开状态、UI 构建入口及事件订阅。远程活动事件包含版本、作用域和事件 ID。审批、任务领取和真实执行的许可仍由宿主控制。
 
 ## 实施顺序与验收
 

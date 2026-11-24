@@ -35,6 +35,18 @@ export async function listRunActivity(db: PrismaClient, scope: Scope, query: z.i
     }
   }
   if (query.kind !== 'SIMULATION') {
+    sources.push(Prisma.sql`
+      SELECT e.event_id AS id, e.kind, 'plugin:remote:' || e.plugin_id AS platform,
+        coalesce(v.role_profile->>'displayName', i.slug) AS identity,
+        a.remote_account_id AS account, e.account_id, e.state, e.occurred_at AS created_at
+      FROM public.plugin_activity_events e
+      JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (e.character_id, e.identity_id, e.account_id)
+      JOIN public.identities i ON (i.character_id, i.id) = (e.character_id, e.identity_id)
+      LEFT JOIN public.identity_versions v
+        ON (v.character_id, v.identity_id, v.version) = (i.character_id, i.id, i.active_version)
+      WHERE e.character_id = ${characterId}::uuid
+        ${query.kind ? Prisma.sql`AND e.kind = ${query.kind}` : Prisma.empty}
+    `)
     for (const source of activityViews) {
       const relation = packageObject(source.schema, source.view)
       sources.push(Prisma.sql`

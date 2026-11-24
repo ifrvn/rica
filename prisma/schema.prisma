@@ -312,10 +312,30 @@ model PlatformAccount {
   conversations   Conversation[]
   planParticipants SimulationPlanParticipant[]
   commitmentCollaborations CommitmentCollaborator[]
+  pluginActivityEvents PluginActivityEvent[]
 
   @@unique([characterId, identityId, id])
   @@unique([platform, instanceKey, remoteAccountId])
   @@map("platform_accounts")
+}
+
+model PluginActivityEvent {
+  sequence       BigInt
+  pluginId       String   @map("plugin_id") @db.VarChar(50)
+  eventId        String   @map("event_id") @db.Uuid
+  characterId    String   @map("character_id") @db.Uuid
+  identityId     String   @map("identity_id") @db.Uuid
+  accountId      String   @map("account_id") @db.Uuid
+  bindingVersion Int      @map("binding_version")
+  occurredAt     DateTime @map("occurred_at") @db.Timestamptz
+  kind           String
+  state          String   @db.VarChar(64)
+  account        PlatformAccount @relation(fields: [characterId, identityId, accountId], references: [characterId, identityId, id], onDelete: Cascade, onUpdate: NoAction, map: "plugin_activity_events_account_fkey")
+
+  @@id([accountId, bindingVersion, sequence], map: "plugin_activity_events_pkey")
+  @@unique([pluginId, eventId], map: "plugin_activity_events_plugin_event_key")
+  @@index([characterId, occurredAt(sort: Desc), eventId(sort: Desc)], map: "plugin_activity_events_character_idx")
+  @@map("plugin_activity_events")
 }
 
 model InboundEvent {

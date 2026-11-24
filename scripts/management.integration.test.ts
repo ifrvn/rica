@@ -1,6 +1,6 @@
 import { startCognitionPlugins, startConfiguredModel, startSimulationPlatforms } from '../apps/runtime-plugins.js'
 import assert from 'node:assert/strict'
-import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -22,6 +22,9 @@ import { createAdminAuth } from '../apps/api/admin-auth-routes.js'
 import { Redis } from 'ioredis'
 import { createApp } from '../apps/api/app.js'
 import { createManagementApp } from '../apps/api/management.js'
+import { createRemotePluginEvents } from '../apps/api/remote-plugin-events.js'
+import { loadRemotePluginServices } from '../apps/api/remote-plugin-services.js'
+import { pluginEventPage, type PluginActivityEvent } from '@ricajs/contracts/plugin-events'
 import { loadPackageManagement } from '../apps/package-plugins.js'
 import { packageManagementPlugins } from '../apps/api/package-management.js'
 import { createAutoReviewer } from '../apps/auto-review.js'
@@ -4198,4 +4201,100 @@ test('external account operations share the host transaction and enforce account
     data: { scope: 'ACCOUNT', scopeId: local.body.id, operation: 'REVOKE_ACCOUNT', reason: 'Verify replay authorization' } })
   assert.equal(revoked.status, 200, JSON.stringify(revoked.body))
   assert.equal((await record(local.body.id, 'Committed')).status, 404)
+})
+
+test('remote plugin publishers and subscribers are restricted to authorized account bindings and sources', async t => {
+  const created = await request('POST', '/characters', { key: 'remote-event-fixture', data: characterData('-remote-event') })
+  assert.equal(created.status, 201)
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const identity = await request('POST', characterPath(characterId) + '/identities', {
+    key: 'remote-event-identity', data: { slug: 'remote-event', roleProfile: {} },
+  })
+  assert.equal(identity.status, 201)
+  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE' } })
+  await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
+  const account = await owner.platformAccount.create({ data: {
+    characterId, identityId: identity.body.id, platform: 'mock-a', instanceKey: 'integration',
+    remoteAccountId: randomUUID(), status: 'ACTIVE',
+  } })
+  const directory = await mkdtemp(join(tmpdir(), 'rica-remote-event-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const manifest = join(directory, 'plugins.json')
+  const publishers = ['source-a', 'source-b'] as const
+  const publishToken = randomBytes(32).toString('base64url')
+  const otherToken = randomBytes(32).toString('base64url')
+  const readToken = randomBytes(32).toString('base64url')
+  await writeFile(manifest, JSON.stringify({ version: 1, plugins: [
+    { id: publishers[0], tokenEnv: 'RICA_REMOTE_PLUGIN_SOURCE_A', accounts: [account.id], publishActivity: true },
+    { id: publishers[1], tokenEnv: 'RICA_REMOTE_PLUGIN_SOURCE_B', accounts: [account.id], publishActivity: true },
+    { id: 'consumer', tokenEnv: 'RICA_REMOTE_PLUGIN_CONSUMER', accounts: [account.id], subscribeTo: [publishers[0]] },
+  ] }))
+  const services = await loadRemotePluginServices(manifest, {
+    RICA_REMOTE_PLUGIN_SOURCE_A: publishToken, RICA_REMOTE_PLUGIN_SOURCE_B: otherToken, RICA_REMOTE_PLUGIN_CONSUMER: readToken,
+  })
+  const runtime = createDatabase(scheduleRuntimeUrl())
+  t.after(() => runtime.$disconnect())
+  const target = createApp({ postgres: async () => true, redis: async () => true },
+    createManagementApp({ db: management, origin: fixtureOrigin, cookie: 'fixture-session',
+      resolveAdapter: simulationPlatforms.resolveAdapter,
+      async authenticate(req) {
+        const subject = req.headers.get('Cookie')?.replace('fixture-session=', '')
+        return subject ? { issuer, subject, id: actorId(issuer, subject) } : null
+      },
+    }), undefined, createRemotePluginEvents(runtime, services))
+  const sourcePath = (pluginId: string, id = account.id) => '/v1/plugin-events/' + pluginId + '/accounts/' + id
+  const event: PluginActivityEvent = { id: randomUUID(), type: 'activity.recorded.v1', characterId, bindingVersion: account.bindingVersion,
+    occurredAt: '2026-01-01T00:00:00.123456Z', payload: { kind: 'ASSESSMENT', state: 'DONE' } }
+  const send = (data: PluginActivityEvent, token = publishToken, path = sourcePath(publishers[0])) => target.request(path, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  const feed = (after = '0', token = readToken, publisher = 'consumer') => target.request(sourcePath(publisher)
+    + '?bindingVersion=' + account.bindingVersion + '&limit=1&after=' + after, { headers: { Authorization: 'Bearer ' + token } })
+
+  assert.equal((await send(event, readToken)).status, 401)
+  assert.equal((await send(event, readToken, sourcePath('consumer'))).status, 403)
+  assert.equal((await send(event, publishToken, sourcePath(publishers[0], accountA))).status, 404)
+  assert.equal((await send({ ...event, characterId: b })).status, 404)
+  assert.equal((await send({ ...event, bindingVersion: account.bindingVersion + 1 })).status, 404)
+  assert.equal((await send({ ...event, occurredAt: '2999-01-01T00:00:00Z' })).status, 422)
+  assert.equal((await feed('0', publishToken, publishers[0])).status, 403)
+  assert.equal((await feed('9223372036854775808')).status, 422)
+
+  const retries = await Promise.all([send(event), send(event)])
+  assert.deepEqual(retries.map(response => response.status).sort(), [200, 201])
+  assert.equal((await send({ ...event, payload: { ...event.payload, state: 'OTHER' } })).status, 409)
+  const second = { ...event, id: randomUUID(), occurredAt: '2026-01-01T00:00:00.123457Z' }
+  assert.equal((await send(event, otherToken, sourcePath(publishers[1]))).status, 201)
+  assert.equal((await send(second)).status, 201)
+
+  const firstResponse = await feed()
+  assert.equal(firstResponse.status, 200)
+  const first = pluginEventPage.parse(await firstResponse.json())
+  assert.deepEqual(first, { items: [{ ...event, pluginId: publishers[0], offset: '1' }], nextOffset: '1' })
+  const page = pluginEventPage.parse(await (await feed(first.nextOffset)).json())
+  assert.deepEqual(page, { items: [{ ...second, pluginId: publishers[0], offset: '3' }], nextOffset: '3' })
+  assert.deepEqual(await (await feed(page.nextOffset)).json(), { items: [], nextOffset: page.nextOffset })
+
+  const activityPath = characterPath(characterId) + '/run-activity?kind=ASSESSMENT&limit=1'
+  assert.equal((await request('GET', activityPath, { target, actor: 'admin-b' })).status, 404)
+  const activity = await request('GET', activityPath, { target })
+  assert.equal(activity.status, 200)
+  assert.deepEqual(activity.body.items.map(({ id, platform, createdAt }: { id: string; platform: string; createdAt: string }) =>
+    [id, platform, createdAt]), [[second.id, 'plugin:remote:source-a', second.occurredAt]])
+  const next = await request('GET', activityPath + '&cursor=' + activity.body.nextCursor, { target })
+  assert.equal(next.body.items[0]?.platform, 'plugin:remote:source-b')
+
+  await runtime.$transaction(async tx => {
+    await tx.$executeRaw`SET LOCAL ROLE rica_plugin_event_api`
+    const [{ direct }] = await tx.$queryRaw<[{ direct: boolean }]>`
+      SELECT has_table_privilege('public.plugin_activity_events', 'SELECT,INSERT') AS direct`
+    assert.equal(direct, false)
+  })
+  const revoked = await request('POST', characterPath(characterId) + '/controls', { target, key: 'revoke-remote-event-account',
+    data: { scope: 'ACCOUNT', scopeId: account.id, operation: 'REVOKE_ACCOUNT', reason: 'Verify remote event scope' } })
+  assert.equal(revoked.status, 200)
+  assert.equal((await send(event)).status, 404)
+  assert.equal((await feed(page.nextOffset)).status, 404)
 })

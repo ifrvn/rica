@@ -22,8 +22,12 @@ import { createDiscussionAssessor } from '../discussion-assessment.js'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import { loadPackageManagement } from '../package-plugins.js'
 import { packageManagementPlugins, startManagedApi } from './package-management.js'
+import { createRemotePluginEvents } from './remote-plugin-events.js'
+import { loadRemotePluginServices } from './remote-plugin-services.js'
 
 const config = loadConfig()
+const remoteManifest = process.env.RICA_REMOTE_PLUGIN_MANIFEST
+const remoteServices = remoteManifest ? await loadRemotePluginServices(remoteManifest) : undefined
 const managementConfig = loadManagementConfig()
 const packageManagement = await loadPackageManagement(managementConfig ? process.env.RICA_PLUGIN_MANIFEST : undefined, {
   [newbiManagement.id]: newbiPackage.name,
@@ -106,7 +110,7 @@ const app = createApp({
     managementDb && managementDb.$queryRaw`SELECT 1 FROM public.management_memberships,public.admin_users LIMIT 0`,
   ]),
   redis: () => redis.ping(),
-}, management, auth?.app)
+}, management, auth?.app, remoteServices && createRemotePluginEvents(db, remoteServices))
 const server = serve({ fetch: app.fetch, port: config.port, hostname: '127.0.0.1' })
 const observation = platforms && startPluginHeartbeat(config.redisUrl, 'api', platforms.plugins, platforms.source)
 console.info(JSON.stringify({ service: 'api', event: 'started', port: config.port }))
