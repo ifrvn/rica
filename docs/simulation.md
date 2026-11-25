@@ -5,7 +5,7 @@
 ## 启动
 
 1. 使用迁移账号执行 `pnpm run db:migrate`。
-2. 在项目目录运行 `pnpm dev simulation`。
+2. 在项目目录运行 `pnpm dev` 启动整套应用，或运行 `pnpm dev simulation` 单独启动模拟执行器。
 
 此进程只处理 SIMULATION。执行角色不能读取草稿正文、记忆或入站载荷。执行进程没有平台客户端及写凭据。
 

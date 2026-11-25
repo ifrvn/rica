@@ -37,15 +37,16 @@ pnpm run db:migrate
 
 Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56379`。示例 `DATABASE_URL` 和 `REDIS_URL` 与这两个端口对应。迁移优先使用 `MIGRATION_DATABASE_URL`，本地可沿用 `DATABASE_URL`。[环境变量示例](.env.example) · [数据库角色](docs/database-roles.md)
 
-在三个终端分别启动以下进程。
+完成上面的依赖和迁移准备后，在一个终端运行 `pnpm dev`，启动 API、Worker、管理台和模拟执行器。需要单独调试时，可以指定服务。
 
 | 命令 | 用途 |
 | --- | --- |
 | `pnpm dev api` | API 与健康检查，默认监听 `127.0.0.1:3000`。 |
 | `pnpm dev worker` | 认知任务、BullMQ 消费、出箱转发、模拟调度和数据保留期清理。等待日志出现 `ready`。 |
 | `pnpm dev admin` | Vue 服务状态和人工审批台。开发代理把 `/health` 与 `/v1` 转发到 API。 |
+| `pnpm dev simulation` | 从数据库领取已批准的模拟提案并记录本地回执。 |
 
-打开[本地控制台](http://localhost:5173/)并检查 [API 就绪状态](http://127.0.0.1:3000/health/ready)。按 Ctrl+C 停止应用进程。`docker compose stop` 停止数据库和 Redis，保留数据卷。
+打开[本地控制台](http://localhost:5173/)并检查 [API 就绪状态](http://127.0.0.1:3000/health/ready)。在启动终端按 Ctrl+C 停止这次启动的应用进程。`docker compose stop` 停止数据库和 Redis，保留数据卷。
 
 用 `pnpm dev --help` 查看开发目标，用 `pnpm rica --help` 查看维护命令。
 

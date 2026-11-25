@@ -24,13 +24,14 @@ pnpm run db:migrate
 
 Compose starts PostgreSQL 18 and Redis 8 on local ports `55432` and `56379`. The example `DATABASE_URL` and `REDIS_URL` match those ports. Migrations use `MIGRATION_DATABASE_URL` when set and otherwise use `DATABASE_URL`. [Example environment](.env.example) · [Database roles (Chinese)](docs/database-roles.md)
 
-Start each process in a separate terminal.
+After setting up the dependencies and applying migrations, run `pnpm dev` in one terminal to start the API, worker, admin console, and simulation executor. Pass a target to run one service by itself.
 
 | Command | Purpose |
 | --- | --- |
 | `pnpm dev api` | API and health checks on `127.0.0.1:3000` by default. |
 | `pnpm dev worker` | Cognition jobs, BullMQ consumers, the outbox relay, simulation schedules, and retention cleanup. Wait for the `ready` log event. |
 | `pnpm dev admin` | Vue service status and human review. The development server proxies `/health` and `/v1` to the API. |
+| `pnpm dev simulation` | Claims approved simulation proposals and records local receipts. |
 
 Run `pnpm dev --help` for development targets and `pnpm rica --help` for maintenance commands.
 
