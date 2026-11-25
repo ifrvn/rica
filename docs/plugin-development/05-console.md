@@ -1,6 +1,8 @@
 # 5. 控制台契约、组件 API 与系统运行状况
 
-插件的 Vue 组件、浏览器请求、中文文案和视图状态放在 `plugins/<plugin-name>/console/`。在插件清单导出相应入口，再到 [控制台装配](../../apps/admin/src/app/plugin-integrations.ts)登记能力。浏览器入口可以使用共享契约及 [console-shared](../../packages/console-shared/package.json) 提供的请求与任务状态工具。检查依赖树，避免把数据库、服务端密钥存储或服务器专用客户端带进浏览器构建。
+本章面向随 Rica 构建的内置控制台组件。组件按功能放在插件的控制台目录，例如 [Newbi 的控制台目录](../../plugins/newbi/rica/console/)。包导出 `./console`，宿主在[控制台装配](../../apps/admin/src/app/plugin-integrations.ts)组合实际能力。复用 [console-shared](../../packages/console-shared/package.json) 的控件、请求与任务状态工具。浏览器依赖仅包含可公开的契约与视图逻辑。
+
+通过部署清单安装的包使用 [SDK 的声明式控制台贡献](08-package-sdk.md#控制台贡献)。
 
 ## 插件卡片和设置组件
 

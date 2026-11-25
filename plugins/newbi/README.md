@@ -1,8 +1,8 @@
 # Newbi 插件手册
 
-[Rica 管理 API](rica/management/api.md) · [Rica 服务端装配](rica/integration.md)
+[Rica 管理 API](rica/management/api.md) · [开发与部署](#开发与部署)
 
-Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单页只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi 并保存 API 接入点。每个 Agent 的密钥在平台账号池单独核验和保存。插件复用宿主的 `DATABASE_URL`，按 Rica 账号或提案取得对应密钥。
+Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单页只读事件接收。试点允许 `localhost`、`127.0.0.1` 和 `[::1]`，路径固定为 `/agent-api/v1`。在插件中心启用 Newbi 并保存 API 接入点。每个 Agent 的密钥在平台账号池单独核验和保存。默认复用宿主数据库，按 Rica 账号或提案取得对应密钥。通过部署清单可单独指定运行连接。
 
 ## 代码从哪里看起
 
@@ -15,7 +15,8 @@ Rica 提供扭笔本地 Agent API 的单次公开回复发送，以及单页只�
 | Rica 的启停、部署配置、插件目录 | [rica/deployment/](rica/deployment/) |
 | Rica 管理路由、请求与响应、操作装配 | [rica/management/](rica/management/) |
 | Rica 账号绑定、事件游标、发送许可与回执 | [rica/persistence/](rica/persistence/) |
-| Rica 管理台的配置、账号和审批界面 | [rica/console/](rica/console/) |
+| Rica 管理台的配置、账号和审批界面 | [deployment](rica/console/deployment/) · [accounts](rica/console/accounts/) · [activity](rica/console/activity/) |
+| Prisma 模型、迁移与运行连接 | [schema.prisma](prisma/schema.prisma) · [migrations](prisma/migrations/) · [Client](rica/persistence/client.ts) |
 
 `agent-api/` 只包含 Agent API 协议代码。一次读取或发送从 [Rica 管理操作](rica/management/operations.ts) 进入，经 [数据库连接与账号凭证](rica/persistence/database.ts) 启动相应的运行时组件，最后由 Agent API 客户端发出 HTTP 请求。
 
@@ -63,6 +64,25 @@ Agent API 提供 `sectionId` 时，同一账号在同一分区内需要两位不
 在「插件中心 → Newbi → Agent API 设置」可开启「后台读取并评估新讨论」。默认关闭。启用外部模型插件后，Worker 为有效绑定的 Newbi 账号轮询事件，沿用已有间隔和退避规则。后台评估只处理最近一小时接收的近期评论，同帖新事件静置 30 秒后合并评估。已有评估后，后台至少间隔五分钟再评估该帖。评估记录标明来源并可从审计打开。Worker 中断的评估会保留为超时记录，管理员可按帖重试。后台行为限于读取、评估和记录。
 
 隔离夹具验收覆盖正常发送、响应丢失、限流、锁帖和人工结案，以及事件断点续读、重复事件、空页、游标过期和暂停期间的在途响应。
+
+## 开发与部署
+
+Newbi 在 `rica_plugin_newbi` 保存凭据、事件、检查点、评估、词库和回复账本。内置和清单模式使用同一份 `schema.prisma` 和同一套 SQL 迁移。运行 `pnpm run db:generate` 生成独立 Client，运行 `pnpm run db:migrate` 或 `rica migrate` 在宿主迁移之后部署 Newbi。历史保存在 `rica_bootstrap_newbi`，未来的结构更新追加到包内 `prisma/migrations`。活动列表使用同一个 `run_activity` 视图。
+
+默认由 Rica 随附的 Newbi 装配。若需要单独指定运行时连接，可将以下条目加入 `RICA_PLUGIN_MANIFEST` 指定文件的 `plugins` 数组，版本使用 Rica 随附的包版本。
+
+```json
+{
+  "id": "newbi",
+  "package": "@ricajs/plugin-newbi",
+  "version": "0.1.0",
+  "database": { "runtimeUrlEnv": "RICA_PLUGIN_NEWBI_RUNTIME_URL" }
+}
+```
+
+连接指向宿主同一个 PostgreSQL 数据库并指定 `?schema=rica_plugin_newbi`。运行账号有 `rica_runtime` 权限，并可切换到 `rica_admin_api`、`rica_newbi_poller` 和 `rica_newbi_executor`。管理端使用独立 Client 进行插件内普通查询，例如词库读取和待处理回执统计。账号登记、凭据保存与授权审计在宿主事务中提交。普通状态视图只返回公开账号资料。读取和发送分别由受限函数核对账号、绑定版本与权限，领取相应的租约或许可。
+
+服务端装配以 [`./rica` 入口](rica/plugin.ts)为准。[管理适配器](rica/management/adapter.ts)连接管理及运行角色，[Worker](rica/worker.ts)负责后台读取与评估，两者关闭时释放连接。需要复用宿主调用时可参考[操作装配](rica/management/operations.ts)，它提供 `identifyConnector`、`pollConnector`、`sendConnector` 与 `readConnectorThread`。对其他平台，优先使用[第三方 SDK](../../docs/plugin-development/08-package-sdk.md)。
 
 ## 测试
 

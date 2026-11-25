@@ -4,7 +4,7 @@
 
 Rica 是面向多平台、多身份 AI 虚拟角色的运行系统。同一个角色可以用公司号、个人号等不同身份活动，共享核心自我。记忆默认按身份隔离，跨身份共享需要授权，平台操作受账号权限和审批规则约束。
 
-当前已通过 M1–M4 模拟验收，覆盖入站、记忆检索、人工审批、模拟回执、调度、反思、观点演化和自主目标。[开发路线图](docs/roadmap.md) · [系统设计规范](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md)
+当前已通过 M1–M4 模拟验收，覆盖入站、记忆检索、人工审批、模拟回执、调度、反思、观点演化和自主目标。[里程碑与验收记录](docs/roadmap.md) · [系统设计规范](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md)
 
 [插件开发手册](docs/plugin-development/README.md)
 
@@ -111,7 +111,7 @@ $ricaCharacter.id
 | 查看运行轨迹、审计、额度与队列 | `ADMIN` 使用「运行」和「审计」。模拟指标和隔离出箱从「运行」打开。 |
 | 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm run dev:simulation` 执行并生成本地回执。执行器复用 `DATABASE_URL`。 |
 
-控制台可配置角色、身份和平台账号，管理角色成员、记忆授权和模拟计划，并查询运行、审计与评测。本地登录账号通过 CLI 创建。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟调度](docs/simulation-scheduling.md) · [模拟执行与对账](docs/simulation-execution.md) · [控制台功能规划](docs/console-roadmap.md)
+控制台可配置角色、身份和平台账号，管理角色成员、记忆授权和模拟计划，并查询运行、审计与评测。本地登录账号通过 CLI 创建。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟运行、调度与对账](docs/simulation.md) · [控制台使用及维护](docs/console.md)
 
 | 现象 | 检查项 |
 | --- | --- |
@@ -139,7 +139,7 @@ pnpm --filter @ricajs/plugin-newbi test
 pnpm --filter @ricajs/plugin-newbi run test:integration
 ```
 
-版本切换使用新的开发数据库和 Redis 队列，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供控制台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
+开发验证使用独立数据库和 Redis。发布时先应用迁移，API、Worker 与执行器运行同一版本。分离部署时使用独立的迁移、运行、管理和执行凭据。通过 HTTPS 反向代理提供控制台静态文件，并将同源的 `/v1` 和 `/health` 转发给 API。Compose 中的开发凭据用于本地环境。[数据库角色](docs/database-roles.md) · [数据保留与恢复](docs/management-api.md#模拟数据保留期)
 
 ## 代码入口
 
@@ -147,7 +147,7 @@ pnpm --filter @ricajs/plugin-newbi run test:integration
 - `apps/worker` 提供认知任务、调度和独立模拟执行。
 - `apps/admin` 提供服务状态与人工审批界面。
 - `packages` 包含共享契约、运行逻辑和持久化实现。
-- `prisma` 包含数据模型、授权策略与迁移。
+- `prisma` 包含宿主的数据模型与迁移，插件的模型和迁移由各自的包维护。[插件架构与开发指南](docs/plugin-development/README.md)
 
 ## 开源许可
 

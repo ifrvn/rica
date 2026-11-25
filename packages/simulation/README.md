@@ -24,6 +24,6 @@ API 和 Worker 通过 `@ricajs/simulation/model`、`@ricajs/simulation/execution
 
 管理端可在「插件中心」的「模拟平台」卡片配置模拟平台。各进程优先读取部署设置，其次读取 `RICA_SIMULATED_PLATFORMS`，两处均未设置时启用 `mock-a` 和 `mock-b`。本地开发用 `pnpm run dev:simulation` 启动模拟执行器。
 
-角色管理员可在「模拟运行 → 模拟设置」调整执行额度、静默时段和其他模拟限制。默认值及生效范围见[模拟执行说明](../../docs/simulation-execution.md#模拟设置)。
+角色管理员可在「模拟运行 → 模拟设置」调整执行额度、静默时段和其他模拟限制。默认值及生效范围见[模拟执行说明](../../docs/simulation.md#模拟设置)。
 
 在工作区根目录运行 `pnpm test` 检查组件注册和部署配置。用独立的 PostgreSQL 和 Redis 应用迁移后，运行 `pnpm run test:integration` 验证入站、审批、执行及出箱恢复。数据库环境准备见[项目开发说明](../../README.md)。

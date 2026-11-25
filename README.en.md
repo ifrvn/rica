@@ -4,7 +4,7 @@
 
 Rica is a runtime for AI characters that operate across platforms and social identities. A character can act through a company account, a personal account, or another persona while keeping a unified core self. Memory is isolated by identity by default. Cross-identity sharing requires authorization, and account permissions and approval rules govern platform actions.
 
-Rica has passed M1–M4 simulation acceptance for ingestion, memory retrieval, human review, simulated receipts, scheduling, reflection, belief evolution, and autonomous goals. [Roadmap (Chinese)](docs/roadmap.md) · [Design specification (Chinese)](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md)
+Rica has passed M1–M4 simulation acceptance for ingestion, memory retrieval, human review, simulated receipts, scheduling, reflection, belief evolution, and autonomous goals. [Milestones and acceptance (Chinese)](docs/roadmap.md) · [Design specification (Chinese)](docs/多平台多身份%20AI%20虚拟角色认知与自主行为系统设计规范.md)
 
 ## 1. Install and start Rica
 
@@ -88,7 +88,7 @@ To set an identity's writing prompt, open that identity in **Character and ident
 | Inspect runs, audit records, budgets, and queue health | Open Runs or Audit as a character administrator. Runs links to simulation metrics and quarantined outbox events. |
 | Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process uses `DATABASE_URL` to record local receipts for `READY` proposals. |
 
-The console supports character, identity, and account setup, role membership, memory grants, simulation schedules, run history, audit records, and evaluation metrics. Create local sign-in accounts with the CLI. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation scheduling](docs/simulation-scheduling.md) · [Simulation execution and reconciliation](docs/simulation-execution.md) (Chinese)
+The console supports character, identity, and account setup, role membership, memory grants, simulation schedules, run history, audit records, and evaluation metrics. Create local sign-in accounts with the CLI. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation operations and scheduling](docs/simulation.md) · [Console guide](docs/console.md) (Chinese)
 
 | Symptom | What to check |
 | --- | --- |
@@ -108,7 +108,7 @@ pnpm run test:integration
 
 Integration tests use their own identity and platform fixtures to verify the approval and receipt flow. Point `DATABASE_URL` and `REDIS_URL` at dedicated test services and apply migrations before running them. `pnpm run build` writes the console's static files to `apps/admin/dist`.
 
-Use a fresh development database and Redis queue when switching versions. Run the API, worker, and executor from the same version. In a split deployment, give migration, runtime, management, and executor processes separate credentials. Serve the console through an HTTPS reverse proxy that forwards same-origin `/v1` and `/health` requests to the API. The Compose credentials are for local development. [Database roles (Chinese)](docs/database-roles.md) · [Retention and recovery (Chinese)](docs/management-api.md#模拟数据保留期)
+Use a dedicated database and Redis for development verification. Run the API, worker, and executor from the same version. In a split deployment, give migration, runtime, management, and executor processes separate credentials. Serve the console through an HTTPS reverse proxy that forwards same-origin `/v1` and `/health` requests to the API. The Compose credentials are for local development. [Database roles (Chinese)](docs/database-roles.md) · [Retention and recovery (Chinese)](docs/management-api.md#模拟数据保留期)
 
 ## Project structure
 
@@ -116,7 +116,7 @@ Use a fresh development database and Redis queue when switching versions. Run th
 - `apps/worker` contains cognition jobs, schedules, and the separate simulation executor.
 - `apps/admin` contains the service status and human review interfaces.
 - `packages` contains shared contracts, runtime logic, and persistence.
-- `prisma` contains the data model, authorization policies, and migrations.
+- `prisma` contains the host data model and migrations. Plugins maintain their own schemas and migrations. [Plugin development guide (Chinese)](docs/plugin-development/README.md)
 
 ## License
 

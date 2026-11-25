@@ -1,5 +1,7 @@
 # 2. 运行时契约、API 与实现示例
 
+本章记录宿主内置的模拟适配器和模型提供方。通过清单装配的后台 Worker 见[包 SDK](08-package-sdk.md#worker-生命周期)。
+
 ## 生命周期与注册
 
 组件实现版本用于依赖追踪和审批绑定。更新会影响已批准操作的实现时，验证旧许可如何处理。
@@ -156,7 +158,7 @@ export const acmeSimulation: PluginDefinition<PlatformAdapter> = {
 
 包清单导出 `./index.ts`，声明 `@ricajs/simulation`、`@ricajs/plugin-host` 与 `zod` 依赖。宿主将适配器加入 [模拟运行时的定义列表](../../apps/runtime-plugins.ts)之后，可用 `startPluginHost` 和内存夹具验收 `normalize`，覆盖非法时间、非法载荷和最大长度。
 
-运行时注册完成后，完整的模拟账号、审批和执行接入还需要扩展 [simulationPlatformId](../../packages/contracts/management/index.ts) 及数据库中的模拟平台约束。检查 [模拟执行规则](../simulation-execution.md)，用同一允许列表配置 API、Worker 和模拟执行器。宿主复核已绑定的远端账号、身份、会话和适配器版本，适配器负责校验并返回稳定的来源键和远端标识。
+运行时注册完成后，完整的模拟账号、审批和执行接入还需要扩展 [simulationPlatformId](../../packages/contracts/management/index.ts) 及数据库中的模拟平台约束。检查 [模拟执行规则](../simulation.md)，用同一允许列表配置 API、Worker 和模拟执行器。宿主复核已绑定的远端账号、身份、会话和适配器版本，适配器负责校验并返回稳定的来源键和远端标识。
 
 ## ModelProvider
 

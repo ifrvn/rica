@@ -2,6 +2,8 @@
 
 [管理插件](#managementplugin) · [路由与事务](#路由事务与错误助手) · [HTTP 请求约定](#请求约定) · [部署配置](#部署与配置存储) · [进程状态](#进程状态报告) · [平台账号](#平台账号生命周期)
 
+本章记录宿主管理 HTTP 与内置插件装配。第三方管理读取、写命令和账号扩展见[包 SDK](08-package-sdk.md)。
+
 ## 挂载管理 API
 
 在插件包导出返回 [`ManagementPlugin`](../../packages/persistence/management/http.ts) 的工厂，由 [API 启动入口](../../apps/api/main.ts)传入已装配的数据库、连接配置和授权函数。工厂返回稳定的 `id` 与 `registerRoutes(app)`。插件使用 `app.openapi` 声明输入、响应和错误，路由路径以管理应用为根。宿主统一挂载在 `/v1` 下，运行时的接口描述见登录后的 `GET /v1/openapi.json`。新路径使用插件名作为命名空间，并确认方法与路径组合属于该插件。
@@ -53,7 +55,7 @@ type ManagementPlugin = {
 | `account.remove` | 未绑定的登记已在当前事务中删除后。 | 清理平台专用数据。需要处理同一远端账号仍被引用的情况。 |
 | `account.verifyResume` | 恢复外部账号前。 | 核对凭证、启用状态和远端账号绑定。拒绝时抛出 `ManagementError`，宿主保持原状态。 |
 
-`registerRoutes` 必填。仅提供投影或账号回调时，可用空函数。宿主拒绝同名投影字段，扩展值由声明的 schema 校验。完整可运行的路由与状态投影见[从零实现插件](07-worked-example.md)。
+`registerRoutes` 必填。仅提供投影或账号回调时，可用空函数。宿主拒绝同名投影字段，扩展值由声明的 schema 校验。内置实现可参考 [Newbi 的管理路由](../../plugins/newbi/rica/management/routes.ts)。
 
 ## 响应投影
 
@@ -128,13 +130,13 @@ Invoke-Rica Get "$ricaCharacter/plugins"
 
 ## 插件自定义路由
 
-插件在 `registerRoutes` 中声明相对路径，宿主统一添加 `/v1` 前缀。业务权限、输入 schema 和响应体由路由定义。以下请求对应[从零实现的管理插件](07-worked-example.md)，完成装配后即可调用。
+内置插件在 `registerRoutes` 中声明相对路径，宿主统一添加 `/v1` 前缀。业务权限、输入 schema 和响应体由路由定义。启用管理 API 后，可在登录会话中查看 OpenAPI 契约。
 
 ```powershell
-Invoke-Rica Post "$ricaCharacter/demo-echo/preview" -Body @{ text = '  测试预览  ' }
+Invoke-Rica Get '/v1/openapi.json'
 ```
 
-该请求返回 HTTP 200 和 `{ "preview": "测试预览" }`。为此端点调用 `GET /v1/openapi.json` 可以查看角色 UUID 参数、请求体和响应 schema。浏览器调用使用同源会话。服务端的角色权限仍由端点检查。
+通过部署清单安装的管理扩展使用[插件 SDK 的读取和命令能力](08-package-sdk.md#包能力参考)。浏览器调用使用同源会话，服务端继续按角色和业务资源检查权限。
 
 ## 部署与配置存储
 

@@ -1,16 +1,55 @@
-# 第三方插件包与 SDK 重构
+# 第三方插件 SDK 与远程服务协议
 
-Rica 支持部署者选定并固定版本的受信包。部署清单是 API、Worker、迁移任务和前端构建的共同输入。新版 SDK 按能力独立演进，公共签名使用可序列化的数据，插件各自管理 Prisma schema 和生成的 Client。
+通过部署清单安装固定版本 npm 包，或通过 HTTP 接入独立服务。能力选择、数据边界和权限原则见[插件架构与最佳实践](01-architecture.md)。
 
-当前实现覆盖部署清单加载、管理读取和写命令、Worker 生命周期、独立 Prisma 迁移、统一活动分页和账号接入。其余能力按下表推进。部署者可用以下方式从部署目录配置已安装的包。
+## 最小可运行的 npm 包
+
+在插件项目中将以下 TypeScript 入口编译为 ESM，例如 `dist/rica.js`。开发时依赖与目标 Rica 版本匹配的 `@ricajs/plugin-host`，包内通过 `exports` 暴露 `./package.json` 和 `./rica`，默认条件指向编译后的入口。
 
 ```json
-{"version": 1, "plugins": [{"id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0", "config": {"label": "Acme"}}]}
+{
+  "name": "@acme/rica-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./package.json": "./package.json",
+    "./rica": "./dist/rica.js"
+  }
+}
 ```
 
-包的 `exports` 同时暴露 `./package.json` 和 `./rica`，后者使用默认条件指向编译后的 JavaScript 模块。模块导出 `ricaPlugin`，可用 `@ricajs/plugin-host/sdk` 的 `RicaPlugin` 类型检查。插件至少贡献 `management`、`commands`、`worker`、`activity`、`accounts` 或 `retention` 中的一种能力。API 和 Worker 都会读取包入口，各自调用对应的工厂。模块顶层仅声明能力，将连接和任务启动放到对应的生命周期内。
+```ts
+import type { RicaPlugin } from '@ricajs/plugin-host/sdk'
 
-`management(config, context)` 可异步创建实例，返回 `read(request, services)` 和可选的 `stop()`。`request` 包含角色 ID、调用者 ID、插件内路径和保留重复项的查询参数。`read` 返回 JSON，宿主只转发已通过权限校验的 GET 请求。插件查询自己的数据库时仍应使用已授权的 `characterId` 筛选数据。
+export const ricaPlugin = {
+  id: 'acme',
+  sdkVersion: 1,
+  management: () => ({
+    async read({ path, characterId }) {
+      if (path === '/summary') return { fields: [{ label: '角色 ID', value: characterId }] }
+      return null
+    },
+  }),
+  console: { title: 'Acme', summaryPath: '/summary' },
+} satisfies RicaPlugin
+```
+
+部署者在清单所在项目安装该包的固定版本，并设置 `RICA_PLUGIN_MANIFEST` 指向以下 JSON 文件。使用经过审核的发布包或内部制品源。
+
+```json
+{
+  "version": 1,
+  "plugins": [{ "id": "acme", "package": "@acme/rica-plugin", "version": "1.0.0" }]
+}
+```
+
+启动管理 API 后，用[已登录的会话](03-management.md#建立-powershell-会话)请求 `GET /v1/characters/{characterId}/plugins/acme/summary`。已获准读取角色的成员会收到示例摘要。控制台也会在该角色的插件页展示卡片。需要私有存储或写命令时，再添加下文能力。
+
+## 包能力参考
+
+插件至少声明 `management`、`commands`、`worker`、`activity`、`accounts` 或 `retention` 中的一种。API 和 Worker 各自调用所需能力的工厂。
+
+`management(config, context)` 可异步创建实例，返回 `read(request, services)` 和可选的 `stop()`。`request` 包含角色 ID、调用者 ID、插件内路径和保留重复项的查询参数。宿主校验会话和角色权限后转发 GET 请求。插件读自己的数据时继续按授权范围筛选。包处理并返回 JSON。
 
 ### 管理写命令
 
@@ -38,6 +77,16 @@ commands: [
 
 需要建表的包另行导出 `./rica/prisma`，指向该包的 Prisma 配置文件。其 `schema` 和 `migrations.path` 使用包内路径，`datasource.url` 读取 `process.env.RICA_PLUGIN_DATABASE_URL`。发布包应包含用于迁移的 schema、迁移目录和运行时使用的独立 Client。
 
+若 Prisma 配置文件与 schema 同在 `prisma/`，配置可以写成：
+
+```ts
+export default {
+  schema: './schema.prisma',
+  migrations: { path: './migrations' },
+  datasource: { url: process.env.RICA_PLUGIN_DATABASE_URL },
+}
+```
+
 清单条目增加 `database` 字段。部署任务读取 `migrateUrlEnv` 指定的变量，API 和 Worker 在装配当前进程使用的能力时，将 `runtimeUrlEnv` 指定的 URL 通过 `context.databaseUrl` 传给插件。两个变量应由不同的 PostgreSQL 登录提供。清单本身只记录变量名。
 
 ```json
@@ -59,7 +108,7 @@ GRANT USAGE ON SCHEMA rica_plugin_acme TO rica_acme_runtime;
 
 插件作者在包内编写表结构、索引和运行权限的迁移，生成该包自己的 Prisma Client。部署者在清单所在项目安装固定版本，配置两个连接变量，再运行 `rica migrate`。升级时更新安装版本和清单，继续使用同一个迁移 URL，Prisma 根据该 schema 的迁移记录应用新增迁移。
 
-首次接管已有插件 schema 时，可在 `database` 中声明 `"migrationJournal": "separate"`。迁移 URL 改用 `?schema=rica_migrate_acme`，运行时 URL 仍指向 `rica_plugin_acme`。由部署者创建迁移记录 schema 并授权迁移登录，迁移 SQL 显式限定业务对象的 schema。已经记录过迁移的部署应持续使用原来的记录位置。
+需要单独存放迁移记录时，可从首次部署起声明 `"migrationJournal": "separate"`。迁移 URL 使用 `?schema=rica_migrate_acme`，运行时 URL 指向 `rica_plugin_acme`。部署者创建迁移记录 schema 并授权迁移登录，迁移 SQL 显式限定业务对象的 schema。已经记录过迁移的部署应持续使用原来的记录位置。
 
 ### 统一运行活动
 
@@ -98,34 +147,15 @@ accounts: {
 - `remove` 可选，省略时仅删除宿主的未绑定登记。省略 `verifyResume` 时，宿主拒绝激活该平台账号。可选的 `profiles` 声明只读视图，提供 `character_id uuid`、`account_id uuid`、`profile jsonb`，每个账号最多一行。宿主分页后批量查视图，并通过 `pluginProfile` 返回公开资料。
 - `services.readAccounts(ids)` 供已声明 `accounts` 的插件在管理 `read` 回调中使用。每次最多 100 个 UUID，只返回当前角色在该插件平台下的已绑定账号，字段包含身份、远端标识、状态和绑定版本。每次查询重新检查调用者的角色访问权限。
 
-内置 Newbi 的账号池登记和直接绑定已走相同的两阶段宿主命令。它先核对远端 Agent，提交前再确认部署中的接入点，账号登记和凭据保存仍作为一次本地写入完成。
+### 内置样例
 
-内置 Newbi 的凭据、公开账号资料、事件、轮询检查点、讨论评估、词库和回复执行账本存放在 `rica_plugin_newbi`。Newbi 包在宿主迁移之后创建这些对象，并交给当前数据库专用的 Newbi 所有者角色。Newbi 的迁移记录保存在 `rica_bootstrap_newbi`。重构后的开发环境从空数据库初始化。内置模式和清单模式使用同一个插件保留期清理函数。轮询角色通过 Newbi 所有者管理的受限函数领取轮询租约、提交游标和事件页。函数通过宿主的 Newbi 绑定接口加锁并核对账号权限和版本，以便停用账号时阻止在途事件提交。轮询和发送角色分别通过插件 schema 中的受限函数取用凭据。宿主只提供启用中的 Newbi 账号标识和绑定地址，插件用这些字段匹配自己的凭据。发送角色通过 Newbi 所有者管理的函数查询执行目标、领取发送许可和记录回执。领取许可仍需通过宿主绑定接口加锁并核对授权，确认回执仍按原发送尝试入账。只有管理角色可关闭待对账的记录。评估结果与词库证据在同一事务中提交，证据随来源评估到期清理。
-
-内置和清单模式共用 Newbi 的 `prisma/migrations`，统一活动都通过 `rica_plugin_newbi.run_activity` 读取。运行 `rica migrate` 时由宿主的迁移连接应用一次。已有开发库沿用原迁移记录。
-
-如需用清单配置 Newbi 的运行时连接，请登记与 Rica 随附版本一致的包。清单只需要运行时连接变量。
-
-```json
-{
-  "id": "newbi",
-  "package": "@ricajs/plugin-newbi",
-  "version": "0.1.0",
-  "database": {
-    "runtimeUrlEnv": "RICA_PLUGIN_NEWBI_RUNTIME_URL"
-  }
-}
-```
-
-清单里的 Newbi Worker 和管理入口都使用 `RICA_PLUGIN_NEWBI_RUNTIME_URL`，连接宿主数据库并指定 `?schema=rica_plugin_newbi`。运行时登录需要现有的 `rica_runtime` 角色权限，并可以切换到 `rica_admin_api`、`rica_newbi_poller` 和 `rica_newbi_executor`。后台轮询和评估继续读取控制台的接入点、后台评估开关与外部模型状态。未登记 Newbi 包时，宿主使用内置活动和清理，以及同一套 Worker 与管理入口。
-
-Newbi 的管理入口沿用 `/v1/characters/{characterId}/newbi/…`。宿主只允许固定包名的 Newbi 注册这组既有路由，并在启动时确认包连接的数据库与宿主一致。登记和审批沿用宿主事务、授权、审计与幂等规则。发送仍需通过受限函数领取许可。该兼容入口供内置集成使用，第三方管理扩展沿用公开的 SDK 协议。
+[Newbi 开发与部署](../../plugins/newbi/README.md#开发与部署)提供了包内 Prisma Client、共用迁移、活动视图和受限数据库函数的实例。
 
 ## 部署和生命周期
 
-- `RICA_PLUGIN_MANIFEST` 指向部署目录中的 JSON 文件。清单版本为 `1`。第一批接入项包含 `id`、npm `package`、固定 `version` 和 JSON `config`。清单中省略某个包即停用其对外能力。部署者通过锁文件固定实际安装内容。
-- 宿主从清单所在目录解析插件包的 `./rica` 导出，核对包清单中的名称和版本，再载入导出的 `ricaPlugin`。插件声明 SDK 版本和能力，宿主拒绝重复 ID、版本不符或不支持的能力。API 扩展只挂在 `/v1/characters/{characterId}/plugins/{pluginId}/…` 下，复用现有会话、来源、请求大小和角色成员权限检查。
-- 数据库阶段在启动服务前先应用宿主迁移，再应用启用包的迁移。插件可用自己的 Prisma 迁移目录。部署配置给每个插件分配迁移身份和运行时身份，默认只授予其 PostgreSQL schema。迁移历史在各自命名空间记录。发布任务负责串行化迁移和版本切换，失败时中止部署。停用和卸载保留数据，清除数据由独立维护操作处理。
+- `RICA_PLUGIN_MANIFEST` 指向部署目录中的 JSON 文件。清单版本为 `1`。每项声明 `id`、npm `package`、固定 `version` 和可选 JSON `config`。移出清单并重启对应进程后，该清单包的能力停止装配。部署者通过锁文件固定实际安装内容。
+- 宿主从清单所在目录解析插件包的 `./rica` 导出，核对包清单中的名称和版本，再载入导出的 `ricaPlugin`。插件声明 SDK 版本和能力，宿主拒绝重复 ID、版本不符或不支持的能力。管理读取和命令通过角色下的插件路由提供，复用会话、来源、请求大小和成员权限检查。账号能力复用宿主账号池。
+- 部署任务按上文顺序执行迁移，再启动同一发布版本的服务。迁移失败时中止部署。移除清单条目只影响装配，插件数据由独立维护操作管理。
 - 插件代码在宿主进程中按受信代码部署。需要代码隔离的接入使用独立进程或远程服务。
 
 ## 控制台贡献
@@ -195,21 +225,3 @@ console: {
 独立服务用自己的令牌调用 `POST /v1/plugin-tasks/{pluginId}/accounts/{accountId}/claim` 并提交 `{ bindingVersion }`。响应是 `{ task: null }` 或一条含 `id`、`type`、`characterId`、`accountId`、`bindingVersion`、`data`、`lease` 和 `leaseUntil` 的任务。任务有效期 15 分钟，每次领取最多租用 30 秒，租约到期后可重新领取。服务以任务 ID 去重，按可重试任务设计。
 
 向 `POST /v1/plugin-tasks/{pluginId}/accounts/{accountId}/{taskId}/receipt` 提交 `{ bindingVersion, lease, status, result }`。状态为 `SUCCEEDED` 或 `FAILED`，结果使用 JSON。相同回执可安全重试，旧租约或不同内容返回 `409`。账号撤销、身份或角色停用以及授权版本变化会使待办任务失效。任务协议用于可重试的读取和计算，真实发送仍通过宿主审批和执行许可。
-
-## 数据接口
-
-1. **读能力**以业务对象为单位。宿主在授权后提供按账号批量查询的能力，插件返回公开资料；对展示字段沿用先分页再补资料的模式。任务资格判断由数据库在排序和限制条数前完成。
-2. **事务能力**按业务操作发放。登记、解绑、审批和任务领取使用同一个宿主事务。需要插件内写入时，宿主调用声明过的、带权限边界的数据库操作，限制到当前角色和账号。参数用绑定传递。插件日常查询可继续用自己的 Prisma Client。
-3. **活动和统一列表**使用版本化记录结构。宿主在同一个查询中合并记录，使用 `(created_at, id, kind, platform)` 全序和微秒时间精度。远程插件以事件 ID 幂等发布摘要，由宿主持久化并加入统一读模型。
-4. **可选能力**按清单登记管理 API、Worker、公开状态、UI 构建入口及事件订阅。远程活动事件包含版本、作用域和事件 ID。审批、任务领取和真实执行的许可仍由宿主控制。
-
-## 实施顺序与验收
-
-| 阶段 | 验收 |
-| --- | --- |
-| 包装配和 SDK | 仓库外的包从部署目录加载。角色成员能使用该插件的管理路由，越权请求在调用插件前被拒绝。未配置清单时可按原流程启动。 |
-| 插件迁移及第二种能力 | 独立插件使用自己的 Client 建表、读写并升级，宿主生成 Client 不包含其模型。再用 Worker 或只读连接器跑通能力登记、启动失败和停机。 |
-| 数据协议与 Newbi 迁移 | 先落地账号、事务和统一活动协议，再将 Newbi 私有表、函数、权限和清理任务迁入插件。验证登记原子性、越权隔离、停用后禁止领取、发送恢复、跨源分页和空库初始化。 |
-| 独立服务 | 验证远程插件只凭已授权业务能力接入，并通过事件贡献统一列表。 |
-
-开发验收使用空的专用 PostgreSQL 和 Redis。已有数据的部署需要对迁移历史、数据、外键和执行账本另行验证升级路径。

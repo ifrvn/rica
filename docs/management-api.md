@@ -84,9 +84,9 @@ Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
 | `GET /c/identities/{identityId}/beliefs/{beliefId}`、`PUT /c/identities/{identityId}/beliefs/{beliefId}` | ADMIN 读取最新版本，或通过 `revision` 读取指定版本。ADMIN 使用 If-Match 提交新的证据集合。 |
 | `POST /c/identities/{identityId}/beliefs/{beliefId}/restore` | ADMIN 使用 If-Match 和理由恢复曾生效的历史版本。恢复成功会追加新版本。 |
 | `GET /c/memberships`、`POST /c/memberships` | GET 使用 `after` 按用户名分页，返回 `{ items: [{ subject }], nextCursor }`。POST 带幂等键提交 `{ subject, action, reason }`，`action` 为 `GRANT` 或 `REVOKE`。角色必须保留至少一名管理员。 |
-| `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation-scheduling.md) |
+| `GET /c/schedules`、`POST /c/schedules`、`PUT /c/schedules/{scheduleId}` | ADMIN 查询、创建或更新模拟计划。[模拟调度说明](simulation.md#计划调度) |
 | `GET /c/commitment-receipts` | ADMIN 查询当前角色尚未登记承诺的已确认模拟回执，可用 `runId` 筛选。响应包含负责身份、平台、对象和回执时间。 |
-| `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记和编辑承诺事项、截止时间和协作身份，也可延期或关闭。负责人和提醒范围由已确认模拟回执确定。[模拟调度与承诺](simulation-scheduling.md#承诺提醒) |
+| `GET /c/commitments`、`POST /c/commitments`、`PUT /c/commitments/{commitmentId}` | ADMIN 查询、登记和编辑承诺事项、截止时间和协作身份，也可延期或关闭。负责人和提醒范围由已确认模拟回执确定。[模拟调度与承诺](simulation.md#承诺提醒) |
 | `GET /c/runs`、`POST /c/runs` | ADMIN 按最近运行分页。用幂等键提交 `accountId`、`message`，并携带 `chatId`（UUID）和 `speaker`（群员昵称）时，在当前角色的模拟群聊中排队。每次发言以本次提交的接收账号创建运行。首次发言时创建群聊和群员。仅提交账号和消息时发起单条模拟。 |
 | `GET /c/simulation-chats`、`GET /c/simulation-chats/{chatId}` | ADMIN 分页查看当前角色的会话。详情返回群员、最近 40 次发言各自的接收账号和身份，以及保留期内已确认的模拟回复。 |
 | `GET /c/runs/{runId}/replay`、`GET /c/monitoring` | ADMIN 查询脱敏运行轨迹和当前角色的积压。 |
@@ -143,7 +143,7 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 模拟运行回放的 `executionWait` 返回当前执行许可的等待原因和可计算的最早执行时间。账号有未决执行时无法确定时间。提案会在等待期内过期时也省略时间。执行前拦截或草稿跳过使用 `stateReason` 说明原因。
 
-用本地账号登录 Vue 控制台，在「审批」选择角色。批准将模拟提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation-execution.md)
+用本地账号登录 Vue 控制台，在「审批」选择角色。批准将模拟提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation.md)
 
 「自动审批设置」按角色生效，初始关闭。管理员可编辑提示词或恢复默认。新产生的合格公开回复使用插件中心配置的部署默认外部模型。审核模型收到待发正文和该讨论的公开内容。私聊、近似重复提示、拟定计划或承诺的模拟提案进入人工复审。
 
