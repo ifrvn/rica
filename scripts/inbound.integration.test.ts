@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { inspect } from 'node:util'
 import { Queue } from 'bullmq'
 import { Redis } from 'ioredis'
 import { outboxQueueName, startOutboxWorker } from '../apps/worker/outbox.js'
@@ -12,6 +13,7 @@ import { Prisma, type MemoryPurpose, type MemoryScope, type MemoryVisibility } f
 import { deriveMemory, listAuthorizedMemoryCandidates, recallAuthorizedMemories, revokeMemoryAccess } from '@ricajs/persistence/memory'
 import { createSimulatedPlatformIngress, ingestSimulatedEvent } from '@ricajs/simulation/inbound'
 import { loadConfig } from '@ricajs/runtime/config'
+import { logger } from '@ricajs/runtime/logging'
 import { simulatedModel, localSimulationModel } from '@ricajs/simulation/model'
 import { generateSimulatedDraft, processSimulatedDraft } from '@ricajs/simulation/draft'
 
@@ -1214,7 +1216,7 @@ test('private and public prompt injection cannot switch account or leak evidence
   }
 
   const runtime = testDatabaseRole('rica_runtime')
-  const logs = (['warn', 'error', 'info', 'log'] as const).map((level) => t.mock.method(console, level, () => {}))
+  const logs = (['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const).map((level) => t.mock.method(logger, level))
   const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 1 })
   const queue = new Queue(outboxQueueName, { connection: redis })
   const runs: { id: string; conversationId: string; contactId: string | null; message: string }[] = []
@@ -1271,7 +1273,9 @@ test('private and public prompt injection cannot switch account or leak evidence
     assert.ok(recordedFailure)
     assert.equal(recordedFailure.reason, 'Outbox job failed')
     assert.ok(recordedFailure.stack.length > 0)
-    const runtimeLogs = JSON.stringify(logs.flatMap((logger) => logger.mock.calls.map(({ arguments: args }) => args)))
+    const runtimeLogs = inspect(logs.flatMap((log) => log.mock.calls.map(({ arguments: args }) => args)), {
+      depth: null, maxArrayLength: Infinity, maxStringLength: Infinity,
+    })
     assert.match(runtimeLogs, /job_failed/)
     assert.ok(!runtimeLogs.includes(text))
     for (const captured of [runtimeLogs, JSON.stringify(recordedFailure)]) {
