@@ -8,6 +8,8 @@ import { associateAccount, authorize, denyPermission, registerAccount, makePage,
 import { autoReviewHandoff, autoReviewerId, missingAutoReviewHandoff, type AutoReviewOutcome, type AutoReviewSettings, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { lockAutoReview, readAutoReviewSettings } from '@ricajs/persistence/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
+import { Prisma as NewbiPrisma } from '../../generated/client.js'
+import type { NewbiManagementDatabase, NewbiPrismaClient } from './client.js'
 
 const executorKey = newbiExecutorKey(newbiExecutorIdentity)
 
@@ -123,7 +125,7 @@ export async function getNewbiReply(db: PrismaClient, scope: Scope, id: string) 
 }
 
 export async function autoReviewNewbiReply(
-  db: PrismaClient, characterId: string, id: string, requestId: string, review: ReviewPublicReply,
+  { host: db, newbi }: NewbiManagementDatabase, characterId: string, id: string, requestId: string, review: ReviewPublicReply,
   readThread: (target: Pick<z.infer<typeof newbiReplyView>, 'accountId' | 'agentId' | 'endpoint' | 'postId'>) =>
     Promise<z.infer<typeof newbiThreadView> | undefined>,
   requireConnector: (endpoint: string) => Promise<void>,
@@ -186,11 +188,11 @@ export async function autoReviewNewbiReply(
       comments: thread.comments.map(({ content }) => content) })
     return review(policy, { platform: 'newbi', draft: current.content, discussion },
       { characterId, identityId: current.identityId, platform: 'newbi' }, async (systemPrompt, model) => {
-        const prompt = JSON.stringify({ model, systemPrompt, at: new Date().toISOString(), policyVersion: policy.version })
-        const count = await db.$executeRaw`
-          UPDATE rica_plugin_newbi.replies SET review_prompt = ${prompt}::jsonb
-          WHERE ${waiting} AND review_digest = ${current.reviewDigest}
-            AND auto_review_version = ${policy.version} AND review_prompt IS NULL`
+        const { count } = await newbi.reply.updateMany({
+          where: { id, characterId, status: 'WAITING', reviewDigest: current.reviewDigest,
+            autoReviewVersion: policy.version, reviewPrompt: { equals: NewbiPrisma.DbNull } },
+          data: { reviewPrompt: { model, systemPrompt, at: new Date().toISOString(), policyVersion: policy.version } },
+        })
         if (!count) throw new Error('Newbi proposal no longer accepts a model call')
       })
   }
@@ -318,12 +320,14 @@ export async function readNewbiConnections(db: PrismaClient, characterId: string
   return { ...active, ...deliveries, lastReadAt: active.lastReadAt?.toISOString() ?? null }
 }
 
-export async function readPendingDeliveries(db: PrismaClient, characterId: string) {
-  const [counts] = await db.$queryRaw<[{ inFlight: number; unknown: number }]>`
-    SELECT (count(*) FILTER (WHERE status = 'IN_FLIGHT'))::integer AS "inFlight",
-      (count(*) FILTER (WHERE status = 'UNKNOWN'))::integer AS "unknown"
-    FROM rica_plugin_newbi.replies WHERE character_id = ${characterId}::uuid AND status IN ('IN_FLIGHT', 'UNKNOWN')`
-  return counts
+export async function readPendingDeliveries(db: NewbiPrismaClient, characterId: string) {
+  const counts = await db.reply.groupBy({
+    by: ['status'], where: { characterId, status: { in: ['IN_FLIGHT', 'UNKNOWN'] } }, _count: { _all: true },
+  })
+  return {
+    inFlight: counts.find(({ status }) => status === 'IN_FLIGHT')?._count._all ?? 0,
+    unknown: counts.find(({ status }) => status === 'UNKNOWN')?._count._all ?? 0,
+  }
 }
 
 export async function checkNewbiAccount(db: PrismaClient, scope: Scope, accountId: string, verify: (endpoint: string, agentId: string) => Promise<boolean>) {

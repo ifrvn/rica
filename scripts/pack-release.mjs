@@ -71,7 +71,9 @@ for (const [index, dir] of directories.entries()) {
     if (entries['./rica/prisma']) {
       const configDirectory = dirname(entries['./rica/prisma'])
       const relativeDirectory = join(dir, configDirectory)
-      copy(join(relativeDirectory, 'schema.prisma'), join(destination, configDirectory, 'schema.prisma'))
+      for (const schema of readdirSync(relativeDirectory).filter((file) => file.endsWith('.prisma'))) {
+        copy(join(relativeDirectory, schema), join(destination, configDirectory, schema))
+      }
       copy(join(relativeDirectory, 'migrations'), join(destination, configDirectory, 'migrations'))
     }
     if (entries['./rica/bootstrap']) {

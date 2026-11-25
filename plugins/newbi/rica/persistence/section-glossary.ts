@@ -1,11 +1,9 @@
 import { normalizeGlossaryText, type supportedGlossaryCandidates } from '@ricajs/contracts/glossary'
-import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
+import { Prisma } from '@ricajs/persistence/prisma'
 import { newbiGlossaryReference } from '../management/contracts.js'
+import type { NewbiPrismaClient } from './client.js'
 
 const maxSectionSamples = 120
-type SectionSample = {
-  id: string; term: string; termKey: string; meaning: string; meaningKey: string; tone: string; authorKey: string; postId: string
-}
 
 function activeSectionSamples(accountId: string, sectionId: number, cutoff: Date) {
   return Prisma.sql`
@@ -14,12 +12,15 @@ function activeSectionSamples(accountId: string, sectionId: number, cutoff: Date
     WHERE s.account_id = ${accountId}::uuid AND s.section_id = ${sectionId} AND a.created_at > ${cutoff}`
 }
 
-export async function readSectionGlossary(db: PrismaClient, accountId: string, sectionId: number, cutoff: Date) {
-  const samples = await db.$queryRaw<SectionSample[]>`
-    SELECT s.id, s.term, s.term_key AS "termKey", s.meaning, s.meaning_key AS "meaningKey", s.tone,
-      s.author_key AS "authorKey", a.post_id AS "postId"
-    ${activeSectionSamples(accountId, sectionId, cutoff)}
-    ORDER BY s.id LIMIT ${maxSectionSamples}`
+export async function readSectionGlossary(db: NewbiPrismaClient, accountId: string, sectionId: number, cutoff: Date) {
+  const rows = await db.$transaction((tx) => tx.sectionGlossarySample.findMany({
+    where: { accountId, sectionId, sourceAssessment: { createdAt: { gt: cutoff } } },
+    select: { id: true, term: true, termKey: true, meaning: true, meaningKey: true, tone: true, authorKey: true,
+      sourceAssessment: { select: { postId: true } } },
+    orderBy: { id: 'asc' },
+    take: maxSectionSamples,
+  }), { isolationLevel: 'RepeatableRead' })
+  const samples = rows.map(({ sourceAssessment, ...sample }) => ({ ...sample, postId: sourceAssessment.postId }))
   const terms = new Map<string, Map<string, typeof samples>>()
   for (const sample of samples) {
     const meanings = terms.get(sample.termKey) ?? new Map<string, typeof samples>()

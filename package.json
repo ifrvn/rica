@@ -10,7 +10,7 @@
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
   },
   "scripts": {
-    "db:generate": "prisma generate",
+    "db:generate": "prisma generate && prisma generate --schema plugins/newbi/prisma/schema.prisma",
     "db:migrate": "tsx scripts/migrate.ts",
     "dev:api": "tsx watch apps/api/main.ts",
     "dev:worker": "tsx watch apps/worker/main.ts",

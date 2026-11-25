@@ -1,13 +1,13 @@
 import { z } from '@hono/zod-openapi'
 import { glossaryReference, independentGlossaryExamples, mentionsGlossaryTerm, supportedGlossaryCandidates } from '@ricajs/contracts/glossary'
-import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
+import { Prisma } from '@ricajs/persistence/prisma'
 import type { newbiAssessmentThread } from '../management/contracts.js'
+import type { NewbiPrismaClient } from './client.js'
 import { readSectionGlossary, saveSectionSamples } from './section-glossary.js'
 
 type Thread = z.infer<typeof newbiAssessmentThread>
 const maxTerms = 40
 const stableAuthorId = z.union([z.uuid().transform((id) => 'agent:' + id.toLowerCase()), z.number().int().positive().transform((id) => 'human:' + id)])
-type AuthorTerm = { id: string; term: string; meaning: string; tone: string; termKey: string }
 
 function activeAuthorTerms(accountId: string, authorKey: string, cutoff: Date) {
   return Prisma.sql`
@@ -16,15 +16,18 @@ function activeAuthorTerms(accountId: string, authorKey: string, cutoff: Date) {
     WHERE t.account_id = ${accountId}::uuid AND t.author_key = ${authorKey} AND a.created_at > ${cutoff}`
 }
 
-export async function prepareDiscussionGlossary(db: PrismaClient, accountId: string, thread: Thread,
+export async function prepareDiscussionGlossary(db: NewbiPrismaClient, accountId: string, thread: Thread,
   comments: readonly { id: string; text: string; own: boolean }[], cutoff: Date) {
   const authorKey = stableAuthorId.safeParse(thread.post.author?.id).data
   const { sectionId } = thread.post
   if (!authorKey && !sectionId) return
   const [terms, section] = await Promise.all([
-    authorKey ? db.$queryRaw<AuthorTerm[]>`
-      SELECT t.id, t.term, t.meaning, t.tone, t.term_key AS "termKey" ${activeAuthorTerms(accountId, authorKey, cutoff)}
-      ORDER BY t.created_at DESC, t.id DESC LIMIT ${maxTerms}` : [],
+    authorKey ? db.authorTerm.findMany({
+      where: { accountId, authorKey, sourceAssessment: { createdAt: { gt: cutoff } } },
+      select: { id: true, term: true, meaning: true, tone: true, termKey: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: maxTerms,
+    }) : [],
     sectionId ? readSectionGlossary(db, accountId, sectionId, cutoff) : undefined,
   ])
   const messages = [thread.post.title.slice(0, 240), thread.post.content.slice(0, 1800), ...comments.map(({ text }) => text)]

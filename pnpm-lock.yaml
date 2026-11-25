@@ -401,6 +401,9 @@ importers:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.16)(zod@4.6.7)
+      '@prisma/adapter-pg':
+        specifier: ^7.10.1
+        version: 7.10.1
       '@prisma/client':
         specifier: ^7.10.1
         version: 7.10.1(@typescript/typescript6@6.0.2)(prisma@7.10.1(@types/node@24.19.2)(@types/react@19.3.0)(@typescript/typescript6@6.0.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))

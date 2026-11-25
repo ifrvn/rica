@@ -1,3 +1,155 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated"
+}
+
 datasource db {
   provider = "postgresql"
+  schemas  = ["rica_plugin_newbi"]
+}
+
+// Bootstrap SQL owns the DDL, including foreign keys to host tables.
+model AuthorTerm {
+  id                 String               @id(map: "newbi_author_terms_pkey") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId          String               @map("account_id") @db.Uuid
+  authorKey          String               @map("author_key")
+  termKey            String               @map("term_key")
+  term               String
+  meaning            String
+  tone               String
+  sourceAssessmentId String               @map("source_assessment_id") @db.Uuid
+  sourceComments     String[]             @map("source_comments") @db.Uuid
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  sourceAssessment   DiscussionAssessment @relation(fields: [accountId, sourceAssessmentId], references: [accountId, id], onDelete: Cascade, onUpdate: NoAction, map: "newbi_author_terms_source_fkey")
+
+  @@unique([accountId, authorKey, termKey], map: "newbi_author_terms_scope_key")
+  @@index([accountId, sourceAssessmentId], map: "newbi_author_terms_source_idx")
+  @@map("author_terms")
+  @@schema("rica_plugin_newbi")
+}
+
+model Credential {
+  endpoint   String
+  agentId    String  @map("agent_id") @db.Uuid
+  credential String
+  username   String?
+  avatarUrl  String? @map("avatar_url")
+
+  @@id([endpoint, agentId], map: "newbi_credentials_pkey")
+  @@map("credentials")
+  @@schema("rica_plugin_newbi")
+}
+
+model DiscussionAssessment {
+  id             String                  @id(map: "newbi_discussion_assessments_pkey") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId    String                  @map("character_id") @db.Uuid
+  identityId     String                  @map("identity_id") @db.Uuid
+  accountId      String                  @map("account_id") @db.Uuid
+  postId         String                  @map("post_id") @db.Uuid
+  authEpoch      Int                     @map("auth_epoch")
+  bindingVersion Int                     @map("binding_version")
+  identity       String
+  participation  String
+  model          String?
+  systemPrompt   String?                 @map("system_prompt")
+  result         Json?
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt     DateTime?               @map("finished_at") @db.Timestamptz(6)
+  glossaryUsed   Json?                   @map("glossary_used")
+  triggerSeq     String?                 @map("trigger_seq") @db.VarChar(40)
+  authorTerms    AuthorTerm[]
+  sectionSamples SectionGlossarySample[]
+
+  @@unique([accountId, id], map: "newbi_assessments_account_id_key")
+  @@unique([accountId, triggerSeq], map: "newbi_assessments_background_trigger_key")
+  @@index([accountId, postId, createdAt, id], map: "newbi_assessments_account_post_idx")
+  @@index([createdAt], map: "newbi_assessments_created_at_idx")
+  @@map("discussion_assessments")
+  @@schema("rica_plugin_newbi")
+}
+
+model EventCheckpoint {
+  accountId         String    @id(map: "newbi_event_checkpoints_pkey") @map("account_id") @db.Uuid
+  cursor            String?   @db.VarChar(2048)
+  nextPollAt        DateTime  @default(now()) @map("next_poll_at") @db.Timestamptz(6)
+  ticket            String?   @db.Uuid
+  leaseUntil        DateTime? @map("lease_until") @db.Timestamptz(6)
+  historyLostCount  Int       @default(0) @map("history_lost_count")
+  lastHistoryLostAt DateTime? @map("last_history_lost_at") @db.Timestamptz(6)
+  lastSucceededAt   DateTime? @map("last_succeeded_at") @db.Timestamptz(6)
+  readError         String?   @map("read_error")
+
+  @@map("event_checkpoints")
+  @@schema("rica_plugin_newbi")
+}
+
+model Event {
+  accountId  String   @map("account_id") @db.Uuid
+  seq        String   @db.VarChar(40)
+  type       String
+  postId     String   @map("post_id") @db.Uuid
+  commentId  String?  @map("comment_id") @db.Uuid
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz(6)
+  receivedAt DateTime @default(dbgenerated("clock_timestamp()")) @map("received_at") @db.Timestamptz(6)
+
+  @@id([accountId, seq], map: "newbi_events_pkey")
+  @@index([accountId, occurredAt], map: "newbi_events_account_id_occurred_at_idx")
+  @@index([occurredAt], map: "newbi_events_occurred_at_idx")
+  @@index([receivedAt], map: "newbi_events_received_at_idx")
+  @@map("events")
+  @@schema("rica_plugin_newbi")
+}
+
+model Reply {
+  id                  String    @id(map: "newbi_replies_pkey") @db.Uuid
+  characterId         String    @map("character_id") @db.Uuid
+  identityId          String    @map("identity_id") @db.Uuid
+  accountId           String    @map("account_id") @db.Uuid
+  authEpoch           Int       @map("auth_epoch")
+  bindingVersion      Int       @map("binding_version")
+  postId              String    @map("post_id") @db.Uuid
+  content             String?
+  reviewDigest        String    @map("review_digest") @db.VarChar(64)
+  proposerId          String    @map("proposer_id")
+  reviewerId          String?   @map("reviewer_id")
+  status              String    @default("WAITING")
+  attempts            Int       @default(0)
+  leaseUntil          DateTime? @map("lease_until") @db.Timestamptz(6)
+  remoteCommentId     String?   @map("remote_comment_id") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(6)
+  retryNotBefore      DateTime? @map("retry_not_before") @db.Timestamptz(6)
+  closureReason       String?   @map("closure_reason") @db.VarChar(240)
+  executorKey         String    @map("executor_key")
+  approvedExecutorKey String?   @map("approved_executor_key")
+  autoReviewVersion   Int?      @map("auto_review_version")
+  autoReviewHandoff   Json?     @map("auto_review_handoff")
+  reviewRecord        Json?     @map("review_record")
+  reviewPrompt        Json?     @map("review_prompt")
+
+  @@unique([accountId, remoteCommentId], map: "newbi_replies_account_id_remote_comment_id_key")
+  @@index([characterId, createdAt, id], map: "newbi_replies_character_created_idx")
+  @@index([characterId, status, createdAt, id], map: "newbi_replies_character_status_created_idx")
+  @@map("replies")
+  @@schema("rica_plugin_newbi")
+}
+
+model SectionGlossarySample {
+  id                 String               @id(map: "newbi_section_glossary_samples_pkey") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId          String               @map("account_id") @db.Uuid
+  sectionId          Int                  @map("section_id")
+  authorKey          String               @map("author_key")
+  termKey            String               @map("term_key")
+  meaningKey         String               @map("meaning_key")
+  term               String
+  meaning            String
+  tone               String
+  sourceAssessmentId String               @map("source_assessment_id") @db.Uuid
+  sourceComments     String[]             @map("source_comments") @db.Uuid
+  sourceAssessment   DiscussionAssessment @relation(fields: [accountId, sourceAssessmentId], references: [accountId, id], onDelete: Cascade, onUpdate: NoAction, map: "newbi_section_glossary_sample_source_fkey")
+
+  @@unique([accountId, sectionId, termKey, meaningKey, authorKey], map: "newbi_section_glossary_sample_scope_key")
+  @@index([accountId, sourceAssessmentId], map: "newbi_section_glossary_sample_source_idx")
+  @@map("section_glossary_samples")
+  @@schema("rica_plugin_newbi")
 }

@@ -26,7 +26,8 @@
     "@ricajs/persistence": "workspace:*",
     "@ricajs/runtime": "workspace:*",
     "@vue/runtime-core": "^3.5.45",
-    "@prisma/client": "^7.10.1"
+    "@prisma/client": "^7.10.1",
+    "@prisma/adapter-pg": "^7.10.1"
   },
   "devDependencies": {
     "typescript": "npm:@typescript/typescript6@^6.0.2"

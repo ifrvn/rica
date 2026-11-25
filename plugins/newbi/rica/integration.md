@@ -1,14 +1,14 @@
 # Newbi 服务端装配
 
-Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在事务内按操作切换到 `rica_newbi_poller` 或 `rica_newbi_executor`，并只读取当前 Rica 账号对应的凭证。数据库连接字符串、部署级 API 接入点和账号凭证分别按连接管理、插件设置和账号验证处理。API 响应、控制台构建包、队列数据和运行日志均应排除真实凭证。插件与宿主共享受信运行环境，数据库角色约束查询权限。
+Newbi 从[插件 schema](../prisma/schema.prisma)生成独立 Prisma Client。词库查询、待处理回执计数和审核提示词写入使用插件模型，以 `rica_admin_api` 运行。账号绑定、授权和审计使用宿主事务。轮询和发送在事务内切换到 `rica_newbi_poller` 或 `rica_newbi_executor`，通过受限函数取得当前账号的凭证和执行许可。
 
-账号凭据保存在 `rica_plugin_newbi.credentials`。账号列表、运行活动和后台候选查询使用 `rica_plugin_newbi.account_profiles`，视图只返回接入点、Agent ID 和公开资料。凭据写入使用宿主的账号事务。读取和发送角色分别通过各自的受限数据库函数取用凭据。内置 Newbi 随宿主迁移移动原有记录。部署时停止旧版服务，执行 `rica migrate` 后启动同一发布版本的 API 和 Worker。
+账号凭据保存在 `rica_plugin_newbi.credentials`。账号列表、运行活动和后台候选查询使用 `rica_plugin_newbi.account_profiles`，视图只返回接入点、Agent ID 和公开资料。凭据写入使用宿主的账号事务。开发时运行 `pnpm run db:generate` 生成宿主和插件的客户端。部署时，`rica migrate` 使用 [migration.prisma](../prisma/migration.prisma) 执行现有 SQL，并在独立的 schema 中记录迁移。
 
 轮询写入 `rica_plugin_newbi.events` 和 `rica_plugin_newbi.event_checkpoints`。两个表随宿主发布迁移，保留账号外键、事件去重键和轮询进度。读取组件通过受限函数领取和提交事件页，管理端读取事件摘要及检查点状态，游标和租约由轮询函数使用。
 
 讨论评估和词库分别写入 `rica_plugin_newbi.discussion_assessments`、`rica_plugin_newbi.author_terms` 和 `rica_plugin_newbi.section_glossary_samples`。评估结果和本轮词库证据在同一事务中提交。保留期任务通过受限函数清理超过 30 天的评估，来源评估删除时级联清理词库证据。
 
-回复提案、审核记录、发送状态和回执存放在 `rica_plugin_newbi.replies`。管理端在宿主授权事务中写入提案和审批，发送端通过受限函数领取和确认发送。升级时协调数据库迁移和 API、Worker 发布，旧版 API 仍会访问迁移前的表路径。
+回复提案、审核记录、发送状态和回执存放在 `rica_plugin_newbi.replies`。管理端在宿主授权事务中写入提案和审批，发送端通过受限函数领取和确认发送。
 
 ## Newbi 服务端装配 API
 
@@ -20,7 +20,8 @@ Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在
 | `readNewbi()` | 异步返回启用配置的 `{ endpoint: string }` 或 `undefined`。 |
 | `openNewbi(credential, expectedEndpoint?)` | 接受账号凭证和可选的预期接入点。返回 `{ connection: { endpoint, credential }, beforeRequest }` 或 `undefined`。调用 `beforeRequest()` 会复核当前接入点，变化时抛错。 |
 | `operations.createNewbiOperations(db, store)` | 参数为宿主的 Prisma 客户端和带 `openNewbi` 的配置接口。返回下方四个按操作隔离的回调。 |
-| `management.createNewbiManagement(db, settings, operations)` | 注入管理数据库、提供 `readNewbi` 及 `isInstalled` 的设置对象、操作回调，返回 `ManagementPlugin`。 |
+| `createNewbiDatabase(databaseUrl)` | 创建以 `rica_admin_api` 运行的 Newbi Prisma Client。调用方负责断开连接。 |
+| `management.createNewbiManagement({ host, newbi }, settings, operations)` | 注入两个管理客户端、提供 `readNewbi` 及 `isInstalled` 的设置对象、操作回调，返回 `ManagementPlugin`。 |
 | `reader.identifyNewbiAccount(connection, beforeRequest?)` | 核验 Agent Key。返回 `Promise<{ endpoint, agentId, username, avatarUrl } \| undefined>`。无效端点、凭证和核验失败返回 `undefined`。 |
 | `reader.startNewbiReader(connection, signal?, beforeRequest?)` | 启动只读组件。参数为连接、可选 `AbortSignal` 和请求前检查。返回 `Promise<{ plugin, stop }>`。 |
 | `executor.startNewbiExecutor(connection, beforeRequest?, signal?)` | 启动发送组件，注意可选参数次序与 reader 不同。返回 `Promise<{ plugin, stop }>`。业务发送应走下方的 `sendConnector`，由账本发放许可。 |
@@ -38,10 +39,12 @@ Newbi 在 [database.ts](./persistence/database.ts)中复用宿主客户端，在
 已经持有宿主数据库客户端和配置存储时，可以按下例装配，回调中使用的数据库权限由操作工厂切换。
 
 ```ts
-import { connectNewbiSettings, createNewbiManagement, createNewbiOperations } from '@ricajs/plugin-newbi'
+import { connectNewbiSettings, createNewbiDatabase, createNewbiManagement, createNewbiOperations } from '@ricajs/plugin-newbi'
 
 const settings = connectNewbiSettings(deploymentPlugins.readConfiguration)
 const operations = createNewbiOperations(runtimeDb, settings)
-const newbiManagement = createNewbiManagement(managementDb, settings, operations)
+const newbi = createNewbiDatabase(databaseUrl)
+const newbiManagement = createNewbiManagement({ host: managementDb, newbi }, settings, operations)
 // 将 newbiManagement 交给 createManagementApp 的 plugins 数组。
+// 服务停止时调用 newbi.$disconnect()。
 ```

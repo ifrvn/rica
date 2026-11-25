@@ -10,6 +10,7 @@ import { newbiExecutorIdentity, newbiExecutorKey } from '../rica/runtime/identit
 import { createNewbiReadClient, createNewbiReplyExecutor } from '../rica/runtime/agent-adapter.js'
 import { identifyNewbiAccount, startNewbiReader } from '../rica/runtime/reader.js'
 import { openSavedNewbiReader, scopedNewbiDatabase } from '../rica/persistence/database.js'
+import { createNewbiDatabase } from '../rica/persistence/client.js'
 import { pollNewbiEvents } from '../rica/persistence/events.js'
 import { executeNewbiReply } from '../rica/persistence/execution.js'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -37,6 +38,8 @@ const config = loadConfig()
 const simulationPlatforms = await startSimulationPlatforms({})
 const owner = createDatabase(config.databaseUrl)
 const management = createDatabase(config.databaseUrl, 'rica_admin_api')
+const newbi = createNewbiDatabase(config.databaseUrl)
+const databases = { host: management, newbi }
 const packageManagement = await loadPackageManagement(process.env.RICA_TEST_NEWBI_PACKAGE_MANIFEST, { newbi: '@ricajs/plugin-newbi' })
 const packageRetention = await loadPackageRetention(process.env.RICA_TEST_NEWBI_PACKAGE_MANIFEST)
 const issuer = 'https://identity.example.test'
@@ -49,7 +52,7 @@ const testApp = (deploymentPlugins?: ReturnType<typeof createDeploymentPluginSto
   readConnectorThread?: NewbiManagementOptions['readConnectorThread'],
   reportConnectorOperation?: NewbiManagementOptions['reportConnectorOperation'],
   reviewReply?: NewbiManagementOptions['reviewReply'], assessDiscussion?: NewbiManagementOptions['assessDiscussion']) =>
-  createTestApp(createNewbiManagement(management, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
+  createTestApp(createNewbiManagement(databases, deploymentPlugins && connectNewbiSettings(deploymentPlugins.readConfiguration), {
     identifyConnector: (credential, endpoint = connectorEndpoint) => endpoint && endpoint === connectorEndpoint
       ? identifyNewbiAccount({ endpoint, credential }) : Promise.resolve(undefined),
     pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply, assessDiscussion,
@@ -144,7 +147,7 @@ after(async () => {
       await tx.character.deleteMany({ where: { id: { in: characterIds } } })
     })
   } finally {
-    await Promise.all([management.$disconnect(), owner.$disconnect(), packageManagement.stop()])
+    await Promise.all([management.$disconnect(), newbi.$disconnect(), owner.$disconnect(), packageManagement.stop()])
   }
 })
 
@@ -696,7 +699,7 @@ test('Newbi background assessments coalesce concurrent reads, respect deployment
     },
     assessDiscussion: discussionService.assess,
   }
-  const step = () => assessNewbiBackground(management, async () => enabled ? endpoint : undefined, operations, () => assert.fail('Unexpected poll error'))
+  const step = () => assessNewbiBackground(databases, async () => enabled ? endpoint : undefined, operations, () => assert.fail('Unexpected poll error'))
   await owner.$executeRaw`
     INSERT INTO rica_plugin_newbi.credentials (endpoint, agent_id, credential)
     VALUES (${endpoint}, ${agentId}::uuid, ${'nbi_agent_' + 'x'.repeat(43)})`

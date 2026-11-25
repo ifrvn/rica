@@ -1,12 +1,13 @@
 import { setTimeout as sleep } from 'node:timers/promises'
-import type { PrismaClient } from '@ricajs/persistence/prisma'
 import { backgroundDiscussions, claimBackgroundAssessment, runNewbiAssessment, type BackgroundDiscussion } from '../persistence/assessments.js'
+import type { NewbiManagementDatabase } from '../persistence/client.js'
 import type { NewbiManagementOptions } from './routes.js'
 
 type Operations = Pick<Required<NewbiManagementOptions>, 'pollConnector' | 'readConnectorThread' | 'assessDiscussion'>
 
-export async function assessNewbiBackground(db: PrismaClient, readEndpoint: () => Promise<string | undefined>, operations: Operations,
+export async function assessNewbiBackground(database: NewbiManagementDatabase, readEndpoint: () => Promise<string | undefined>, operations: Operations,
   onError: () => void, stop?: AbortSignal) {
+  const { host: db } = database
   const endpoint = await readEndpoint()
   if (!endpoint || stop?.aborted) return
 
@@ -34,7 +35,7 @@ export async function assessNewbiBackground(db: PrismaClient, readEndpoint: () =
     if (stop?.aborted || await readEndpoint() !== endpoint) return
     const id = await claimBackgroundAssessment(db, endpoint, candidate)
     if (!id) continue
-    await runNewbiAssessment(db, { characterId: candidate.characterId, background: true }, id,
+    await runNewbiAssessment(database, { characterId: candidate.characterId, background: true }, id,
       operations.readConnectorThread, operations.assessDiscussion, async (boundEndpoint) => {
         if (stop?.aborted || await readEndpoint() !== boundEndpoint) throw new Error('Background assessment was stopped')
       })
@@ -42,13 +43,13 @@ export async function assessNewbiBackground(db: PrismaClient, readEndpoint: () =
   }
 }
 
-export function startNewbiBackground(db: PrismaClient, readEndpoint: () => Promise<string | undefined>, operations: Operations, onError: () => void,
+export function startNewbiBackground(database: NewbiManagementDatabase, readEndpoint: () => Promise<string | undefined>, operations: Operations, onError: () => void,
   shutdown?: AbortSignal) {
   const stop = new AbortController()
   const signal = shutdown ? AbortSignal.any([shutdown, stop.signal]) : stop.signal
   const running = (async () => {
     while (!signal.aborted) {
-      await assessNewbiBackground(db, readEndpoint, operations, onError, signal).catch(onError)
+      await assessNewbiBackground(database, readEndpoint, operations, onError, signal).catch(onError)
       await sleep(15_000, undefined, { signal }).catch(() => {})
     }
   })()

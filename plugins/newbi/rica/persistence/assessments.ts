@@ -7,6 +7,7 @@ import { authorize, lockCharacter, ManagementError, type Scope } from '@ricajs/p
 import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
 import { newbiAssessmentResult, newbiAssessmentView, newbiAssessmentThread } from '../management/contracts.js'
 import { prepareDiscussionGlossary } from './discussion-glossary.js'
+import type { NewbiManagementDatabase } from './client.js'
 
 const leaseMs = 45_000
 const retentionMs = 30 * 86_400_000
@@ -208,7 +209,7 @@ export function newbiAssessmentActivity(characterId: string) {
   `
 }
 
-export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScope, id: string,
+export async function runNewbiAssessment({ host: db, newbi }: NewbiManagementDatabase, scope: AssessmentScope, id: string,
   readThread: ((target: DiscussionTarget) => Promise<Thread | undefined>) | undefined,
   assess: AssessDiscussion | undefined, requireConnector: (endpoint: string) => Promise<void>,
 ) {
@@ -277,7 +278,7 @@ export async function runNewbiAssessment(db: PrismaClient, scope: AssessmentScop
     }
     const profile = identityProfile.pick({ writingPrompt: true, draftModelProfile: true }).strip()
       .parse(account.identity.activeProfile?.roleProfile ?? {})
-    const glossary = await prepareDiscussionGlossary(db, row.accountId, thread, comments, cutoff)
+    const glossary = await prepareDiscussionGlossary(newbi, row.accountId, thread, comments, cutoff)
     const input: DiscussionSelectionInput = { title: thread.post.title.slice(0, 240), post: thread.post.content.slice(0, 1800),
       participation: resolveParticipation(row.participation), identityPreferences: profile.writingPrompt, comments,
       ...(glossary?.used.length ? { glossary: glossary.used } : {}),

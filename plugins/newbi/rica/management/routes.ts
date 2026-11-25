@@ -2,7 +2,7 @@ import { newbiAccountHooks, readNewbiCredential, refreshNewbiProfile, saveNewbiC
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
 import * as management from '@ricajs/persistence/management'
-import { Prisma, type PrismaClient } from '@ricajs/persistence/prisma'
+import { Prisma } from '@ricajs/persistence/prisma'
 import { body, character, characterParams, error, errors, security, success, failure, type ManagementEnvironment, type ManagementPlugin } from '@ricajs/persistence/management-http'
 import { connectorAccountRegistration, newbiAccountCheckView, newbiAccountInput, newbiAccountPreview, newbiAccountTest, newbiClosureInput, newbiDecisionInput, newbiInboxView, newbiReplyInput, newbiReplyQuery, newbiReplySummary, newbiReviewView } from './contracts.js'
 import { autoReviewNewbiReply, bindNewbiAccount, checkNewbiAccount, closeNewbiReply, createNewbiReply, decideNewbiReply, getNewbiInbox, getNewbiReply, listNewbiReplies, readNewbiConnections, readPendingDeliveries } from '../persistence/management.js'
@@ -11,6 +11,7 @@ import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newb
 import type { newbiCatalog } from '../deployment/catalog.js'
 import { newbiAssessmentList, newbiAssessmentView, type newbiAssessmentThread } from './contracts.js'
 import { claimNewbiAssessment, listNewbiAssessments, newbiAssessmentActivity, readNewbiAssessment, runNewbiAssessment, type AssessDiscussion } from '../persistence/assessments.js'
+import type { NewbiManagementDatabase } from '../persistence/client.js'
 
 export type NewbiManagementOptions = {
   reviewReply?: ReviewPublicReply
@@ -24,8 +25,9 @@ export type NewbiManagementOptions = {
     Promise<z.infer<typeof newbiAssessmentThread> | undefined>
 }
 
-export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { readNewbi(): Promise<{ endpoint: string } | undefined>; isInstalled(): Promise<boolean> } | undefined,
+export function createNewbiManagement(database: NewbiManagementDatabase, deploymentPlugins: { readNewbi(): Promise<{ endpoint: string } | undefined>; isInstalled(): Promise<boolean> } | undefined,
   { identifyConnector, pollConnector, sendConnector, readConnectorThread, reportConnectorOperation, reviewReply, assessDiscussion }: NewbiManagementOptions): ManagementPlugin {
+  const { host: db, newbi } = database
   async function observe<T>(service: keyof typeof newbiCatalog, run: () => Promise<T>, succeeded: (result: T) => boolean) {
     let completed = false
     try {
@@ -80,7 +82,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
     const endpoint = (await deploymentPlugins?.readNewbi())?.endpoint
     const [newbiConnections, pendingDeliveries] = await Promise.all([
       endpoint ? readNewbiConnections(db, characterId, endpoint) : undefined,
-      readPendingDeliveries(db, characterId),
+      readPendingDeliveries(newbi, characterId),
     ])
     return { newbiRegistrationAvailable: !!endpoint,
       newbiConnections, newbiPendingDeliveries: pendingDeliveries }
@@ -137,7 +139,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
         started = row.status === 'STARTED'
         return row
       })
-      if (started) await runNewbiAssessment(db, scope, result.id, readConnectorThread, assessDiscussion, requireNewbi)
+      if (started) await runNewbiAssessment(database, scope, result.id, readConnectorThread, assessDiscussion, requireNewbi)
       return c.json({ ...result, requestId }, 201)
     })
 
@@ -184,7 +186,7 @@ export function createNewbiManagement(db: PrismaClient, deploymentPlugins: { rea
         return proposal
       })
       if (created && reviewReply && readConnectorThread) {
-        await autoReviewNewbiReply(db, scope.characterId, result.id, requestId, reviewReply, readConnectorThread, requireNewbi)
+        await autoReviewNewbiReply(database, scope.characterId, result.id, requestId, reviewReply, readConnectorThread, requireNewbi)
           .catch(() => { console.warn(JSON.stringify({ service: 'api', event: 'newbi_auto_review_failed', requestId })) })
       }
       return c.json({ ...result, requestId }, 201)

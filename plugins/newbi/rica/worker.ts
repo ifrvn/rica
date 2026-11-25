@@ -3,6 +3,7 @@ import { createDatabase } from '@ricajs/persistence/client'
 import { connectNewbiSettings } from './deployment/settings.js'
 import { startNewbiBackground } from './management/background.js'
 import { createNewbiOperations } from './management/operations.js'
+import { createNewbiDatabase, type NewbiPrismaClient } from './persistence/client.js'
 import { checkNewbiReader } from './persistence/database.js'
 
 export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorkerContext): PluginWorker {
@@ -11,6 +12,7 @@ export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorke
   const shutdown = AbortSignal.any([signal, controller.signal])
   let runtime: ReturnType<typeof createDatabase> | undefined
   let management: ReturnType<typeof createDatabase> | undefined
+  let newbi: NewbiPrismaClient | undefined
   let stop: (() => Promise<void>) | undefined
   let stopping: Promise<void> | undefined
 
@@ -22,8 +24,9 @@ export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorke
       const readEndpoint = async () => await discussion.isEnabled() ? settings.readBackground() : undefined
       runtime = createDatabase(databaseUrl)
       management = createDatabase(databaseUrl, 'rica_admin_api')
+      newbi = createNewbiDatabase(databaseUrl)
       await Promise.all([
-        management.$queryRaw`SELECT id FROM rica_plugin_newbi.discussion_assessments LIMIT 0`,
+        newbi.discussionAssessment.findFirst({ select: { id: true } }),
         checkNewbiReader(runtime),
       ])
       shutdown.throwIfAborted()
@@ -39,7 +42,7 @@ export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorke
           } }
         },
       }, shutdown)
-      stop = startNewbiBackground(management, readEndpoint, {
+      stop = startNewbiBackground({ host: management, newbi }, readEndpoint, {
         ...operations,
         assessDiscussion: (input, profile, identity, capture) => discussion.assess(input, profile, identity, capture),
       }, () => console.error(JSON.stringify({ service: 'worker', event: 'newbi_background_failed' })), shutdown)
@@ -48,7 +51,7 @@ export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorke
       controller.abort()
       return stopping ??= (async () => {
         try { await stop?.() }
-        finally { await Promise.all([runtime?.$disconnect(), management?.$disconnect()]) }
+        finally { await Promise.all([runtime?.$disconnect(), management?.$disconnect(), newbi?.$disconnect()]) }
       })()
     },
   }
