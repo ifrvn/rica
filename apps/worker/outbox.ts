@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Queue, Worker } from 'bullmq'
@@ -33,7 +34,7 @@ export async function startOutboxWorker(
   const producer = new Redis(redisUrl, {
     lazyConnect: true, connectTimeout: 1500, commandTimeout: 2000, maxRetriesPerRequest: 1,
   })
-  const logError = () => console.warn(JSON.stringify({ service: 'worker', event: 'dependency_error' }))
+  const logError = () => logger.warn({ service: 'worker', event: 'dependency_error' })
   producer.on('error', logError)
   const [postgres, redis] = await Promise.allSettled([
     db.$queryRaw`SELECT event_id FROM public.outbox LIMIT 0`,
@@ -60,7 +61,11 @@ export async function startOutboxWorker(
         SELECT public.rica_begin_outbox_attempt(${eventId}::uuid, ${name}, ${generation}::int) AS ticket
       `
       ticket = claim.ticket
-      if (ticket === null) return
+      if (ticket === null) {
+        logger.trace({ service: 'worker', event: 'outbox_attempt_skipped', eventId, generation, type: name })
+        return
+      }
+      logger.debug({ service: 'worker', event: 'outbox_attempt_started', eventId, generation, type: name })
       const attempt = { generation, ticket }
       if (name === runQueuedEvent) {
         await prepareSimulatedRun(db, eventId, attempt)
@@ -78,9 +83,9 @@ export async function startOutboxWorker(
         `
       }
     } catch (error) {
-      if (error instanceof ModelProviderError) console.warn(JSON.stringify({
+      if (error instanceof ModelProviderError) logger.warn({
         service: 'worker', event: 'model_request_failed', modelId, code: error.code, status: error.status,
-      }))
+      })
       try {
         if (ticket !== null) await db.$queryRaw`
           SELECT public.rica_fail_outbox_attempt(${eventId}::uuid, ${generation}::int, ${ticket}::int)::text
@@ -94,7 +99,7 @@ export async function startOutboxWorker(
   const stop = new AbortController()
 
   worker.on('error', logError)
-  worker.on('failed', () => console.warn(JSON.stringify({ service: 'worker', event: 'job_failed' })))
+  worker.on('failed', () => logger.warn({ service: 'worker', event: 'job_failed' }))
   queue.on('error', logError)
 
   async function closeConnections(force = false) {

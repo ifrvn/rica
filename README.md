@@ -48,6 +48,8 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
 
 打开[本地控制台](http://localhost:5173/)并检查 [API 就绪状态](http://127.0.0.1:3000/health/ready)。在启动终端按 Ctrl+C 停止这次启动的应用进程。`docker compose stop` 停止数据库和 Redis，保留数据卷。
 
+`pnpm dev` 的合并日志显示本地时间、服务标签、级别和事件字段。终端用颜色区分服务，设置 `NO_COLOR=1` 可关闭颜色。在 `.env` 中用 `RICA_LOG_LEVEL` 设置最低级别，默认 `info`。可用值为 `trace`、`debug`、`info`、`warn`、`error`、`fatal`、`silent`。直接启动单个服务时，应用日志按行输出 Pino JSON。
+
 用 `pnpm dev --help` 查看开发目标，用 `pnpm rica --help` 查看维护命令。
 
 ## 2. 启用管理 API 并创建本地账号

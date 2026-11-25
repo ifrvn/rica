@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import type { PluginWorker, PluginWorkerContext } from '@ricajs/plugin-host/sdk'
 import { createDatabase } from '@ricajs/persistence/client'
 import { connectNewbiSettings } from './deployment/settings.js'
@@ -45,7 +46,7 @@ export function createNewbiWorker({ databaseUrl, signal, services }: PluginWorke
       stop = startNewbiBackground({ host: management, newbi }, readEndpoint, {
         ...operations,
         assessDiscussion: (input, profile, identity, capture) => discussion.assess(input, profile, identity, capture),
-      }, () => console.error(JSON.stringify({ service: 'worker', event: 'newbi_background_failed' })), shutdown)
+      }, () => logger.error({ service: 'worker', event: 'newbi_background_failed' }), shutdown)
     },
     stop() {
       controller.abort()

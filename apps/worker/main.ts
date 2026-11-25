@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { startOutboxWorker, WorkerDependencyUnavailable } from './outbox.js'
 import { checkPackageRetention, sweepRuntimeRetention } from './runtime-retention.js'
 import { loadConfig } from '@ricajs/runtime/config'
@@ -68,9 +69,9 @@ async function main() {
     await reportPluginResult(config.redisUrl, 'worker',
       error instanceof WorkerDependencyUnavailable ? 'DEPENDENCY_UNAVAILABLE' : 'START_FAILED')
     if (!(error instanceof WorkerDependencyUnavailable)) throw error
-    console.error(JSON.stringify({
+    logger.error({
       service: 'worker', event: 'not_ready', modelId: selected.metadata.id, dependencies: error.dependencies,
-    }))
+    })
     process.exitCode = 1
     return
   }
@@ -78,8 +79,9 @@ async function main() {
   const assessDiscussion = createDiscussionAssessor(async (assess, profile) => assess((await getModel(profile)).implementation))
   const stopping = new AbortController()
   const packageStartup = packageDeployment.start(stopping.signal, (diagnostic) => {
-    console.info(JSON.stringify({ service: 'worker', event: 'plugin_status', ...diagnostic }))
-    if (diagnostic.code === 'STOP_FAILED') process.exitCode = 1
+    const failed = diagnostic.code === 'STOP_FAILED'
+    logger[failed ? 'error' : 'info']({ service: 'worker', event: 'plugin_status', ...diagnostic })
+    if (failed) process.exitCode = 1
   }, {
     builtIn: { id: newbi.id, package: newbiPackage.name, version: newbiPackage.version, factory: newbi.worker,
       databaseUrl: config.databaseUrl, workerServices: newbi.workerServices },
@@ -110,17 +112,17 @@ async function main() {
     await shutdown()
     if (cancelled) return
     if (error instanceof PluginHostError) {
-      console.error(JSON.stringify({ service: 'worker', event: 'plugin_status', ...error.diagnostic }))
+      logger.error({ service: 'worker', event: 'plugin_status', ...error.diagnostic })
     }
     await reportPluginResult(config.redisUrl, 'worker', 'START_FAILED')
     throw error
   }
   if (stopping.signal.aborted) return
   observation = startPluginHeartbeat(config.redisUrl, 'worker', [...platforms.plugins, selected.metadata], platforms.source)
-  console.info(JSON.stringify({ service: 'worker', event: 'ready', modelId: selected.metadata.id, modelVersion: selected.metadata.version }))
+  logger.info({ service: 'worker', event: 'ready', modelId: selected.metadata.id, modelVersion: selected.metadata.version })
 }
 
 await main().catch(() => {
-  console.error(JSON.stringify({ service: 'worker', event: 'startup_failed', configuration: 'Check worker dependencies and model settings' }))
+  logger.error({ service: 'worker', event: 'startup_failed', configuration: 'Check worker dependencies and model settings' })
   process.exitCode = 1
 })

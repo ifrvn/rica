@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { newbiAccountHooks, readNewbiCredential, refreshNewbiProfile, saveNewbiCredential } from '../persistence/accounts.js'
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import * as schema from '@ricajs/contracts/management'
@@ -195,7 +196,7 @@ export function createNewbiManagement(database: NewbiManagementDatabase, deploym
       })
       if (created && reviewReply && readConnectorThread) {
         await autoReviewNewbiReply(database, scope.characterId, result.id, requestId, reviewReply, readConnectorThread, requireNewbi)
-          .catch(() => { console.warn(JSON.stringify({ service: 'api', event: 'newbi_auto_review_failed', requestId })) })
+          .catch(() => { logger.warn({ service: 'api', event: 'newbi_auto_review_failed', requestId }) })
       }
       return c.json({ ...result, requestId }, 201)
     })

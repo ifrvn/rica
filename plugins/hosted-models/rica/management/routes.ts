@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { createRoute, z, type OpenAPIHono } from '@hono/zod-openapi'
 import { resourceId, versionHeader } from '@ricajs/contracts/management'
 import type { ModelCheckStatus, ModelSettingsView } from './contracts.js'
@@ -63,8 +64,8 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
       }
       const expected = version(c.req.valid('header'))
       const saved = await update(() => modelSettings.save(input, expected))
-      console.info(JSON.stringify({ service: 'api', event: 'model_settings_updated', actorId: actor.id,
-        requestId: c.get('requestId'), version: saved.version, provider: input.provider }))
+      logger.info({ service: 'api', event: 'model_settings_updated', actorId: actor.id,
+        requestId: c.get('requestId'), version: saved.version, provider: input.provider })
       return c.json(saved, 200)
     })
 
@@ -81,8 +82,8 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
       }
       const expected = version(c.req.valid('header'))
       const saved = await update(() => modelSettings.activate(id, expected))
-      console.info(JSON.stringify({ service: 'api', event: 'default_model_profile_changed', actorId: actor.id,
-        requestId: c.get('requestId'), version: saved.version, profileId: id }))
+      logger.info({ service: 'api', event: 'default_model_profile_changed', actorId: actor.id,
+        requestId: c.get('requestId'), version: saved.version, profileId: id })
       return c.json(saved, 200)
     })
 
@@ -97,8 +98,8 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
       const expected = version(c.req.valid('header'))
       const saved = await update(() => modelSettings.remove(id, expected))
       modelChecks.delete(id)
-      console.info(JSON.stringify({ service: 'api', event: 'model_profile_removed', actorId: actor.id,
-        requestId: c.get('requestId'), version: saved.version, profileId: id }))
+      logger.info({ service: 'api', event: 'model_profile_removed', actorId: actor.id,
+        requestId: c.get('requestId'), version: saved.version, profileId: id })
       return c.json(saved, 200)
     })
 

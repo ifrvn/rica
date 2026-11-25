@@ -37,6 +37,8 @@ Run `pnpm dev --help` for development targets and `pnpm rica --help` for mainten
 
 Open the [local console](http://localhost:5173/) and check [API readiness](http://127.0.0.1:3000/health/ready). Press Ctrl+C to stop the application processes. Use `docker compose stop` to stop the database and Redis while keeping their volumes.
 
+Combined `pnpm dev` logs show the local time, service label, level, and event fields. Terminals color-code the service labels. Set `NO_COLOR=1` to disable color. Set the minimum application log level in `.env` with `RICA_LOG_LEVEL` (`trace`, `debug`, `info`, `warn`, `error`, `fatal`, or `silent`). The default is `info`. A service started by itself writes newline-delimited Pino JSON.
+
 ## 2. Enable the management API and create a local account
 
 1. Apply migrations and set `RICA_ADMIN_ORIGIN=http://localhost:5173`. The management API uses `DATABASE_URL`.

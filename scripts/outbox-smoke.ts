@@ -30,7 +30,7 @@ queue.on('error', () => {})
 function launchWorker(overrides: NodeJS.ProcessEnv = {}) {
   const child = spawn(process.execPath, ['--import', 'tsx', 'apps/worker/main.ts'], {
     env: {
-      ...process.env, DATABASE_URL: runtimeUrl.toString(), REDIS_URL: config.redisUrl, RICA_PLUGIN_MANIFEST: '',
+      ...process.env, DATABASE_URL: runtimeUrl.toString(), REDIS_URL: config.redisUrl, RICA_PLUGIN_MANIFEST: '', RICA_LOG_LEVEL: 'info',
       ...overrides,
     },
     stdio: ['ignore', 'pipe', 'pipe'],

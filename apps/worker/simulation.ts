@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { logger } from '@ricajs/runtime/logging'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createDatabase } from '@ricajs/persistence/client'
 import { runtimeDatabaseUrl } from '@ricajs/runtime/config'
@@ -44,7 +45,7 @@ try {
         reportedUnavailable = true
         await reportPluginResult(redisUrl, 'simulation-executor', 'OPERATION_FAILED')
       }
-      console.warn(JSON.stringify({ service: 'simulation-executor', event: 'batch_failed' }))
+      logger.warn({ service: 'simulation-executor', event: 'batch_failed' })
     }
     await sleep(1000, undefined, { signal: stop.signal }).catch(() => {})
   }

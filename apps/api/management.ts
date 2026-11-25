@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { randomUUID } from 'node:crypto'
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi'
 import { bodyLimit } from 'hono/body-limit'
@@ -114,7 +115,7 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     if ('code' in err && (err.code === 'P2003' || err.code === 'P2004')) {
       return c.json(error(requestId, 'INVALID_INPUT', 'Request violates a resource constraint'), 422)
     }
-    console.error(JSON.stringify({ service: 'api', event: 'management_error', requestId }))
+    logger.error({ service: 'api', event: 'management_error', requestId })
     return c.json(error(requestId, 'INTERNAL_ERROR', 'Request could not be completed'), 500)
   })
 
@@ -212,8 +213,8 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     const change = c.req.valid('json')
     try {
       const saved = await deploymentPlugins.save(change, version(c.req.valid('header')), activeModel)
-      console.info(JSON.stringify({ service: 'api', event: 'deployment_plugin_changed', actorId: actor.id,
-        requestId: c.get('requestId'), action: change.action, plugin: deploymentChangeOwner(change), version: saved.version }))
+      logger.info({ service: 'api', event: 'deployment_plugin_changed', actorId: actor.id,
+        requestId: c.get('requestId'), action: change.action, plugin: deploymentChangeOwner(change), version: saved.version })
       return c.json(saved, 200)
     } catch (cause) {
       if (!(cause instanceof DeploymentPluginError)) throw cause

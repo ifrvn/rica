@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { createHash } from 'node:crypto'
 import { reviewTarget, type ChatReplyStop } from '../contracts/review.js'
 import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
@@ -369,7 +370,7 @@ export async function processSimulatedDraft(
   if (actionId && review && text !== null && request?.purpose === 'PUBLIC_REFERENCE') {
     const discussion = candidate?.conversation ? JSON.stringify({ ...candidate.conversation, message: text }) : text
     await autoReviewSimulation(db, run.characterId, actionId, discussion, resolveAdapter, review).catch(() => {
-      console.warn(JSON.stringify({ service: 'worker', event: 'auto_review_failed', actionId }))
+      logger.warn({ service: 'worker', event: 'auto_review_failed', actionId })
     })
   }
 }

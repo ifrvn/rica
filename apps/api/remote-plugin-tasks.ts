@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { Hono, type Handler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { createRoute, z, type OpenAPIHono } from '@hono/zod-openapi'
@@ -14,7 +15,7 @@ export function createRemotePluginTasks(db: PrismaClient, services: RemotePlugin
   const base = '/:pluginId/accounts/:accountId'
   const scope = z.object({ pluginId: remotePluginId, accountId: pluginAccountId, taskId: pluginAccountId.optional() })
   app.onError((error, c) => {
-    console.error(JSON.stringify({ service: 'api', event: 'remote_plugin_tasks_failed', error: error.name }))
+    logger.error({ service: 'api', event: 'remote_plugin_tasks_failed', error: error.name })
     return c.json({ code: 'INTERNAL_ERROR' }, 500)
   })
   const limit = bodyLimit({ maxSize: 8192, onError: c => c.json({ code: 'BODY_TOO_LARGE' }, 413) })

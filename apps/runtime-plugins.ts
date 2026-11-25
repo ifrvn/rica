@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import type { PlatformAdapter, ResolveSimulationAdapter } from '@ricajs/simulation/contracts/platforms'
 import { hostedModelsPluginId, type ModelSettingsInput } from '@ricajs/plugin-hosted-models/shared'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
@@ -26,12 +27,14 @@ export const cognitionCatalog = [...simulationPlatformCatalog, ...modelDefinitio
 async function startHost<T>(kind: string, definitions: readonly PluginDefinition<T>[],
   selections: readonly { id: string; config?: unknown }[], service?: string) {
   const report = service ? (diagnostic: PluginHostError['diagnostic']) => {
-    console.info(JSON.stringify({ service, event: 'plugin_status', ...diagnostic }))
+    logger[diagnostic.code === 'STOP_FAILED' ? 'error' : 'info']({ service, event: 'plugin_status', ...diagnostic })
   } : undefined
   try {
     return await startPluginHost(kind, definitions, selections, { report })
   } catch (error) {
-    if (error instanceof PluginHostError) report?.(error.diagnostic)
+    if (service && error instanceof PluginHostError) {
+      logger.error({ service, event: 'plugin_status', ...error.diagnostic })
+    }
     throw error
   }
 }

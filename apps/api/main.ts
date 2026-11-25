@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { serve } from '@hono/node-server'
 import { Redis } from 'ioredis'
 import { createDatabase } from '@ricajs/persistence/client'
@@ -117,7 +118,7 @@ const app = createApp({
 remoteServices && createRemotePluginTasks(db, remoteServices))
 const server = serve({ fetch: app.fetch, port: config.port, hostname: '127.0.0.1' })
 const observation = platforms && startPluginHeartbeat(config.redisUrl, 'api', platforms.plugins, platforms.source)
-console.info(JSON.stringify({ service: 'api', event: 'started', port: config.port }))
+logger.info({ service: 'api', event: 'started', port: config.port })
 
 function shutdown() {
   observation?.stop()

@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { randomUUID } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
@@ -107,7 +108,7 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     `
     switch (result.code) {
       case 'OK':
-        console.info(JSON.stringify({ service: 'api', event: 'local_user_changed', operation, actorId: operator.actorId, username: username.data }))
+        logger.info({ service: 'api', event: 'local_user_changed', operation, actorId: operator.actorId, username: username.data })
         return c.json({ username: username.data }, operation === 'CREATE' ? 201 : 200)
       case 'FORBIDDEN': return c.json({ error: { code: result.code } }, 403)
       case 'ACCOUNT_NOT_FOUND': return c.json({ error: { code: result.code } }, 404)
@@ -160,7 +161,7 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
     `
     if (!result.changed) return c.json({ error: { code: 'UNAUTHENTICATED' } }, 401)
     setCookie(c, config.cookie, '', { ...cookieOptions, maxAge: 0 })
-    console.info(JSON.stringify({ service: 'api', event: 'own_password_changed', actorId: user.actorId }))
+    logger.info({ service: 'api', event: 'own_password_changed', actorId: user.actorId })
     return c.json({ success: true })
   })
 
@@ -188,7 +189,7 @@ export function createAdminAuth(db: PrismaClient, redis: Redis, config: Manageme
       SELECT public.rica_remove_passkey(${user.id}::uuid, ${user.authVersion}::int, ${id.data}::text) AS removed
     `
     if (!result.removed) return c.json({ error: { code: 'PASSKEY_NOT_FOUND' } }, 404)
-    console.info(JSON.stringify({ service: 'api', event: 'passkey_removed', actorId: user.actorId }))
+    logger.info({ service: 'api', event: 'passkey_removed', actorId: user.actorId })
     return c.json({ success: true })
   })
 

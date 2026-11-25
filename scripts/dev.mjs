@@ -1,6 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { createInterface } from 'node:readline'
+import { stripVTControlCharacters } from 'node:util'
 
 const require = createRequire(import.meta.url)
 const targets = new Map([
@@ -11,6 +13,41 @@ const targets = new Map([
 ])
 const [target, ...args] = process.argv.slice(2)
 const windows = process.platform === 'win32'
+const serviceColors = { api: 36, worker: 33, simulation: 35, admin: 32 }
+const levels = new Map([
+  [10, 'TRACE'], [20, 'DEBUG'], [30, 'INFO'], [40, 'WARN'], [50, 'ERROR'], [60, 'FATAL'],
+])
+const logMetadata = new Set(['event', 'level', 'time', 'pid', 'hostname'])
+
+function formatMessage(name, line, colored) {
+  if (!line.startsWith('{')) return line
+  try {
+    const record = JSON.parse(line)
+    if (typeof record.event !== 'string' || !/^[\w.-]+$/.test(record.event)) return line
+    const fields = Object.entries(record).filter(([key, value]) =>
+      !logMetadata.has(key) && !(key === 'service' && value === name))
+    const level = levels.get(record.level)
+    const label = level ? `[${level}] ` : ''
+    const color = record.level === 40 ? 33 : record.level >= 50 ? 31 : 0
+    const message = [record.event, ...fields.map(([key, value]) => {
+      const text = typeof value === 'string' && /^[\w./:@-]+$/.test(value) ? value : JSON.stringify(value)
+      return `${key}=${text}`
+    })].join(' ')
+    return (colored && color ? `\x1b[${color}m${label}\x1b[0m` : label) + message
+  } catch {
+    return line
+  }
+}
+
+function writeLog(name, line, output) {
+  const plain = stripVTControlCharacters(line)
+  if (!plain.trim()) return
+  const colored = !Object.hasOwn(process.env, 'NO_COLOR') && process.env.FORCE_COLOR !== '0' &&
+    (output.isTTY || Object.hasOwn(process.env, 'FORCE_COLOR'))
+  const time = new Date().toTimeString().slice(0, 8)
+  const label = colored ? `\x1b[${serviceColors[name]}m[${name}]\x1b[0m` : `[${name}]`
+  output.write(`${time} ${label} ${formatMessage(name, plain, colored)}\n`)
+}
 
 function command(name) {
   const cli = name === 'admin'
@@ -48,16 +85,19 @@ function startAll() {
   process.on('SIGINT', () => stop(130))
   process.on('SIGTERM', () => stop(143))
   for (const [name, argv] of commands) {
-    const child = spawn(process.execPath, argv, { detached: !windows, stdio: ['ignore', 'inherit', 'inherit'] })
+    const child = spawn(process.execPath, argv, { detached: !windows, stdio: ['ignore', 'pipe', 'pipe'] })
     children.add(child)
+    for (const [input, output] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+      createInterface({ input, crlfDelay: Infinity }).on('line', (line) => writeLog(name, line, output))
+    }
     child.once('error', (error) => {
-      console.error(`[${name}] ${error.message}`)
+      writeLog(name, error.message, process.stderr)
       stop(1)
     })
     child.once('close', (code, signal) => {
       children.delete(child)
       if (!stopping) {
-        console.error(`[${name}] exited (${signal ?? code})`)
+        writeLog(name, `exited (${signal ?? code})`, process.stderr)
         stop(code || 1)
       }
       if (!children.size) clearTimeout(forceStop)

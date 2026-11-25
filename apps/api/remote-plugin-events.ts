@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z } from '@hono/zod-openapi'
@@ -27,7 +28,7 @@ export function createRemotePluginEvents(db: PrismaClient, services: RemotePlugi
     await next()
   })
   app.onError((error, c) => {
-    console.error(JSON.stringify({ service: 'api', event: 'remote_plugin_events_failed', error: error.name }))
+    logger.error({ service: 'api', event: 'remote_plugin_events_failed', error: error.name })
     return c.json({ code: 'INTERNAL_ERROR' }, 500)
   })
 

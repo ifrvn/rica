@@ -18,13 +18,15 @@
   },
   "exports": {
     "./config": "./config/index.ts",
+    "./logging": "./logging.ts",
     "./settings-directory": "./config/settings-directory.ts",
     "./write-settings": "./config/write-settings.ts",
     "./memory-ranking": "./cognition/memory-ranking.ts",
     "./writing-prompts": "./cognition/writing-prompts.ts"
   },
   "dependencies": {
+    "@ricajs/contracts": "workspace:*",
     "dotenv": "^18.0.9",
-    "@ricajs/contracts": "workspace:*"
+    "pino": "10.4.0"
   }
 }

@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { createDatabase } from '@ricajs/persistence/client'
 import { checkPackageRetention, sweepRuntimeRetention } from './runtime-retention.js'
 import { loadConfig } from '@ricajs/runtime/config'
@@ -14,7 +15,7 @@ try {
     changed = await sweepRuntimeRetention(db, sources)
     total += changed
   } while (changed > 0)
-  console.info(JSON.stringify({ service: 'retention', event: 'complete', changed: total }))
+  logger.info({ service: 'retention', event: 'complete', changed: total })
 } finally {
   await db.$disconnect()
 }

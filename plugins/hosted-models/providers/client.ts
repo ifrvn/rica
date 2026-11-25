@@ -1,3 +1,4 @@
+import { logger } from '@ricajs/runtime/logging'
 import { z } from 'zod'
 import type { HostedModel } from './catalog.js'
 import type { HostedModelConfig } from './config.js'
@@ -136,7 +137,7 @@ export async function requestHostedReply(id: HostedModel['id'], config: HostedMo
   } finally {
     metric.elapsedMs = Math.round(performance.now() - started)
     if (usage) await usage.record(metric).catch(() => {
-      console.warn(JSON.stringify({ service: 'hosted-models', event: 'usage_record_failed' }))
+      logger.warn({ service: 'hosted-models', event: 'usage_record_failed' })
     })
   }
 }
