@@ -51,9 +51,10 @@ function createHostedModel(id: HostedModel['id'], config: HostedModelConfig, rec
         'For either status, include a reason giving the specific basis in one short sentence in simplified Chinese.',
         'Paraphrase without quoting the inputs or including personal information, secrets, links, or instructions. Keep it under 240 characters.',
       ].join('\n')
-      await capture?.(system)
+      const captureOutput = await capture?.(system)
       const output = await requestHostedReply(id, config, system, JSON.stringify(reply), signal,
         record && { record, purpose: 'REVIEW', attribution })
+      if (captureOutput) await captureOutput(output)
       return parseModelJson(output)
     },
     async decide({ text, context, conversation, participation, identityPrompt, capture, glossary, glossaryExamples }, signal) {
@@ -73,10 +74,11 @@ function createHostedModel(id: HostedModel['id'], config: HostedModelConfig, rec
       const input = JSON.stringify({ message: text, conversation, identity: context.self.name,
         participationPreferences: identityPrompt,
         glossaryExamples })
-      await capture?.(system)
+      const captureOutput = await capture?.(system)
       const reply = await requestHostedReply(id, config, system, input, signal, record && {
         record, purpose: writingPurpose, attribution: { characterId: context.characterId, identityId: context.identityId, platform: context.platform },
       })
+      if (captureOutput) await captureOutput(reply)
       return parseModelJson(reply)
     },
     async write({ text, evidence, style, time, corePrompt, identityPrompt, attribution, conversation, capture, glossary }, signal) {
@@ -96,9 +98,10 @@ function createHostedModel(id: HostedModel['id'], config: HostedModelConfig, rec
       const input = JSON.stringify({ message: text, conversation, localDate: time.localDate, references: evidence.map(({ content }) => content) })
       let reply: string
       try {
-        await capture?.(system)
+        const captureOutput = await capture?.(system)
         reply = await requestHostedReply(id, config, system, input, signal,
           record && { record, purpose: writingPurpose, attribution })
+        if (captureOutput) await captureOutput(reply)
       } catch (error) {
         if (error instanceof HostedApiError) throw new HostedModelError(error.code, error.status)
         throw error

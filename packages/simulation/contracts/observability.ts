@@ -74,7 +74,7 @@ export const runReplayView = z.object({
   participationDecision: z.object({ participation: participationLevel,
     action: z.enum(['NO_OP', 'REPLY']), reason: z.union([replyDecision.options[0].shape.reason, replyDecision.options[1].shape.reason]) }).nullable(),
   modelCalls: z.array(z.object({ id: resourceId, stage: z.enum(['DECISION', 'WRITING', 'REVIEW']),
-    model: z.string(), at: timestamp, systemPrompt: z.string().nullable() })),
+    model: z.string(), at: timestamp, systemPrompt: z.string().nullable(), output: z.string().nullable() })),
   glossary: z.array(glossaryReference).max(4),
   transcript: z.object({ message: z.string(), draft: z.string().nullable(), reviewReason: z.string() }).nullable(),
   goalRefs: z.array(z.object({ id: z.uuid(), version: z.number().int() })),

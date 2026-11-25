@@ -33,6 +33,7 @@ export const replyDecision = z.discriminatedUnion('action', [
 ])
 export type ReplyDecision = z.infer<typeof replyDecision>
 export type CaptureSystemPrompt = (prompt: string) => Promise<void>
+export type CaptureModelCall = (prompt: string) => Promise<void | ((output: string) => Promise<void>)>
 
 export type ModelProvider = Readonly<{
   hostedProvider?: string
@@ -40,11 +41,11 @@ export type ModelProvider = Readonly<{
   selectDiscussion?(input: DiscussionSelectionInput, signal: AbortSignal, attribution: ModelAttribution,
     capture: CaptureSystemPrompt): Promise<unknown>
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution,
-    capture?: CaptureSystemPrompt): Promise<unknown>
+    capture?: CaptureModelCall): Promise<unknown>
   decide(input: ModelInput & Readonly<{ context: RunContinuity; conversation?: ModelConversation; participation?: Participation;
-    identityPrompt?: string; capture?: CaptureSystemPrompt; glossary?: readonly GlossaryReference[];
+    identityPrompt?: string; capture?: CaptureModelCall; glossary?: readonly GlossaryReference[];
     glossaryExamples?: readonly { speaker: string; message: string }[] }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
-    attribution?: ModelAttribution; conversation?: ModelConversation; capture?: CaptureSystemPrompt;
+    attribution?: ModelAttribution; conversation?: ModelConversation; capture?: CaptureModelCall;
     glossary?: readonly GlossaryReference[] }>, signal: AbortSignal): Promise<unknown>
 }>

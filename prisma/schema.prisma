@@ -434,6 +434,7 @@ model RunModelCall {
   stage        String
   model        String
   systemPrompt String?  @map("system_prompt")
+  output       String?  @map("model_output")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   run          AgentRun @relation(fields: [characterId, runId], references: [characterId, id], onDelete: Cascade, onUpdate: NoAction)
 

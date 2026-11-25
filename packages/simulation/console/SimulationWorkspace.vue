@@ -419,13 +419,19 @@ onMounted(() => {
             <div><dt>运行 ID</dt><dd>{{ selected.id }}</dd></div>
           </dl>
           <section aria-labelledby="run-prompts-heading" class="run-prompts">
-            <h4 id="run-prompts-heading">模型调用与 System Prompt</h4>
+            <h4 id="run-prompts-heading">模型调用</h4>
             <p v-if="selected.participationDecision && !selected.modelCalls.some(call => call.stage === 'DECISION')">参与决定由本地规则产生。</p>
-            <p v-else-if="!selected.modelCalls.length">当时未采集提示词。</p>
+            <p v-else-if="!selected.modelCalls.length">暂无模型调用记录。</p>
             <details v-for="call in selected.modelCalls" :key="call.id">
               <summary>{{ modelStage[call.stage] }} · {{ call.model }} · {{ formatTime(call.at) }}</summary>
-              <pre v-if="call.systemPrompt !== null" class="console-payload">{{ call.systemPrompt }}</pre>
-              <p v-else>提示词已超过保留期限或来源已不可用。</p>
+              <dl>
+                <dt>模型返回</dt>
+                <dd v-if="call.output !== null"><pre class="console-payload">{{ call.output }}</pre></dd>
+                <dd v-else>暂无可查看的模型返回。</dd>
+                <dt>System Prompt</dt>
+                <dd v-if="call.systemPrompt !== null"><pre class="console-payload">{{ call.systemPrompt }}</pre></dd>
+                <dd v-else>提示词已超过保留期限或来源已不可用。</dd>
+              </dl>
             </details>
           </section>
           <details v-if="selected.glossary.length" class="run-prompts">

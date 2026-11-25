@@ -124,7 +124,11 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
       CROSS JOIN LATERAL (SELECT CASE WHEN r.state IN ('WAITING_APPROVAL','READY') THEN public.rica_chat_reply_stop(r.id) END AS stop OFFSET 0) chat
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')
-    return runReplayView.parse(row.view)
+    const view = runReplayView.parse(row.view)
+    if (view.snapshots.some(({ evidence }) => evidence.some(({ available }) => !available))) {
+      return { ...view, modelCalls: view.modelCalls.map((call) => ({ ...call, output: null })) }
+    }
+    return view
   }, { isolationLevel: 'RepeatableRead' })
 }
 

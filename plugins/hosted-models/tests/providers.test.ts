@@ -74,11 +74,16 @@ test('hosted models send only writing input and parse each provider response', a
       assert.equal(model.hostedProvider, id)
       assert.equal(model.hostedModel, 'fixture-model')
       let capturedPrompt: string | undefined
-      assert.deepEqual(await model.write({ ...input, attribution, capture: async prompt => { capturedPrompt = prompt } }, signal),
+      let capturedOutput: string | undefined
+      assert.deepEqual(await model.write({ ...input, attribution, capture: async prompt => {
+        capturedPrompt = prompt
+        return async output => { capturedOutput = output }
+      } }, signal),
         { text: '下午三点。', evidenceIds: ['internal-memory-id'] })
       assert.equal(fetch.mock.callCount(), 1)
       assert.ok(sentPrompt)
       assert.equal(capturedPrompt, sentPrompt)
+      assert.equal(capturedOutput, '下午三点。')
       assert.equal(usage.length, 1)
       assert.deepEqual(usage[0]?.attribution, attribution)
       assert.deepEqual(usage[0]?.tokens, { inputTokens: 10, outputTokens: 7, totalTokens: 17 })

@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi'
-import type { ModelAttribution } from './model-provider.js'
+import type { CaptureModelCall, ModelAttribution } from './model-provider.js'
 
 export const defaultAutoReviewPrompt = [
   '只批准符合当前讨论、措辞友善、风险低的日常回复，例如感谢、简单澄清或中性的交流。',
@@ -29,7 +29,7 @@ export type AutoReviewHandoff = z.infer<typeof autoReviewHandoff>
 export const modelReviewDecision = autoReviewHandoff.pick({ reason: true }).extend({ status: z.enum(['APPROVE', 'REVIEW']) }).strict()
 export type AutoReviewOutcome = AutoReviewHandoff | { status: 'APPROVE'; model: string; reason?: string }
 export type ReviewPublicReply = (settings: AutoReviewSettings, reply: PublicReplyReview, attribution: ModelAttribution,
-  capture?: (systemPrompt: string, model: string) => Promise<void>) => Promise<AutoReviewOutcome>
+  capture?: (systemPrompt: string, model: string) => ReturnType<CaptureModelCall>) => Promise<AutoReviewOutcome>
 
 export const autoReviewHandoffLabels = {
   REVIEW: 'AI 建议人工复审', SKIPPED: '未进行 AI 审核', UNAVAILABLE: 'AI 审核未完成',
