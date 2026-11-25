@@ -46,6 +46,8 @@ commands: [
 
 两个 URL 均指定 `?schema=rica_plugin_acme`。命名规则是 `rica_plugin_` 加插件 ID，连字符转为下划线。部署者预先建立 schema、迁移角色和运行时角色，并通过迁移授予业务操作所需权限。无额外参数的 `pnpm run db:migrate` 或 `rica migrate` 先运行宿主迁移，再从内置 Newbi 包初始化基础对象，最后依清单顺序运行已启用插件的迁移。附带参数时只调用宿主的 Prisma CLI，方便保留 `--help` 和单独指定宿主配置的用法。运行时用自己的 Client 连接该命名空间，使用 `PrismaPg` 时将对应 schema 传给驱动适配器。
 
+第三方插件通过 `./rica/prisma` 和清单接入迁移，升级时把表结构和数据转换追加到包内迁移。Newbi 对拆分前旧库的兼容检查由 Newbi 包提供，宿主在执行任何迁移前调用内置迁移检查。
+
 例如，首次安装 `acme` 时，由数据库管理员为该包准备两个独立登录和业务 schema。登录的认证方式由部署环境统一配置。
 
 ```sql
