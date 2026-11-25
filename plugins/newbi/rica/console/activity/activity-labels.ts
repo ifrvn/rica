@@ -1,5 +1,5 @@
 import type { z } from '@hono/zod-openapi'
-import type { newbiAssessmentResult, newbiReplySummary } from '../management/contracts.js'
+import type { newbiAssessmentResult, newbiReplySummary } from '../../management/contracts.js'
 
 export const assessmentStatusLabels = {
   SUGGEST_REPLY: '建议回应', NO_REPLY: '本帖暂不回应', UNAVAILABLE: '评估未完成', PENDING: '评估中',

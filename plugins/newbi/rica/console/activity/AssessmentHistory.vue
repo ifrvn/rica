@@ -4,7 +4,7 @@ import { UiAlert, UiButton, UiSpinner } from '@ricajs/console-shared/ui'
 import { characterPath, formatTime, useConsoleTask } from '@ricajs/console-shared/console-data'
 import { request } from '@ricajs/console-shared/request'
 import type { z } from '@hono/zod-openapi'
-import type { newbiAssessmentView } from '../management/contracts.js'
+import type { newbiAssessmentView } from '../../management/contracts.js'
 import { assessmentStatusLabels } from './activity-labels.js'
 import AssessmentRecord from './AssessmentRecord.vue'
 

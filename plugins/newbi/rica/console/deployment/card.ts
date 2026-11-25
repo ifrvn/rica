@@ -1,7 +1,7 @@
 import type { PluginMetadata } from '@ricajs/contracts/plugin-status'
-import type { NewbiDeploymentView } from '../deployment/settings.js'
-import { newbiDeployment } from '../deployment/catalog.js'
-import { newbiConsole } from './labels.js'
+import type { NewbiDeploymentView } from '../../deployment/settings.js'
+import { newbiDeployment } from '../../deployment/catalog.js'
+import { newbiConsole } from '../labels.js'
 import NewbiSettings from './NewbiSettings.vue'
 
 export type ConnectorCardStatus = {

@@ -1,6 +1,6 @@
 import type { HealthNode } from '@ricajs/console-shared/health'
 import type { z } from '@hono/zod-openapi'
-import type { newbiConnectionsView } from '../management/contracts.js'
+import type { newbiConnectionsView } from '../../management/contracts.js'
 
 export function newbiHealth(status: { deployment?: { plugins: { newbi: string }; newbi: { endpoint: string | null } }; newbiConnections?: z.infer<typeof newbiConnectionsView> } | undefined,
   processNode: (id: 'connector-reader' | 'connector-executor', label: string, description: string) => HealthNode,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { z } from '@hono/zod-openapi'
-import type { newbiAssessmentView } from '../management/contracts.js'
+import type { newbiAssessmentView } from '../../management/contracts.js'
 
 defineProps<{ item: z.infer<typeof newbiAssessmentView> }>()
 

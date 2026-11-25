@@ -3,11 +3,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
-import { newbiReplyInput, type newbiAssessmentList, type newbiAssessmentView, type newbiInboxView, type newbiPollView } from '../management/contracts.js'
+import { newbiReplyInput, type newbiAssessmentList, type newbiAssessmentView, type newbiInboxView, type newbiPollView } from '../../management/contracts.js'
 import { characterPath, useConsoleTask } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
-import { assessmentStatusLabels } from './activity-labels.js'
-import AssessmentRecord from './AssessmentRecord.vue'
+import { assessmentStatusLabels } from '../activity/activity-labels.js'
+import AssessmentRecord from '../activity/AssessmentRecord.vue'
 
 type Inbox = z.infer<typeof newbiInboxView>
 type Assessment = z.infer<typeof newbiAssessmentView>
