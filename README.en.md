@@ -43,10 +43,10 @@ Combined `pnpm dev` logs show the local time, service label, level, and event fi
 
 1. Apply migrations and set `RICA_ADMIN_ORIGIN=http://localhost:5173`. The management API uses `DATABASE_URL`.
 
-2. Use PowerShell 7 to create the initial local administrator. The command reads a 12–128 character password from stdin and uses the migration database login. `--creator` allows this account to create characters.
+2. Create the initial local administrator in a terminal. Enter a username, then a 12–128 character password. The password is hidden while you type. The command uses the migration database login and grants system administrator access.
 
    ```powershell
-   Read-Host -MaskInput 'Rica administrator password' | pnpm rica admin-user add admin
+   pnpm rica admin-user add
    ```
 
 3. Set `RICA_ADMIN_ORIGIN` to the browser's address and restart the API. Sign in to the [local console](http://localhost:5173/) with your username and password. Open the Passkey section and confirm your password to register a device. Next time, use the Passkey sign-in button.
@@ -56,7 +56,7 @@ Local development uses `http://localhost:5173`. Use a stable HTTPS origin for de
 
 ## 3. Create your first character
 
-Run this PowerShell 7 example with the local account created using `--creator`. The response includes the character ID you will use for identities, accounts, and membership.
+Run this PowerShell 7 example with the local administrator account you created above. The response includes the character ID you will use for identities, accounts, and membership.
 
 ```powershell
 $ricaOrigin = 'http://localhost:5173'

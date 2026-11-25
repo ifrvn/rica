@@ -10,12 +10,11 @@
 
 ## 本地账号与会话
 
-以下 PowerShell 7 示例以交互方式读取密码，再通过标准输入传递给命令。用户名长度 3–64，允许小写字母、数字、点、下划线及连字符。密码长度 12–128，数据库只保存带盐的 scrypt 哈希。
+在终端运行添加或重置命令。输入用户名并回车，再输入密码并回车。用户名长度 3–64，允许小写字母、数字、点、下划线及连字符。密码长度 12–128，输入时隐藏，数据库只保存带盐的 scrypt 哈希。
 
 ```powershell
-Read-Host -MaskInput 'Rica password' | pnpm rica admin-user add admin
-Read-Host -MaskInput 'Second administrator password' | pnpm rica admin-user add reviewer
-Read-Host -MaskInput 'New password' | pnpm rica admin-user reset admin
+pnpm rica admin-user add
+pnpm rica admin-user reset
 ```
 
 系统管理员可在右上角菜单或「成员与审计」点击「新建账号」，验证当前密码后创建另一位系统管理员。新账号可以管理所有虚拟角色、部署插件和系统账号。列表显示账号创建时间，迁移前的账号可能没有记录。

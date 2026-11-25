@@ -56,10 +56,10 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
 
 1. 应用迁移并设置 `RICA_ADMIN_ORIGIN=http://localhost:5173`。管理 API 复用 `DATABASE_URL`。
 
-2. 使用 PowerShell 7 初始化本地管理员。密码通过标准输入传递，长度为 12–128 个字符。命令使用迁移数据库登录，新账号具有系统管理员权限。
+2. 在终端初始化本地管理员。输入用户名并回车，再输入 12–128 个字符的密码并回车。密码输入时隐藏。命令使用迁移数据库登录，新账号具有系统管理员权限。
 
    ```powershell
-   Read-Host -MaskInput 'Rica 管理员密码' | pnpm rica admin-user add admin
+   pnpm rica admin-user add
    ```
 
 3. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址一致，重启 API，然后在 [本地控制台](http://localhost:5173/) 用用户名和密码登录。登录后可在「添加 Passkey」中确认密码并登记设备。下次可直接点「使用 Passkey」。
@@ -99,7 +99,7 @@ $ricaCharacter.id
 
 ### 用真实模型试写
 
-用通过 `pnpm rica admin-user add <用户名>` 授权的本地账号登录，在控制台顶部打开「模型设置」。选择 OpenAI、Claude、Gemini 或 OpenAI 兼容服务，填写供应商的文本模型 ID 和 API 密钥。Gemini 模型 ID 省略 `models/`，兼容服务填写包含版本路径的 HTTPS API 基础地址。点击「保存模型设置」后，下一个公开模拟草稿使用新配置，无需重启 Worker。默认使用本地模拟模板。
+用通过 `pnpm rica admin-user add` 创建的本地管理员账号登录，在控制台顶部打开「模型设置」。选择 OpenAI、Claude、Gemini 或 OpenAI 兼容服务，填写供应商的文本模型 ID 和 API 密钥。Gemini 模型 ID 省略 `models/`，兼容服务填写包含版本路径的 HTTPS API 基础地址。点击「保存模型设置」后，下一个公开模拟草稿使用新配置，无需重启 Worker。默认使用本地模拟模板。
 
 控制台使用 `mock-a` 或 `mock-b` 从「运行 → 发起模拟」输入测试消息。运行详情的草稿阶段显示供应商和配置的模型名。系统管理员可进入「审批 → 模拟提案」看拟回复，也可以从运行详情点「查看模拟提案」。验收人设时，可保存不同版本的身份提示词，再用同一输入各发起一次，直接比较提案正文。
 

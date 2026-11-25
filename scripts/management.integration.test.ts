@@ -287,22 +287,35 @@ test('local authentication enforces origin, membership and session revocation', 
   const username = 'local-' + suffix
   const oldPassword = 'old fixture password'
   const newPassword = 'new fixture password'
-  async function accountCommand(args: string[], password: string) {
-    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/admin-user.ts', ...args], {
+  async function accountCommand(command: 'add' | 'reset', password: string) {
+    const tty = 'data:text/javascript,' + encodeURIComponent('Object.assign(process.stdin, { isTTY: true, setRawMode() {} })')
+    const child = spawn(process.execPath, ['--import', tty, '--import', 'tsx', 'scripts/admin-user.ts', command], {
       env: { ...process.env, MIGRATION_DATABASE_URL: config.databaseUrl }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     })
     let output = ''
-    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
+    let step = 0
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+      output += chunk
+      if (step === 0 && output.includes('Username: ')) {
+        step++
+        child.stdin.write(username + '\n')
+      }
+      if (step === 1 && output.includes('Password (hidden): ')) {
+        step++
+        child.stdin.end(password + '\n')
+      }
+    })
     const closed = once(child, 'close')
-    child.stdin.end(password + '\n')
     assert.equal((await closed)[0], 0, output)
+    assert.equal(step, 2)
+    assert.equal(output.includes(password), false)
   }
   const submit = (path: string, data: object, cookie = '', origin = fixtureOrigin) => local.request('/v1/auth/' + path, {
     method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(data),
   })
   const session = (cookie: string) => local.request('/v1/auth/session', { headers: { Cookie: cookie } })
   try {
-    await accountCommand(['add', username], oldPassword)
+    await accountCommand('add', oldPassword)
     const user = await owner.adminUser.findUniqueOrThrow({ where: { username } })
     assert.equal(user.actorId, actorId(localIssuer, username))
     assert.equal(user.canCreate, true)
@@ -337,7 +350,7 @@ test('local authentication enforces origin, membership and session revocation', 
 
     assert.equal((await submit('logout', {}, cookie)).status, 200)
     assert.equal((await session(cookie)).status, 401)
-    await accountCommand(['reset', username], newPassword)
+    await accountCommand('reset', newPassword)
     assert.equal((await session(secondCookie)).status, 401)
     assert.equal((await submit('login', { username, password: oldPassword })).status, 401)
     const renewed = await submit('login', { username, password: newPassword })
