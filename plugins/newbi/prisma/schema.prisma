@@ -5,10 +5,9 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  schemas  = ["rica_plugin_newbi"]
 }
 
-// Bootstrap SQL owns the DDL, including foreign keys to host tables.
+// Migration SQL owns the DDL, including foreign keys to host tables.
 model AuthorTerm {
   id                 String               @id(map: "newbi_author_terms_pkey") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   accountId          String               @map("account_id") @db.Uuid
@@ -25,7 +24,6 @@ model AuthorTerm {
   @@unique([accountId, authorKey, termKey], map: "newbi_author_terms_scope_key")
   @@index([accountId, sourceAssessmentId], map: "newbi_author_terms_source_idx")
   @@map("author_terms")
-  @@schema("rica_plugin_newbi")
 }
 
 model Credential {
@@ -37,7 +35,6 @@ model Credential {
 
   @@id([endpoint, agentId], map: "newbi_credentials_pkey")
   @@map("credentials")
-  @@schema("rica_plugin_newbi")
 }
 
 model DiscussionAssessment {
@@ -65,7 +62,6 @@ model DiscussionAssessment {
   @@index([accountId, postId, createdAt, id], map: "newbi_assessments_account_post_idx")
   @@index([createdAt], map: "newbi_assessments_created_at_idx")
   @@map("discussion_assessments")
-  @@schema("rica_plugin_newbi")
 }
 
 model EventCheckpoint {
@@ -80,7 +76,6 @@ model EventCheckpoint {
   readError         String?   @map("read_error")
 
   @@map("event_checkpoints")
-  @@schema("rica_plugin_newbi")
 }
 
 model Event {
@@ -97,7 +92,6 @@ model Event {
   @@index([occurredAt], map: "newbi_events_occurred_at_idx")
   @@index([receivedAt], map: "newbi_events_received_at_idx")
   @@map("events")
-  @@schema("rica_plugin_newbi")
 }
 
 model Reply {
@@ -131,7 +125,6 @@ model Reply {
   @@index([characterId, createdAt, id], map: "newbi_replies_character_created_idx")
   @@index([characterId, status, createdAt, id], map: "newbi_replies_character_status_created_idx")
   @@map("replies")
-  @@schema("rica_plugin_newbi")
 }
 
 model SectionGlossarySample {
@@ -151,5 +144,4 @@ model SectionGlossarySample {
   @@unique([accountId, sectionId, termKey, meaningKey, authorKey], map: "newbi_section_glossary_sample_scope_key")
   @@index([accountId, sourceAssessmentId], map: "newbi_section_glossary_sample_source_idx")
   @@map("section_glossary_samples")
-  @@schema("rica_plugin_newbi")
 }

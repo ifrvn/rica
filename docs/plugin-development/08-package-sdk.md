@@ -44,7 +44,7 @@ commands: [
 {"migrateUrlEnv": "RICA_PLUGIN_ACME_MIGRATE_URL", "runtimeUrlEnv": "RICA_PLUGIN_ACME_RUNTIME_URL"}
 ```
 
-两个 URL 均指定 `?schema=rica_plugin_acme`。命名规则是 `rica_plugin_` 加插件 ID，连字符转为下划线。部署者预先建立 schema、迁移角色和运行时角色，并通过迁移授予业务操作所需权限。无额外参数的 `pnpm run db:migrate` 或 `rica migrate` 先运行宿主迁移，再从内置 Newbi 包初始化基础对象，最后依清单顺序运行已启用插件的迁移。附带参数时只调用宿主的 Prisma CLI，方便保留 `--help` 和单独指定宿主配置的用法。运行时用自己的 Client 连接该命名空间，使用 `PrismaPg` 时将对应 schema 传给驱动适配器。
+两个 URL 均指定 `?schema=rica_plugin_acme`。命名规则是 `rica_plugin_` 加插件 ID，连字符转为下划线。部署者预先建立 schema、迁移角色和运行时角色，并通过迁移授予业务操作所需权限。无额外参数的 `pnpm run db:migrate` 或 `rica migrate` 先运行宿主迁移，再运行随宿主分发的插件迁移，最后依清单顺序运行第三方包的迁移。附带参数时只调用宿主的 Prisma CLI，方便保留 `--help` 和单独指定宿主配置的用法。运行时用自己的 Client 连接该命名空间，使用 `PrismaPg` 时将对应 schema 传给驱动适配器。
 
 第三方插件通过 `./rica/prisma` 和清单接入迁移，升级时把表结构和数据转换追加到包内迁移。插件模型定义在包内的 `schema.prisma`，用 `prisma generate` 生成独立 Client，普通查询和写入可直接使用模型方法。数据库函数、触发器和角色授权通过 SQL 迁移维护。内置 Newbi 可作为在同一个包中使用这两种方式的示例。
 
@@ -100,11 +100,11 @@ accounts: {
 
 内置 Newbi 的账号池登记和直接绑定已走相同的两阶段宿主命令。它先核对远端 Agent，提交前再确认部署中的接入点，账号登记和凭据保存仍作为一次本地写入完成。
 
-内置 Newbi 的凭据、公开账号资料、事件、轮询检查点、讨论评估、词库和回复执行账本存放在 `rica_plugin_newbi`。Newbi 包在宿主迁移之后创建这些对象，并交给当前数据库专用的 Newbi 所有者角色。首次初始化记录在 `rica_bootstrap_newbi`。重构后的开发环境从空数据库初始化。内置模式和清单模式使用同一个插件保留期清理函数。轮询角色通过 Newbi 所有者管理的受限函数领取轮询租约、提交游标和事件页。函数通过宿主的 Newbi 绑定接口加锁并核对账号权限和版本，以便停用账号时阻止在途事件提交。轮询和发送角色分别通过插件 schema 中的受限函数取用凭据。宿主只提供启用中的 Newbi 账号标识和绑定地址，插件用这些字段匹配自己的凭据。发送角色通过 Newbi 所有者管理的函数查询执行目标、领取发送许可和记录回执。领取许可仍需通过宿主绑定接口加锁并核对授权，确认回执仍按原发送尝试入账。只有管理角色可关闭待对账的记录。评估结果与词库证据在同一事务中提交，证据随来源评估到期清理。
+内置 Newbi 的凭据、公开账号资料、事件、轮询检查点、讨论评估、词库和回复执行账本存放在 `rica_plugin_newbi`。Newbi 包在宿主迁移之后创建这些对象，并交给当前数据库专用的 Newbi 所有者角色。Newbi 的迁移记录保存在 `rica_bootstrap_newbi`。重构后的开发环境从空数据库初始化。内置模式和清单模式使用同一个插件保留期清理函数。轮询角色通过 Newbi 所有者管理的受限函数领取轮询租约、提交游标和事件页。函数通过宿主的 Newbi 绑定接口加锁并核对账号权限和版本，以便停用账号时阻止在途事件提交。轮询和发送角色分别通过插件 schema 中的受限函数取用凭据。宿主只提供启用中的 Newbi 账号标识和绑定地址，插件用这些字段匹配自己的凭据。发送角色通过 Newbi 所有者管理的函数查询执行目标、领取发送许可和记录回执。领取许可仍需通过宿主绑定接口加锁并核对授权，确认回执仍按原发送尝试入账。只有管理角色可关闭待对账的记录。评估结果与词库证据在同一事务中提交，证据随来源评估到期清理。
 
-Newbi 的统一活动已有独立包入口。部署者可在安装 `@ricajs/plugin-newbi` 后，把下面的条目加入部署清单。运行 `rica migrate` 会先完成宿主和 Newbi 基础迁移，再根据清单从 Newbi 包部署只读视图。API 通过声明的视图获取评估和提案，保留原有活动标识和详情入口。未在清单中登记时，API 使用内置活动查询。
+内置和清单模式共用 Newbi 的 `prisma/migrations`，统一活动都通过 `rica_plugin_newbi.run_activity` 读取。运行 `rica migrate` 时由宿主的迁移连接应用一次。已有开发库沿用原迁移记录。
 
-内置和清单模式共用的 Newbi 表结构变更追加到包内的 `prisma/bootstrap`。只有清单模式需要的能力对象追加到 `prisma/migrations`。
+如需用清单配置 Newbi 的运行时连接，请登记与 Rica 随附版本一致的包。清单只需要运行时连接变量。
 
 ```json
 {
@@ -112,22 +112,10 @@ Newbi 的统一活动已有独立包入口。部署者可在安装 `@ricajs/plug
   "package": "@ricajs/plugin-newbi",
   "version": "0.1.0",
   "database": {
-    "migrateUrlEnv": "RICA_PLUGIN_NEWBI_MIGRATE_URL",
-    "runtimeUrlEnv": "RICA_PLUGIN_NEWBI_RUNTIME_URL",
-    "migrationJournal": "separate"
+    "runtimeUrlEnv": "RICA_PLUGIN_NEWBI_RUNTIME_URL"
   }
 }
 ```
-
-Newbi 的活动视图、清理函数和 Worker 与宿主使用同一数据库。迁移 URL 使用 `?schema=rica_migrate_newbi`。首次启用包迁移时，先在未配置插件清单的环境下运行 `rica migrate`，再给 Newbi 迁移登录授予下方查询返回的所有者角色，启用 `INHERIT` 和 `SET`。迁移登录还需要在 `rica_migrate_newbi` 记录迁移的权限，以及 `public` 的 `USAGE`。运行时登录继续使用已有的受限角色。
-
-```sql
-SELECT pg_get_userbyid(relowner) AS newbi_ddl_role
-FROM pg_catalog.pg_class
-WHERE oid = 'rica_plugin_newbi.credentials'::regclass;
-```
-
-授权后带上插件清单运行 `rica migrate`。包迁移会把它创建的活动视图交给 Newbi 所有者角色。后续该包可以用迁移登录维护 Newbi 的业务表。活动查询沿用 `rica_admin_api`。`rica_runtime` 调用基础迁移安装的清理函数，由 Newbi 所有者角色按批清理回复正文、事件和讨论评估。
 
 清单里的 Newbi Worker 和管理入口都使用 `RICA_PLUGIN_NEWBI_RUNTIME_URL`，连接宿主数据库并指定 `?schema=rica_plugin_newbi`。运行时登录需要现有的 `rica_runtime` 角色权限，并可以切换到 `rica_admin_api`、`rica_newbi_poller` 和 `rica_newbi_executor`。后台轮询和评估继续读取控制台的接入点、后台评估开关与外部模型状态。未登记 Newbi 包时，宿主使用内置活动和清理，以及同一套 Worker 与管理入口。
 

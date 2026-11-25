@@ -1,6 +1,6 @@
 BEGIN;
 
-CREATE VIEW rica_plugin_newbi.run_activity WITH (security_invoker = true) AS
+CREATE OR REPLACE VIEW rica_plugin_newbi.run_activity WITH (security_invoker = true) AS
 SELECT r.character_id, r.id, 'ASSESSMENT'::text AS kind, r.identity,
   coalesce(nullif(c.username, ''), a.remote_account_id) AS account, r.account_id,
   coalesce(r.result->>'status', CASE WHEN r.created_at > statement_timestamp() - interval '45 seconds'
@@ -28,9 +28,6 @@ DECLARE
 BEGIN
   SELECT pg_catalog.pg_get_userbyid(relowner) INTO STRICT owner_role FROM pg_catalog.pg_class
     WHERE oid = 'rica_plugin_newbi.credentials'::regclass;
-  IF NOT pg_has_role(current_user, owner_role, 'SET') THEN
-    RAISE EXCEPTION 'Newbi migration login must be able to assume %', owner_role;
-  END IF;
   EXECUTE format('ALTER VIEW rica_plugin_newbi.run_activity OWNER TO %I', owner_role);
 END
 $migration$;

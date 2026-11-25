@@ -1,4 +1,0 @@
-// Newbi's SQL migrations use journals outside the business schema.
-datasource db {
-  provider = "postgresql"
-}

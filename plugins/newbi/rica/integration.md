@@ -2,9 +2,9 @@
 
 Newbi 从[插件 schema](../prisma/schema.prisma)生成独立 Prisma Client。词库查询、待处理回执计数和审核提示词写入使用插件模型，以 `rica_admin_api` 运行。账号绑定、授权和审计使用宿主事务。轮询和发送在事务内切换到 `rica_newbi_poller` 或 `rica_newbi_executor`，通过受限函数取得当前账号的凭证和执行许可。
 
-账号凭据保存在 `rica_plugin_newbi.credentials`。账号列表、运行活动和后台候选查询使用 `rica_plugin_newbi.account_profiles`，视图只返回接入点、Agent ID 和公开资料。凭据写入使用宿主的账号事务。开发时运行 `pnpm run db:generate` 生成宿主和插件的客户端。部署时，`rica migrate` 使用 [migration.prisma](../prisma/migration.prisma) 执行现有 SQL，并在独立的 schema 中记录迁移。
+账号凭据保存在 `rica_plugin_newbi.credentials`。账号列表、运行活动和后台候选查询使用 `rica_plugin_newbi.account_profiles`，视图只返回接入点、Agent ID 和公开资料。凭据写入使用宿主的账号事务。开发时运行 `pnpm run db:generate` 生成宿主和插件的客户端。部署时，`rica migrate` 为内置和清单模式应用同一套 [SQL 迁移](../prisma/migrations)，迁移记录保存在 `rica_bootstrap_newbi`。
 
-轮询写入 `rica_plugin_newbi.events` 和 `rica_plugin_newbi.event_checkpoints`。两个表随宿主发布迁移，保留账号外键、事件去重键和轮询进度。读取组件通过受限函数领取和提交事件页，管理端读取事件摘要及检查点状态，游标和租约由轮询函数使用。
+轮询写入 `rica_plugin_newbi.events` 和 `rica_plugin_newbi.event_checkpoints`。两个表由 Newbi 包迁移建立，保留账号外键、事件去重键和轮询进度。读取组件通过受限函数领取和提交事件页，管理端读取事件摘要及检查点状态，游标和租约由轮询函数使用。
 
 讨论评估和词库分别写入 `rica_plugin_newbi.discussion_assessments`、`rica_plugin_newbi.author_terms` 和 `rica_plugin_newbi.section_glossary_samples`。评估结果和本轮词库证据在同一事务中提交。保留期任务通过受限函数清理超过 30 天的评估，来源评估删除时级联清理词库证据。
 

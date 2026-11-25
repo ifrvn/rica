@@ -7,6 +7,7 @@ import { pluginConsole, type PluginConsoleEntry } from '@ricajs/contracts/plugin
 import { startPluginHost, type PluginDefinition, type PluginHostError } from '@ricajs/plugin-host'
 import type { PluginAccounts, PluginCommand, PluginManagement, PluginWorkerServices, RicaPlugin } from '@ricajs/plugin-host/sdk'
 import type { ManagementAdapter } from '@ricajs/persistence/management-http'
+import { bundledPluginMigrations } from './bundled-plugin-migrations.js'
 
 const pluginId = z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/).max(50)
 const packageName = z.string().regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/).max(214)
@@ -17,7 +18,7 @@ const manifestSchema = z.strictObject({
   plugins: z.array(z.strictObject({
     id: pluginId, package: packageName, version, config: z.json().default(null),
     database: z.strictObject({
-      migrateUrlEnv: envName, runtimeUrlEnv: envName, migrationJournal: z.literal('separate').optional(),
+      migrateUrlEnv: envName.optional(), runtimeUrlEnv: envName, migrationJournal: z.literal('separate').optional(),
     }).optional(),
   })),
 })
@@ -59,11 +60,19 @@ export async function readPackagePlugins(manifestPath: string | undefined) {
     if (!installed.success || installed.data.name !== entry.package || installed.data.version !== entry.version) {
       throw new Error('Installed Rica plugin version does not match deployment: ' + entry.id)
     }
+    const bundled = bundledPluginMigrations.find(({ id, package: name }) => id === entry.id && name === entry.package)
+    if (bundled && bundled.version !== entry.version) {
+      throw new Error('Bundled Rica plugin version does not match deployment: ' + entry.id)
+    }
+    if (entry.database && !bundled && !entry.database.migrateUrlEnv) {
+      throw new Error('Missing Rica plugin migration setting: ' + entry.id)
+    }
     if (entry.database && entry.database.migrateUrlEnv === entry.database.runtimeUrlEnv) {
       throw new Error('Rica plugin requires separate migration and runtime settings: ' + entry.id)
     }
     return {
       ...entry,
+      usesBundledMigration: Boolean(bundled),
       resolveExport(subpath: '/rica' | '/rica/prisma') {
         const file = fromDeployment.resolve(entry.package + subpath)
         const location = relative(dirname(packageJson), file)

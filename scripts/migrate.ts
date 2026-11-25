@@ -14,10 +14,14 @@ const configExtension = import.meta.url.endsWith('.ts') ? '.ts' : '.js'
 const hostConfig = fileURLToPath(new URL('../prisma.config' + configExtension, import.meta.url))
 const hostArgs = process.argv.slice(2)
 const plugins = await readPackagePlugins(hostArgs.length ? undefined : process.env.RICA_PLUGIN_MANIFEST)
-const migrations = plugins.flatMap((plugin) => plugin.database ? [{
-  config: plugin.resolveExport('/rica/prisma'),
-  env: { RICA_PLUGIN_DATABASE_URL: packageDatabaseUrl(plugin.id, plugin.database.migrateUrlEnv, plugin.database.migrationJournal) },
-}] : [])
+const migrations = plugins.flatMap((plugin) => {
+  const database = plugin.database
+  if (plugin.usesBundledMigration || !database?.migrateUrlEnv) return []
+  return [{
+    config: plugin.resolveExport('/rica/prisma'),
+    env: { RICA_PLUGIN_DATABASE_URL: packageDatabaseUrl(plugin.id, database.migrateUrlEnv, database.migrationJournal) },
+  }]
+})
 
 function deploy(config: string, args: string[], env = process.env) {
   const result = spawnSync(process.execPath, [prisma, 'migrate', 'deploy', '--config', config, ...args], { stdio: 'inherit', env })
@@ -26,13 +30,17 @@ function deploy(config: string, args: string[], env = process.env) {
 }
 
 const hostUrl = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL
-const bootstrap: { config: string; env: Record<string, string> }[] = []
+const bundled: { config: string; env: Record<string, string> }[] = []
 if (!hostArgs.length && bundledPluginMigrations.length) {
   if (!hostUrl) throw new Error('Rica migration requires a database URL')
-  bootstrap.push(...bundledPluginMigrations.map((prepare) => prepare(hostUrl)))
+  for (const { package: name, journal } of bundledPluginMigrations) {
+    const url = new URL(hostUrl)
+    url.searchParams.set('schema', journal)
+    bundled.push({ config: require.resolve(name + '/rica/prisma'), env: { RICA_PLUGIN_DATABASE_URL: url.href } })
+  }
 }
 let status = deploy(hostConfig, hostArgs)
-for (const { config, env } of [...bootstrap, ...migrations]) {
+for (const { config, env } of [...bundled, ...migrations]) {
   if (status !== 0) break
   status = deploy(config, [], { ...process.env, ...env })
 }

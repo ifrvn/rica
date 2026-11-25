@@ -69,10 +69,13 @@ test('an unapproved package cannot mount a host management adapter', async (t) =
   t.after(() => rm(deployment, { recursive: true, force: true }))
   const folder = join(deployment, 'node_modules', 'fixture-adapter')
   const manifest = join(deployment, 'plugins.json')
+  const entry = { id: 'newbi', package: 'fixture-adapter', version: '1.0.0' }
+  const runtimeUrlEnv = 'RICA_PLUGIN_FIXTURE_RUNTIME_URL'
+  const writeManifest = (database: { runtimeUrlEnv: string; migrateUrlEnv?: string }) =>
+    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ ...entry, database }] }))
   await mkdir(folder, { recursive: true })
   await Promise.all([
-    writeFile(manifest, JSON.stringify({ version: 1, plugins: [{ id: 'newbi', package: 'fixture-adapter', version: '1.0.0',
-      database: { migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv: 'RICA_PLUGIN_FIXTURE_RUNTIME_URL' } }] })),
+    writeManifest({ runtimeUrlEnv }),
     writeFile(join(folder, 'package.json'), JSON.stringify({ name: 'fixture-adapter', version: '1.0.0', type: 'module',
       exports: { './package.json': './package.json', './rica': './plugin.js' } })),
     writeFile(join(folder, 'plugin.js'), `
@@ -80,6 +83,8 @@ test('an unapproved package cannot mount a host management adapter', async (t) =
       export const ricaManagement = { id: 'newbi', hostApiVersion: 1, start() { throw new Error('Unexpected startup') } }
     `),
   ])
+  await assert.rejects(loadPackageManagement(manifest), /Missing Rica plugin migration setting: newbi/)
+  await writeManifest({ migrateUrlEnv: 'RICA_PLUGIN_FIXTURE_MIGRATE_URL', runtimeUrlEnv })
   await assert.rejects(loadPackageManagement(manifest, { newbi: '@ricajs/plugin-newbi' }), /Unsupported host management adapter/)
 })
 

@@ -71,14 +71,8 @@ for (const [index, dir] of directories.entries()) {
     if (entries['./rica/prisma']) {
       const configDirectory = dirname(entries['./rica/prisma'])
       const relativeDirectory = join(dir, configDirectory)
-      for (const schema of readdirSync(relativeDirectory).filter((file) => file.endsWith('.prisma'))) {
-        copy(join(relativeDirectory, schema), join(destination, configDirectory, schema))
-      }
+      copy(join(relativeDirectory, 'schema.prisma'), join(destination, configDirectory, 'schema.prisma'))
       copy(join(relativeDirectory, 'migrations'), join(destination, configDirectory, 'migrations'))
-    }
-    if (entries['./rica/bootstrap']) {
-      const configDirectory = dirname(entries['./rica/bootstrap'])
-      copy(join(dir, configDirectory, 'bootstrap'), join(destination, configDirectory, 'bootstrap'))
     }
     for (const file of sourceFiles.filter((file) => file.startsWith(dir.replaceAll('\\', '/') + '/') && /\.(?:vue|css)$/.test(file))) {
       copy(file, join(destination, file.slice(dir.length + 1)))

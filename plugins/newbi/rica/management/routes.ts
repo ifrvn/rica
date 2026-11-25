@@ -10,8 +10,16 @@ import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { newbiAccountProfile, newbiConnectionsView, newbiPendingDeliveries, newbiPollView, newbiReplyView, newbiSendInput, newbiSendView, newbiThreadQuery, newbiThreadView } from './contracts.js'
 import type { newbiCatalog } from '../deployment/catalog.js'
 import { newbiAssessmentList, newbiAssessmentView, type newbiAssessmentThread } from './contracts.js'
-import { claimNewbiAssessment, listNewbiAssessments, newbiAssessmentActivity, readNewbiAssessment, runNewbiAssessment, type AssessDiscussion } from '../persistence/assessments.js'
+import { claimNewbiAssessment, listNewbiAssessments, readNewbiAssessment, runNewbiAssessment, type AssessDiscussion } from '../persistence/assessments.js'
 import type { NewbiManagementDatabase } from '../persistence/client.js'
+
+function runActivity(kind: 'ASSESSMENT' | 'PROPOSAL') {
+  return (characterId: string) => Prisma.sql`
+    SELECT id, kind, 'newbi'::text AS platform, identity, account, account_id, state, created_at
+    FROM rica_plugin_newbi.run_activity
+    WHERE character_id = ${characterId}::uuid AND kind = ${kind}
+  `
+}
 
 export type NewbiManagementOptions = {
   reviewReply?: ReviewPublicReply
@@ -320,18 +328,8 @@ export function createNewbiManagement(database: NewbiManagementDatabase, deploym
   return {
     id: 'newbi', registerRoutes,
     runActivity: {
-      ASSESSMENT: newbiAssessmentActivity,
-      PROPOSAL: (characterId) => Prisma.sql`
-        SELECT r.id, 'PROPOSAL'::text AS kind, a.platform,
-          coalesce(v.role_profile->>'displayName', i.slug) AS identity,
-          coalesce(nullif(c.username, ''), a.remote_account_id) AS account, r.account_id, r.status AS state, r.created_at
-        FROM rica_plugin_newbi.replies r
-        JOIN public.platform_accounts a ON (a.character_id, a.identity_id, a.id) = (r.character_id, r.identity_id, r.account_id)
-        JOIN public.identities i ON (i.character_id, i.id) = (r.character_id, r.identity_id)
-        LEFT JOIN public.identity_versions v ON (v.character_id, v.identity_id, v.version) = (i.character_id, i.id, i.active_version)
-        LEFT JOIN rica_plugin_newbi.account_profiles c ON c.endpoint = a.instance_key AND c.agent_id::text = a.remote_account_id
-        WHERE r.character_id = ${characterId}::uuid
-      `,
+      ASSESSMENT: runActivity('ASSESSMENT'),
+      PROPOSAL: runActivity('PROPOSAL'),
     },
     account: { ...newbiAccountHooks(verifySavedConnector), registration: connectorAccountRegistration,
       register: (scope, input) => prepareNewbiRegistration(connectorAccountRegistration.parse(input), (tx, account) =>

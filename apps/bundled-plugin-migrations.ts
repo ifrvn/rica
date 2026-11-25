@@ -1,5 +1,11 @@
-import { newbiBootstrapMigration } from '@ricajs/plugin-newbi/rica/migration'
+import { createRequire } from 'node:module'
 
-type BundledPluginMigration = (databaseUrl: string) => { config: string; env: Record<string, string> }
+const require = createRequire(import.meta.url)
+const newbiPackage = '@ricajs/plugin-newbi'
 
-export const bundledPluginMigrations: readonly BundledPluginMigration[] = [newbiBootstrapMigration]
+export const bundledPluginMigrations = [{
+  id: 'newbi',
+  package: newbiPackage,
+  version: (require(newbiPackage + '/package.json') as { version: string }).version,
+  journal: 'rica_bootstrap_newbi',
+}] as const
