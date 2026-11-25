@@ -29,10 +29,7 @@ const hostUrl = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL
 const bootstrap: { config: string; env: Record<string, string> }[] = []
 if (!hostArgs.length && bundledPluginMigrations.length) {
   if (!hostUrl) throw new Error('Rica migration requires a database URL')
-  for (const migration of bundledPluginMigrations) {
-    await migration.beforeHost?.(hostUrl)
-    bootstrap.push(migration.prepare(hostUrl))
-  }
+  bootstrap.push(...bundledPluginMigrations.map((prepare) => prepare(hostUrl)))
 }
 let status = deploy(hostConfig, hostArgs)
 for (const { config, env } of [...bootstrap, ...migrations]) {

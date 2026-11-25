@@ -1,34 +1,6 @@
 BEGIN;
 SET LOCAL check_function_bodies = false;
 
-DO $bootstrap$
-DECLARE
-  owner_role name;
-  relation_name name;
-  signature text;
-BEGIN
-  -- An already initialized deployment keeps its tables, history and grants.
-  IF to_regclass('rica_plugin_newbi.credentials') IS NOT NULL THEN
-    IF to_regclass('rica_plugin_newbi.section_glossary_samples') IS NULL
-      OR to_regprocedure('rica_plugin_newbi.finish_reply(uuid,integer,uuid,integer,boolean)') IS NULL
-      OR to_regprocedure('rica_plugin_newbi.send_connection(uuid)') IS NULL THEN
-      RAISE EXCEPTION 'Newbi database is incomplete; finish the previous release migration first';
-    END IF;
-    SELECT pg_catalog.pg_get_userbyid(relowner) INTO STRICT owner_role
-      FROM pg_catalog.pg_class WHERE oid = 'rica_plugin_newbi.replies'::regclass;
-    ALTER FUNCTION public.rica_guard_newbi_reply_executor() SET SCHEMA rica_plugin_newbi;
-    ALTER FUNCTION rica_plugin_newbi.rica_guard_newbi_reply_executor() RENAME TO guard_reply_executor;
-    ALTER FUNCTION public.rica_clear_newbi_review_handoff() SET SCHEMA rica_plugin_newbi;
-    ALTER FUNCTION rica_plugin_newbi.rica_clear_newbi_review_handoff() RENAME TO clear_review_handoff;
-    EXECUTE format('ALTER FUNCTION rica_plugin_newbi.guard_reply_executor() OWNER TO %I', owner_role);
-    EXECUTE format('ALTER FUNCTION rica_plugin_newbi.clear_review_handoff() OWNER TO %I', owner_role);
-    RETURN;
-  END IF;
-
-  IF to_regclass('public.newbi_replies') IS NOT NULL OR to_regclass('public.newbi_credentials') IS NOT NULL THEN
-    RAISE EXCEPTION 'Newbi tables still use the legacy layout; finish the previous release migration first';
-  END IF;
-
 CREATE SCHEMA rica_plugin_newbi;
 
 CREATE FUNCTION rica_plugin_newbi.claim_event_page(account uuid, endpoint text) RETURNS jsonb
@@ -556,57 +528,50 @@ GRANT SELECT ON TABLE rica_plugin_newbi.events TO rica_admin_api;
 
 GRANT SELECT,INSERT ON TABLE rica_plugin_newbi.section_glossary_samples TO rica_admin_api;
 
-CREATE FUNCTION public.rica_sweep_newbi_events() RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'pg_temp'
-    AS $$
-DECLARE changed int;
-BEGIN
-  DELETE FROM rica_plugin_newbi.events WHERE (account_id,seq) IN (
-    SELECT account_id,seq FROM rica_plugin_newbi.events WHERE occurred_at <= statement_timestamp()-interval '720 hours'
-    ORDER BY occurred_at LIMIT 100 FOR UPDATE SKIP LOCKED
-  );
-  GET DIAGNOSTICS changed = ROW_COUNT;
-  RETURN changed;
-END
-$$;
-REVOKE ALL ON FUNCTION public.rica_sweep_newbi_events() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.rica_sweep_newbi_events() TO rica_runtime;
-
-CREATE FUNCTION public.rica_sweep_newbi_assessments() RETURNS integer
-LANGUAGE sql SECURITY DEFINER SET search_path TO 'pg_catalog','pg_temp' AS $$
-  WITH removed AS (
-    DELETE FROM rica_plugin_newbi.discussion_assessments WHERE id IN (
-      SELECT id FROM rica_plugin_newbi.discussion_assessments
-      WHERE created_at <= statement_timestamp() - interval '30 days'
-      ORDER BY created_at,id LIMIT 100 FOR UPDATE SKIP LOCKED
-    ) RETURNING 1
-  ) SELECT count(*)::integer FROM removed
-$$;
-REVOKE ALL ON FUNCTION public.rica_sweep_newbi_assessments() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.rica_sweep_newbi_assessments() TO rica_runtime;
-
-CREATE FUNCTION public.rica_sweep_newbi_retention()
- RETURNS integer
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'pg_catalog', 'pg_temp'
+CREATE FUNCTION rica_plugin_newbi.sweep_retention() RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'pg_temp'
 AS $function$
-DECLARE changed int;
+DECLARE
+  replies_changed integer;
+  events_removed integer;
+  assessments_removed integer;
 BEGIN
   UPDATE rica_plugin_newbi.replies SET content = NULL, review_prompt = NULL WHERE id IN (
     SELECT id FROM rica_plugin_newbi.replies
     WHERE (content IS NOT NULL OR review_prompt IS NOT NULL)
-      AND created_at <= statement_timestamp() - interval '720 hours' AND expires_at <= statement_timestamp()
-    ORDER BY created_at,id LIMIT 50 FOR UPDATE SKIP LOCKED
+      AND created_at <= statement_timestamp() - interval '720 hours'
+      AND expires_at <= statement_timestamp()
+    ORDER BY created_at, id LIMIT 50 FOR UPDATE SKIP LOCKED
   );
-  GET DIAGNOSTICS changed = ROW_COUNT;
-  RETURN changed;
+  GET DIAGNOSTICS replies_changed = ROW_COUNT;
+
+  DELETE FROM rica_plugin_newbi.events WHERE (account_id, seq) IN (
+    SELECT account_id, seq FROM rica_plugin_newbi.events
+    WHERE occurred_at <= statement_timestamp() - interval '720 hours'
+    ORDER BY occurred_at LIMIT 100 FOR UPDATE SKIP LOCKED
+  );
+  GET DIAGNOSTICS events_removed = ROW_COUNT;
+
+  DELETE FROM rica_plugin_newbi.discussion_assessments WHERE id IN (
+    SELECT id FROM rica_plugin_newbi.discussion_assessments
+    WHERE created_at <= statement_timestamp() - interval '30 days'
+    ORDER BY created_at, id LIMIT 100 FOR UPDATE SKIP LOCKED
+  );
+  GET DIAGNOSTICS assessments_removed = ROW_COUNT;
+
+  RETURN replies_changed + events_removed + assessments_removed;
 END
 $function$;
-REVOKE ALL ON FUNCTION public.rica_sweep_newbi_retention() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.rica_sweep_newbi_retention() TO rica_runtime;
+REVOKE ALL ON FUNCTION rica_plugin_newbi.sweep_retention() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION rica_plugin_newbi.sweep_retention() TO rica_runtime;
 
+DO $bootstrap$
+DECLARE
+  owner_role name;
+  relation_name name;
+  signature text;
+BEGIN
   SELECT 'rica_newbi_ddl_' || oid::text INTO STRICT owner_role
     FROM pg_catalog.pg_database WHERE datname = current_database();
   EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS', owner_role);
@@ -628,7 +593,7 @@ GRANT EXECUTE ON FUNCTION public.rica_sweep_newbi_retention() TO rica_runtime;
     'claim_reply(uuid, boolean, uuid, text, text)', 'close_reply(uuid, uuid, text)',
     'finish_reply(uuid, integer, uuid, integer, boolean)', 'execution_target(uuid, text)',
     'reply_preflight(uuid, text, integer, boolean)', 'reply_matches_executor(rica_plugin_newbi.replies, text)',
-    'poll_connection(uuid)', 'send_connection(uuid)', 'guard_reply_executor()', 'clear_review_handoff()'
+    'poll_connection(uuid)', 'send_connection(uuid)', 'guard_reply_executor()', 'clear_review_handoff()', 'sweep_retention()'
   ]
   LOOP
     EXECUTE format('ALTER FUNCTION rica_plugin_newbi.%s OWNER TO %I', signature, owner_role);

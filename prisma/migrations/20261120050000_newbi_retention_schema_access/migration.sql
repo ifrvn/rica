@@ -1,1 +1,0 @@
--- Newbi initializes these objects in its package bootstrap migration.

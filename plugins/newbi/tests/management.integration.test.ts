@@ -187,13 +187,12 @@ async function activeIdentity(roleProfile: Record<string, unknown> = {}, charact
 
 test('Newbi database permissions are scoped to each host operation', async () => {
   await owner.$transaction(async (tx) => {
-    const [{ installed, scopedOwners }] = await tx.$queryRaw<[{ installed: boolean; scopedOwners: boolean }]>`
-      SELECT to_regprocedure('rica_plugin_newbi.sweep_retention()') IS NOT NULL AS installed,
-        (SELECT count(*) = 9 FROM pg_proc p
+    const [{ scopedOwners }] = await tx.$queryRaw<[{ scopedOwners: boolean }]>`
+      SELECT (SELECT count(*) = 10 FROM pg_proc p
           JOIN pg_class c ON c.oid = 'rica_plugin_newbi.events'::regclass
           WHERE p.pronamespace = 'rica_plugin_newbi'::regnamespace AND p.proname IN (
             'claim_event_page', 'finish_event_page', 'claim_reply', 'finish_reply', 'reply_preflight',
-            'execution_target', 'close_reply', 'poll_connection', 'send_connection')
+            'execution_target', 'close_reply', 'poll_connection', 'send_connection', 'sweep_retention')
             AND p.proowner = c.relowner AND p.prosecdef
             AND has_function_privilege(c.relowner, 'public.rica_newbi_lock_poll_binding_v1(uuid)', 'EXECUTE')
             AND has_function_privilege(c.relowner, 'public.rica_newbi_read_active_binding_v1(uuid)', 'EXECUTE')
@@ -209,7 +208,6 @@ test('Newbi database permissions are scoped to each host operation', async () =>
           AND proname = 'finish_event_page' AND has_function_privilege(oid, 'EXECUTE')) AS "finishPage",
         has_function_privilege('public.rica_newbi_lock_poll_binding_v1(uuid)', 'EXECUTE') AS "hostBinding",
         has_function_privilege('public.rica_newbi_read_active_binding_v1(uuid)', 'EXECUTE') AS "readHostBinding",
-        has_function_privilege('public.rica_sweep_newbi_events()', 'EXECUTE') AS "sweepEvents",
         (SELECT count(*)::int FROM pg_proc WHERE pronamespace = 'rica_plugin_newbi'::regnamespace
           AND proname IN ('claim_reply', 'finish_reply', 'reply_preflight', 'execution_target')
           AND has_function_privilege(oid, 'EXECUTE')) AS "sendFunctions",
@@ -229,10 +227,10 @@ test('Newbi database permissions are scoped to each host operation', async () =>
           AND has_function_privilege(oid, 'EXECUTE')) AS "packageSweep"
     `
     const unscoped = { reader: false, finishPage: false, hostBinding: false, readHostBinding: false,
-      sweepEvents: false, sendFunctions: 0, closeReply: false,
+      sendFunctions: 0, closeReply: false,
       readConnection: false, sendConnection: false, readHostAccount: false,
       pluginSchema: false, credentialRead: false, ownsPluginData: false, packageSweep: false }
-    const runtime = { ...unscoped, sweepEvents: true, pluginSchema: true, packageSweep: installed }
+    const runtime = { ...unscoped, pluginSchema: true, packageSweep: true }
     assert.deepEqual(await grants(), [runtime])
     await tx.$executeRaw`SET LOCAL ROLE rica_newbi_poller`
     assert.deepEqual(await grants(), [{ ...unscoped, reader: true, finishPage: true, readConnection: true, pluginSchema: true }])
@@ -494,6 +492,12 @@ test('Newbi discussion assessment is scoped, inspectable, idempotent, and never 
     sourceKey: 'run-activity-fixture', kind: 'POST', occurredAt: new Date() } })
   const simulation = await owner.agentRun.create({ data: { ...simulationBinding, inboundEventId: inbound.id,
     coreVersion: 1, identityVersion: 1, bindingVersion: 1, authEpoch: 1 } })
+  await owner.$executeRaw`
+    UPDATE public.agent_runs
+    SET created_at = greatest(created_at, (
+      SELECT max(created_at) FROM rica_plugin_newbi.discussion_assessments WHERE character_id = ${characterId}::uuid
+    )) + interval '1 millisecond'
+    WHERE id = ${simulation.id}::uuid`
   const proposal = await request('POST', characterPath(characterId) + '/newbi/replies', {
     target, key: randomUUID(), data: { accountId: account.id, postId, content: '手动拟好的一条回复。' },
   })
@@ -1187,7 +1191,8 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
     const limited = await propose('Rate-limited fixture reply', 'newbi-limited')
     assert.equal((await limited.decide('APPROVE')).status, 200)
     preflightLimit = true
-    const limitTime = Date.now()
+    const databaseTime = async () => (await owner.$queryRaw<[{ now: Date }]>`SELECT clock_timestamp() AS now`)[0].now.getTime()
+    const limitTime = await databaseTime()
     const preflight = await executeNewbiReply(executor, client, executorKey, limited.id)
     assert.equal(preflight.status, 'UNAVAILABLE')
     assert.ok('reason' in preflight && preflight.reason === 'RATE_LIMITED')
@@ -1204,12 +1209,13 @@ test('Newbi binds an agent, enforces independent approval and recovers the origi
       UPDATE rica_plugin_newbi.replies SET retry_not_before = ${new Date(0)} WHERE id = ${limited.id}::uuid`
     await passCooldown()
     writeFailure = 'LIMIT'
+    const writeLimitTime = await databaseTime()
     const rateLimited = await executeNewbiReply(executor, client, executorKey, limited.id)
     assert.equal(rateLimited.status, 'UNKNOWN')
     assert.ok('reason' in rateLimited && rateLimited.reason === 'RATE_LIMITED')
     preview = (await sendRequest('GET', limited.path)).body
     assert.equal(preview.attempts, 1)
-    assert.ok(Date.parse(preview.retryNotBefore) > Date.now() + 29_000)
+    assert.ok(Date.parse(preview.retryNotBefore) >= writeLimitTime + 30_000)
     assert.deepEqual(await executeNewbiReply(executor, client, executorKey, limited.id, true),
       { status: 'UNAVAILABLE', retryNotBefore: preview.retryNotBefore })
     assert.equal(writes, 4)
