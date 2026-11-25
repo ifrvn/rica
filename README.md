@@ -41,11 +41,13 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
 
 | 命令 | 用途 |
 | --- | --- |
-| `pnpm run dev:api` | API 与健康检查，默认监听 `127.0.0.1:3000`。 |
-| `pnpm run dev:worker` | 认知任务、BullMQ 消费、出箱转发、模拟调度和数据保留期清理。等待日志出现 `ready`。 |
-| `pnpm run dev:admin` | Vue 服务状态和人工审批台。开发代理把 `/health` 与 `/v1` 转发到 API。 |
+| `pnpm dev api` | API 与健康检查，默认监听 `127.0.0.1:3000`。 |
+| `pnpm dev worker` | 认知任务、BullMQ 消费、出箱转发、模拟调度和数据保留期清理。等待日志出现 `ready`。 |
+| `pnpm dev admin` | Vue 服务状态和人工审批台。开发代理把 `/health` 与 `/v1` 转发到 API。 |
 
 打开[本地控制台](http://localhost:5173/)并检查 [API 就绪状态](http://127.0.0.1:3000/health/ready)。按 Ctrl+C 停止应用进程。`docker compose stop` 停止数据库和 Redis，保留数据卷。
+
+用 `pnpm dev --help` 查看开发目标，用 `pnpm rica --help` 查看维护命令。
 
 ## 2. 启用管理 API 并创建本地账号
 
@@ -54,7 +56,7 @@ Compose 启动 PostgreSQL 18 和 Redis 8，本机端口分别为 `55432` 和 `56
 2. 使用 PowerShell 7 初始化本地管理员。密码通过标准输入传递，长度为 12–128 个字符。命令使用迁移数据库登录，新账号具有系统管理员权限。
 
    ```powershell
-   Read-Host -MaskInput 'Rica 管理员密码' | pnpm run admin:user add admin
+   Read-Host -MaskInput 'Rica 管理员密码' | pnpm rica admin-user add admin
    ```
 
 3. 确认 `RICA_ADMIN_ORIGIN` 与浏览器地址一致，重启 API，然后在 [本地控制台](http://localhost:5173/) 用用户名和密码登录。登录后可在「添加 Passkey」中确认密码并登记设备。下次可直接点「使用 Passkey」。
@@ -94,7 +96,7 @@ $ricaCharacter.id
 
 ### 用真实模型试写
 
-用通过 `pnpm run admin:user add <用户名>` 授权的本地账号登录，在控制台顶部打开「模型设置」。选择 OpenAI、Claude、Gemini 或 OpenAI 兼容服务，填写供应商的文本模型 ID 和 API 密钥。Gemini 模型 ID 省略 `models/`，兼容服务填写包含版本路径的 HTTPS API 基础地址。点击「保存模型设置」后，下一个公开模拟草稿使用新配置，无需重启 Worker。默认使用本地模拟模板。
+用通过 `pnpm rica admin-user add <用户名>` 授权的本地账号登录，在控制台顶部打开「模型设置」。选择 OpenAI、Claude、Gemini 或 OpenAI 兼容服务，填写供应商的文本模型 ID 和 API 密钥。Gemini 模型 ID 省略 `models/`，兼容服务填写包含版本路径的 HTTPS API 基础地址。点击「保存模型设置」后，下一个公开模拟草稿使用新配置，无需重启 Worker。默认使用本地模拟模板。
 
 控制台使用 `mock-a` 或 `mock-b` 从「运行 → 发起模拟」输入测试消息。运行详情的草稿阶段显示供应商和配置的模型名。系统管理员可进入「审批 → 模拟提案」看拟回复，也可以从运行详情点「查看模拟提案」。验收人设时，可保存不同版本的身份提示词，再用同一输入各发起一次，直接比较提案正文。
 
@@ -109,7 +111,7 @@ $ricaCharacter.id
 | 查看服务状态和审批提案 | 登录控制台，选择角色，核对身份、账号、目标与正文，再填写理由并批准或拒绝。 |
 | 配置角色、身份、账号、成员与记忆共享 | `ADMIN` 使用「角色与身份」「角色成员」和「记忆与授权」。 |
 | 查看运行轨迹、审计、额度与队列 | `ADMIN` 使用「运行」和「审计」。模拟指标和隔离出箱从「运行」打开。 |
-| 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm run dev:simulation` 执行并生成本地回执。执行器复用 `DATABASE_URL`。 |
+| 运行模拟流程 | 测试夹具提供入站事件和审批数据。已有模拟账号及会话时，也可通过管理 API 建立模拟计划。`READY` 提案由独立的 `pnpm dev simulation` 执行并生成本地回执。执行器复用 `DATABASE_URL`。 |
 
 控制台可配置角色、身份和平台账号，管理角色成员、记忆授权和模拟计划，并查询运行、审计与评测。本地登录账号通过 CLI 创建。批准只更新提案状态。独立的模拟执行进程随后生成回执。[管理 API](docs/management-api.md) · [模拟运行、调度与对账](docs/simulation.md) · [控制台使用及维护](docs/console.md)
 

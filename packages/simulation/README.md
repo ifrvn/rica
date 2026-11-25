@@ -22,7 +22,7 @@ API 和 Worker 通过 `@ricajs/simulation/model`、`@ricajs/simulation/execution
 
 管理端通过 `@ricajs/simulation/console` 装配模拟页面和配置卡，并通过 `@ricajs/simulation/console/metrics` 按需加载指标页。宿主负责导航、会话和部署设置写入，组件使用 `@ricajs/console-shared` 提供的 UI 与请求工具。
 
-管理端可在「插件中心」的「模拟平台」卡片配置模拟平台。各进程优先读取部署设置，其次读取 `RICA_SIMULATED_PLATFORMS`，两处均未设置时启用 `mock-a` 和 `mock-b`。本地开发用 `pnpm run dev:simulation` 启动模拟执行器。
+管理端可在「插件中心」的「模拟平台」卡片配置模拟平台。各进程优先读取部署设置，其次读取 `RICA_SIMULATED_PLATFORMS`，两处均未设置时启用 `mock-a` 和 `mock-b`。本地开发用 `pnpm dev simulation` 启动模拟执行器。
 
 角色管理员可在「模拟运行 → 模拟设置」调整执行额度、静默时段和其他模拟限制。默认值及生效范围见[模拟执行说明](../../docs/simulation.md#模拟设置)。
 

@@ -28,9 +28,11 @@ Start each process in a separate terminal.
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm run dev:api` | API and health checks on `127.0.0.1:3000` by default. |
-| `pnpm run dev:worker` | Cognition jobs, BullMQ consumers, the outbox relay, simulation schedules, and retention cleanup. Wait for the `ready` log event. |
-| `pnpm run dev:admin` | Vue service status and human review. The development server proxies `/health` and `/v1` to the API. |
+| `pnpm dev api` | API and health checks on `127.0.0.1:3000` by default. |
+| `pnpm dev worker` | Cognition jobs, BullMQ consumers, the outbox relay, simulation schedules, and retention cleanup. Wait for the `ready` log event. |
+| `pnpm dev admin` | Vue service status and human review. The development server proxies `/health` and `/v1` to the API. |
+
+Run `pnpm dev --help` for development targets and `pnpm rica --help` for maintenance commands.
 
 Open the [local console](http://localhost:5173/) and check [API readiness](http://127.0.0.1:3000/health/ready). Press Ctrl+C to stop the application processes. Use `docker compose stop` to stop the database and Redis while keeping their volumes.
 
@@ -41,7 +43,7 @@ Open the [local console](http://localhost:5173/) and check [API readiness](http:
 2. Use PowerShell 7 to create the initial local administrator. The command reads a 12–128 character password from stdin and uses the migration database login. `--creator` allows this account to create characters.
 
    ```powershell
-   Read-Host -MaskInput 'Rica administrator password' | pnpm run admin:user add admin --creator
+   Read-Host -MaskInput 'Rica administrator password' | pnpm rica admin-user add admin
    ```
 
 3. Set `RICA_ADMIN_ORIGIN` to the browser's address and restart the API. Sign in to the [local console](http://localhost:5173/) with your username and password. Open the Passkey section and confirm your password to register a device. Next time, use the Passkey sign-in button.
@@ -86,7 +88,7 @@ To set an identity's writing prompt, open that identity in **Character and ident
 | Check service status and review proposals | Sign in to the console and select a character, check the identity, account, destination, and content, then enter a reason and approve or reject. |
 | Manage characters, identities, accounts, members, and memory sharing | An `ADMIN` can configure resources, pause or resume bindings, and grant or revoke member permissions in the console. |
 | Inspect runs, audit records, budgets, and queue health | Open Runs or Audit as a character administrator. Runs links to simulation metrics and quarantined outbox events. |
-| Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm run dev:simulation` process uses `DATABASE_URL` to record local receipts for `READY` proposals. |
+| Run a simulation | The test fixtures supply inbound events and approval data. With a simulated account and conversation already configured, you can also create simulation schedules through the API. The separate `pnpm dev simulation` process uses `DATABASE_URL` to record local receipts for `READY` proposals. |
 
 The console supports character, identity, and account setup, role membership, memory grants, simulation schedules, run history, audit records, and evaluation metrics. Create local sign-in accounts with the CLI. Approval updates the proposal state. The separate simulation executor then records a receipt. [Management API](docs/management-api.md) · [Simulation operations and scheduling](docs/simulation.md) · [Console guide](docs/console.md) (Chinese)
 

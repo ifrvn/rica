@@ -13,9 +13,9 @@
 以下 PowerShell 7 示例以交互方式读取密码，再通过标准输入传递给命令。用户名长度 3–64，允许小写字母、数字、点、下划线及连字符。密码长度 12–128，数据库只保存带盐的 scrypt 哈希。
 
 ```powershell
-Read-Host -MaskInput 'Rica password' | pnpm run admin:user add admin
-Read-Host -MaskInput 'Second administrator password' | pnpm run admin:user add reviewer
-Read-Host -MaskInput 'New password' | pnpm run admin:user reset admin
+Read-Host -MaskInput 'Rica password' | pnpm rica admin-user add admin
+Read-Host -MaskInput 'Second administrator password' | pnpm rica admin-user add reviewer
+Read-Host -MaskInput 'New password' | pnpm rica admin-user reset admin
 ```
 
 系统管理员可在右上角菜单或「成员与审计」点击「新建账号」，验证当前密码后创建另一位系统管理员。新账号可以管理所有虚拟角色、部署插件和系统账号。列表显示账号创建时间，迁移前的账号可能没有记录。
@@ -186,7 +186,7 @@ Worker 启动后定时清理模拟数据。入站正文从接收时刻起保留 
 
 保留入站去重键及适配器版本、运行和提案状态、审批摘要、尝试和回执。未决发送仍可按原账本对账。清理以角色为单位持锁、分批提交，可重跑。
 
-恢复同一版本的备份时，先保持 API、Worker 和执行进程停机，并用指向恢复数据库的运行配置执行 `pnpm run maintenance:retention`。命令排空到期批次后退出，再开放服务。该命令按备份中原始时间补清理。
+恢复同一版本的备份时，先保持 API、Worker 和执行进程停机，并用指向恢复数据库的运行配置执行 `pnpm rica retention`。命令排空到期批次后退出，再开放服务。该命令按备份中原始时间补清理。
 
 ## 回放与积压
 

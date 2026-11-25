@@ -36,7 +36,7 @@ pnpm run test:integration
 3. 如需在插件中心提供升级预览，用目标版本的代码生成发布清单。示例命令在 PowerShell 7 中执行，换成实际发布页的 HTTPS 地址。
 
    ```powershell
-   pnpm exec tsx scripts/plugin-release-manifest.ts https://example.com/releases/v0.1.0 |
+   pnpm rica release-manifest https://example.com/releases/v0.1.0 |
      Set-Content -Encoding utf8 plugin-release.json
    ```
 

@@ -4,7 +4,7 @@ import { readPluginStatus } from '../apps/plugin-observation.js'
 
 const [releaseUrl, ...extra] = process.argv.slice(2)
 if (!releaseUrl || extra.length) {
-  console.error('Usage: pnpm exec tsx scripts/plugin-release-manifest.ts <HTTPS release URL>')
+  console.error('Usage: rica release-manifest <HTTPS release URL>')
   process.exit(1)
 }
 

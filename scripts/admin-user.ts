@@ -35,7 +35,7 @@ async function main() {
       await db.$disconnect()
     }
   } else {
-    throw new Error('Usage: admin:user add <username> or admin:user reset <username>')
+    throw new Error('Usage: rica admin-user <add|reset> <username>')
   }
 }
 
