@@ -196,11 +196,35 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     plugins.map((plugin) => plugin.accountFields))
   const workspaceFields = extensionFields(schema.characterWorkspaceView.shape, plugins.map((plugin) => plugin.workspace?.fields))
   const baseStatusView = pluginStatusView.extend({ deployment: deploymentPluginsView.optional() })
-  const statusFields = extensionFields(baseStatusView.shape, plugins.map((plugin) => plugin.status?.fields))
+  const deploymentStatusView = baseStatusView.extend(extensionFields(baseStatusView.shape,
+    plugins.map((plugin) => plugin.deploymentStatus?.fields)))
+  const statusFields = extensionFields(deploymentStatusView.shape, plugins.map((plugin) => plugin.status?.fields))
   const workspaceView = schema.characterWorkspaceView.extend(workspaceFields)
   const accountView = schema.accountView.extend(accountFields)
   const accountPoolView = schema.pageView(schema.accountRegistrationView.extend(accountFields))
-  const statusView = baseStatusView.extend(statusFields)
+  const statusView = deploymentStatusView.extend(statusFields)
+
+  async function readDeploymentStatus() {
+    const current = await pluginStatus()
+    const fields = Object.assign({}, ...await Promise.all(plugins.map(async ({ deploymentStatus }) =>
+      deploymentStatus && z.object(deploymentStatus.fields).parse(await deploymentStatus.read()))))
+    if (!deploymentPlugins) return { ...current, ...fields }
+    const [provider, release] = await Promise.all([
+      activeModel(),
+      pluginRelease?.(current.services),
+    ])
+    const deployment = await deploymentPlugins.status(provider)
+    return { ...current, deployment, release, ...fields }
+  }
+
+  app.openapi(createRoute({
+    method: 'get', path: '/deployment-plugins', security,
+    responses: { ...errors, 200: success(deploymentStatusView) },
+  }), async (c) => {
+    const actor = c.get('actor')
+    if (actor.issuer !== localIssuer || !actor.canCreate) management.denyPermission()
+    return c.json(await readDeploymentStatus(), 200)
+  })
 
   app.openapi(createRoute({
     method: 'put', path: '/deployment-plugins', security,
@@ -330,16 +354,10 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
   }), async (c) => {
     const scope = { ...c.req.valid('param'), actor: c.get('actor') }
     await db.$transaction((tx) => management.authorize(tx, scope))
-    const current = await pluginStatus()
+    const current = await readDeploymentStatus()
     const fields = Object.assign({}, ...await Promise.all(plugins.map(async ({ status }) =>
       status && z.object(status.fields).parse(await status.read(scope.characterId)))))
-    if (!deploymentPlugins) return c.json({ ...current, ...fields }, 200)
-    const [provider, release] = await Promise.all([
-      activeModel(),
-      pluginRelease?.(current.services),
-    ])
-    const deployment = await deploymentPlugins.status(provider)
-    return c.json({ ...current, deployment, release, ...fields }, 200)
+    return c.json({ ...current, ...fields }, 200)
   })
 
   app.openapi(createRoute({

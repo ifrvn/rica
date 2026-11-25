@@ -20,6 +20,7 @@ export type ManagementPlugin = {
     register(scope: Scope, input: unknown): ManagementCommandHandler
   }
   workspace?: { fields: z.ZodRawShape; read(): Promise<object> }
+  deploymentStatus?: { fields: z.ZodRawShape; read(): Promise<object> }
   status?: { fields: z.ZodRawShape; read(characterId: string): Promise<object> }
   accountFields?: z.ZodRawShape
 }

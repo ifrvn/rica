@@ -14,7 +14,7 @@ export function usePluginStatus(characterId: string, expired: () => void, poll =
   function refresh() {
     return run(async () => {
       try {
-        const result = await request<PluginStatus>(characterPath(characterId) + '/plugins')
+        const result = await request<PluginStatus>(characterId ? characterPath(characterId) + '/plugins' : '/v1/deployment-plugins')
         if (active()) status.value = result
       } catch (cause) {
         status.value = undefined

@@ -27,7 +27,7 @@ const emit = defineEmits<{ select: [page: ConsolePage] }>()
         @click="emit('select', 'members')"><span class="i-lucide-history" aria-hidden="true" />成员与审计</button>
     </template>
     <span v-if="hasCharacter || canConfigureModel" class="console-nav-label">部署管理</span>
-    <template v-if="hasCharacter">
+    <template v-if="hasCharacter || canConfigureModel">
       <button type="button" :aria-current="mainPage === 'plugins' ? 'page' : undefined" :disabled="disabled"
         @click="emit('select', 'plugins')"><span class="i-lucide-puzzle" aria-hidden="true" />插件中心</button>
       <button type="button" :aria-current="mainPage === 'health' ? 'page' : undefined" :disabled="disabled"

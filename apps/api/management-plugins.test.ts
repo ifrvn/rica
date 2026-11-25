@@ -147,6 +147,33 @@ test('auto-review settings only expose the model label and stay readable when mo
   assert.equal((await fallback.json()).model, null)
 })
 
+test('deployment admins can read plugin status without a character and role data stays scoped', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rica-deployment-status-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const app = createManagementApp({
+    db: {} as PrismaClient, origin, cookie: 'session', resolveAdapter: () => undefined,
+    deploymentPlugins: createDeploymentPluginStore(directory),
+    plugins: [{
+      ...fixturePlugin('fixture', 'characterStatus'),
+      deploymentStatus: { fields: { deploymentCheck: z.boolean() }, read: async () => ({ deploymentCheck: true }) },
+    }],
+    authenticate: async (request) => {
+      const session = request.headers.get('Cookie')
+      return session ? { id: 'fixture', issuer: localIssuer, subject: 'fixture', canCreate: session === 'session=deployment-admin' } : null
+    },
+  })
+  const path = '/deployment-plugins'
+  assert.equal((await app.request(path)).status, 401)
+  assert.equal((await app.request(path, { headers: { Cookie: 'session=role-admin' } })).status, 403)
+  const response = await app.request(path, { headers: { Cookie: 'session=deployment-admin' } })
+  assert.equal(response.status, 200)
+  const status = await response.json()
+  assert.ok(status.services.some(({ service }: { service: string }) => service === 'worker'))
+  assert.equal(status.deployment.version, 0)
+  assert.equal(status.deploymentCheck, true)
+  assert.equal(Object.hasOwn(status, 'characterStatus'), false)
+})
+
 test('only deployment admins can override simulated platform startup selection', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'rica-sim-platforms-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

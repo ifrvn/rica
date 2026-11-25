@@ -60,6 +60,7 @@ pnpm rica admin-user reset
 | `GET /c/plugins` | ADMIN 查看部署插件状态、配置是否存在、各进程的脱敏报告，以及可选发布清单的升级预览。预览标出目标组件缺失、降级和契约不兼容。 |
 | `GET /c/plans`、`POST /c/plans`、`PUT /c/plans/{planId}` | ADMIN 浏览、创建和编辑跨身份计划。每个参与项包含同角色下当前绑定的身份、账号和执行事项。创建使用幂等键，编辑使用计划版本。 |
 | `PUT /c/plans/{planId}/state` | ADMIN 按版本暂停或恢复计划。暂停取消尚未执行的模拟运行，恢复前核对参与账号绑定。 |
+| `GET /v1/deployment-plugins` | 本地部署操作者无需选择角色即可查看部署插件配置、进程报告、外部模型检查结果和可选发布预览。 |
 | `PUT /v1/deployment-plugins` | 具有创建角色权限的本地部署操作者提交 `INSTALL`、`ENABLE`、`DISABLE`、`UNINSTALL` 或已登记的插件配置动作。使用 `If-Match` 指定 `deployment.version`。返回更新后的版本与脱敏设置。 |
 | `GET /v1/model-usage?from=YYYY-MM-DD&through=YYYY-MM-DD` | 部署管理员查询最多 90 个 UTC 日的外部模型用量。按日期、角色、身份、平台、模型、用途及请求结果汇总。 |
 | `GET /c/account-pool` | ADMIN 查询该角色尚未关联身份的账号。 |

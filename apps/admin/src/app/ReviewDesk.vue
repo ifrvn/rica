@@ -248,8 +248,10 @@ function closePlanning(feedback?: string) {
 }
 
 function changeTab(page: ConsolePage) {
-  if (characterId.value || page === 'model-usage') navigate({ characterId: characterId.value, page })
-  else if (page === 'character') void applyLocation(undefined)
+  if (characterId.value || page === 'character'
+    || (canCreate.value && (page === 'plugins' || page === 'health' || page === 'model-usage'))) {
+    navigate({ characterId: characterId.value, page })
+  }
 }
 
 function selectDrawerPage(page: ConsolePage) {
@@ -571,17 +573,18 @@ function openRunAudit(id: string) {
         <ModelUsage v-if="canCreate" @expired="resetSession" />
         <UiAlert v-else tone="error">只有部署管理员可以查看外部模型统计。</UiAlert>
       </template>
-      <PluginWorkspace v-else-if="tab === 'plugins' && characterId" :key="characterId"
-        :character-id="characterId" :can-configure-model="canCreate" can-start-simulation can-review @expired="resetSession"
+      <PluginWorkspace v-else-if="tab === 'plugins' && (characterId || canCreate)" :key="characterId"
+        :character-id="characterId" :can-configure-model="canCreate" :can-start-simulation="!!characterId" :can-review="!!characterId" @expired="resetSession"
         @deployment-changed="refreshReviewTabs"
         @review="(plugin, status) => navigate({ characterId, page: 'connector', reviewPlugin: plugin, reviewStatus: status })"
         @simulate="navigate({ characterId, page: 'runs', startSimulation: true })"
         @accounts="changeTab('accounts')" @health="changeTab('health')" />
-      <SystemHealth v-else-if="tab === 'health' && characterId" :key="characterId + '/' + (healthNode ?? '')"
+      <SystemHealth v-else-if="tab === 'health' && (characterId || canCreate)" :key="characterId + '/' + (healthNode ?? '')"
         :character-id="characterId" @expired="resetSession" @plugins="changeTab('plugins')"
         :initial-node="healthNode"
         :readiness="readiness" :checked-at="checkedAt" :checking="checkingReadiness" @check="emit('checkReadiness')"
         @accounts="changeTab('accounts')" @runs="changeTab('runs')" />
+      <UiAlert v-else-if="tab === 'plugins' || tab === 'health'" tone="error">请选择可访问的角色，或使用部署管理员账号。</UiAlert>
       <MembershipWorkspace v-else-if="tab === 'members' && characterId"
         :revision="accountListRevision" :can-create="canCreate"
         @create-account="openCreateAccount('system-admin-create')" @expired="resetSession" />

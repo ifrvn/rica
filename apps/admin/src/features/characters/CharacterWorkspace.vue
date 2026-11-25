@@ -562,7 +562,7 @@ onMounted(() => { if (props.characterId) void run(load) })
     </DialogContent>
     </DialogPortal>
     </DialogRoot>
-    <div v-if="!accountsOnly" class="workspace-card character-columns">
+    <div v-if="!accountsOnly" class="workspace-card" :class="{ 'character-columns': characters.length }">
       <section class="character-list" aria-labelledby="characters-heading">
         <div class="console-section-heading">
           <h3 id="characters-heading">角色</h3>
@@ -585,7 +585,7 @@ onMounted(() => { if (props.characterId) void run(load) })
         </ul>
         <UiButton v-if="moreCharacters" variant="text" size="small" :disabled="busy" @click="emit('loadCharacters')">加载更多角色</UiButton>
       </section>
-      <section class="identity-list" aria-labelledby="identities-heading">
+      <section v-if="characters.length" class="identity-list" aria-labelledby="identities-heading">
         <div class="console-section-heading">
           <h3 id="identities-heading" ref="workspaceHeading" tabindex="-1">{{ workspace ? (workspace.profile?.name || workspace.slug) + '的身份' : '身份' }}</h3>
           <div v-if="workspace" class="workspace-actions">
@@ -699,7 +699,7 @@ onMounted(() => { if (props.characterId) void run(load) })
 .workspace-card { min-width: 0; padding: 1rem; background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 5px; }
 .character-columns { display: grid; grid-template-columns: minmax(12rem, 2fr) minmax(0, 3fr); align-items: start; }
 .character-list, .identity-list { min-width: 0; }
-.character-list { padding-inline-end: 1rem; }
+.character-columns .character-list { padding-inline-end: 1rem; }
 .identity-list { padding-inline-start: 1rem; border-inline-start: 1px solid var(--console-line); }
 .role-list { list-style: none; margin: 0; padding: 0; }
 .role-row { position: relative; border-top: 1px solid var(--console-line); }
@@ -733,7 +733,7 @@ onMounted(() => { if (props.characterId) void run(load) })
 .workspace-list > li + li { border-top: 1px solid var(--console-line); margin-top: .5rem; padding-top: .5rem; }
 @media (max-width: 42rem) {
   .character-columns { grid-template-columns: minmax(0, 1fr); }
-  .character-list { padding-inline-end: 0; }
+  .character-columns .character-list { padding-inline-end: 0; }
   .identity-list { padding-inline-start: 0; padding-block-start: 1rem; margin-block-start: 1rem; border-inline-start: 0; border-block-start: 1px solid var(--console-line); }
 }
 @media (pointer: coarse) {

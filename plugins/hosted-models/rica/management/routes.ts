@@ -143,7 +143,7 @@ export function createHostedModelManagement({ modelSettings, authorize, isEnable
     return { modelProfiles, modelChecks: checks, defaultModelProfileId: current.defaultProfileId }
   }
 
-  return { id: hostedModelsPluginId, registerRoutes, status: { fields: {
+  return { id: hostedModelsPluginId, registerRoutes, deploymentStatus: { fields: {
     modelProfiles: modelProfileChoice.array(),
     modelChecks: modelCheckStatus.array(),
     defaultModelProfileId: modelActivationInput.shape.id,

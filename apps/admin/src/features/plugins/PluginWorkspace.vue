@@ -170,7 +170,7 @@ function changeStage(id: DeploymentPluginId) {
               :disabled="busy || loading" @click="toggleEditor(id)">
               {{ editing === id ? '收起配置' : cards[id].configureLabel(deployment) }}
             </UiButton>
-            <UiButton v-if="deployment.plugins[id] === 'ENABLED' && cards[id].accountLink?.(status)"
+            <UiButton v-if="characterId && deployment.plugins[id] === 'ENABLED' && cards[id].accountLink?.(status)"
               size="small" variant="soft" @click="emit('accounts')">前往平台账号池</UiButton>
             <UiButton v-if="deployment.plugins[id] !== 'NOT_INSTALLED' && versions.has(id)"
               :id="'plugin-release-toggle-' + id" size="small" variant="quiet"
@@ -209,7 +209,7 @@ function changeStage(id: DeploymentPluginId) {
             请让部署维护者核对上述组件，修正发布清单或选择兼容的 Rica 版本。
           </UiAlert>
           <template v-else-if="upgrades.has(id)">
-            <template v-if="cards[id].upgradeQueue">
+            <template v-if="characterId && cards[id].upgradeQueue">
               <UiAlert v-if="upgradeQueue?.length" tone="warning" title="当前角色有发送结果需核对">
                 等待在途发送完成，或核对未知结果后恢复或结案。部署前请逐个角色检查。
                 <div class="console-actions">
@@ -264,7 +264,7 @@ function changeStage(id: DeploymentPluginId) {
         </div>
       </template>
     </UiDialog>
-    <PackageConsole :character-id="characterId" @expired="expired" />
+    <PackageConsole v-if="characterId" :character-id="characterId" @expired="expired" />
   </div>
 </template>
 

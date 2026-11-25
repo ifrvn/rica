@@ -4,9 +4,10 @@ export type ConsolePage = 'home' | 'character' | 'review' | 'activity' | 'runs' 
 export type ConsoleLocation = { characterId: string; page: ConsolePage; detail?: string; runQuery?: string; startSimulation?: boolean; connectorAccountId?: string; reviewPlugin?: string; reviewStatus?: string; auditTarget?: string; healthNode?: 'simulation-executor' }
 
 const id = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu
+const unscopedPages = new Set<string>(['character', 'plugins', 'health', 'model-usage'])
 
 export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
-  if (hash === '#/model-usage') return { characterId: '', page: 'model-usage' }
+  if (hash.startsWith('#/') && unscopedPages.has(hash.slice(2))) return { characterId: '', page: hash.slice(2) as ConsolePage }
   const separator = hash.indexOf('?')
   const path = separator < 0 ? hash : hash.slice(0, separator)
   const match = /^#\/characters\/([^/]+)\/(home|character|review|activity|runs|outbox|audit|plugins|health|connector|accounts|members|knowledge|growth|planning|metrics|simulation-settings|model-usage)(?:\/([^/]+))?$/u.exec(path)
@@ -37,7 +38,7 @@ export function readConsoleLocation(hash: string): ConsoleLocation | undefined {
 }
 
 export function consoleHash({ characterId, page, detail, runQuery, startSimulation, connectorAccountId, reviewPlugin, reviewStatus, auditTarget, healthNode }: ConsoleLocation) {
-  if (page === 'model-usage' && !characterId) return '#/model-usage'
+  if (!characterId && unscopedPages.has(page)) return '#/' + page
   const filters = new URLSearchParams(runQuery)
   if (page === 'runs' && !detail && startSimulation) filters.set('start', '1')
   if (page === 'connector' && connectorAccountId) filters.set('accountId', connectorAccountId)

@@ -62,7 +62,7 @@ const layers = computed(() => {
   ]
   const external = (id: string, label: string, description: string, configured: boolean): Node =>
     ({ id, label, description, state: configured ? '暂无独立探测' : '待配置', tone: 'default' })
-  const connector = platformHealth(status.value, processNode, external)
+  const connector = platformHealth(status.value, processNode, external, !!props.characterId)
   const modelHealth = hostedModelHealth(status.value, external)
   dependencies.push(...connector.dependencies, ...modelHealth.dependencies)
   return [
@@ -119,11 +119,11 @@ const detail = computed(() => {
         <p v-if="detail.diagnostic === 'INVALID_CONFIG'">请核对执行器的数据库连接配置，并确认它与管理 API 使用同一个数据库。</p>
         <p v-else-if="detail.state === '最近任务失败'">请查看模拟执行器日志，核对数据库连接和执行权限。</p>
         <p v-else-if="detail.state === '无近期报告'">请确认模拟执行器已启动并连接到本部署的 Redis，再刷新状态。</p>
-        <p v-else-if="detail.state === '已就绪'">仍在等待的提案可能受角色当地 22:00 至次日 08:00 的静默时段、账号额度或其他尚未结束的执行影响。</p>
+        <p v-else-if="characterId && detail.state === '已就绪'">仍在等待的提案可能受角色当地 22:00 至次日 08:00 的静默时段、账号额度或其他尚未结束的执行影响。</p>
       </template>
-      <UiButton v-if="hasAccountHealthLink(detail.id)" size="small" variant="soft"
+      <UiButton v-if="characterId && hasAccountHealthLink(detail.id)" size="small" variant="soft"
         @click="emit('accounts')">查看平台账号池</UiButton>
-      <UiButton v-if="detail.id.startsWith('model-api-')" size="small" variant="soft"
+      <UiButton v-if="detail.id.startsWith('model-api-') && (characterId || detail.state === '待配置')" size="small" variant="soft"
         @click="detail.state === '待配置' ? emit('plugins') : emit('runs')">
         {{ detail.state === '待配置' ? '前往插件中心' : '查看模拟运行' }}
       </UiButton>

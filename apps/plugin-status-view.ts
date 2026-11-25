@@ -9,7 +9,7 @@ export const consolePluginStatusView = pluginStatusView.extend({
   modelProfiles: modelSettingsContracts.modelProfileChoice.array().optional(),
   modelChecks: modelSettingsContracts.modelCheckStatus.array().optional(),
   defaultModelProfileId: modelSettingsContracts.modelActivationInput.shape.id.optional(),
-  newbiRegistrationAvailable: z.boolean(),
+  newbiRegistrationAvailable: z.boolean().optional(),
   newbiConnections: newbiConnectionsView.optional(),
   newbiPendingDeliveries: newbiPendingDeliveries.optional(),
 })
