@@ -907,11 +907,12 @@ model SimulationAttempt {
 }
 
 model SimulationReceipt {
-  actionId    String                @id @map("action_id") @db.Uuid
-  characterId String                @map("character_id") @db.Uuid
-  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz
-  attempt     SimulationAttempt     @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
-  commitment  SimulationCommitment?
+  actionId     String                @id @map("action_id") @db.Uuid
+  characterId  String                @map("character_id") @db.Uuid
+  messageCount Int                   @default(1) @map("message_count")
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  attempt      SimulationAttempt     @relation(fields: [characterId, actionId], references: [characterId, actionId], onDelete: Restrict, onUpdate: NoAction)
+  commitment   SimulationCommitment?
 
   @@unique([characterId, actionId])
   @@index([characterId, createdAt])

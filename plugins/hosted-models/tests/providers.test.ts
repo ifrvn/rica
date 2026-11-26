@@ -96,6 +96,24 @@ test('hosted models send only writing input and parse each provider response', a
   }
 })
 
+test('hosted chat writing requests and returns separate messages in order', async (t) => {
+  const messages = ['我看到了。', '下午三点。\n入口在东门。']
+  const conversation = { speaker: '小林', history: [] }
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const request = JSON.parse(String(options.body))
+    assert.match(request.messages[0].content, /JSON array of 1 to 3 nonempty message strings in sending order/)
+    assert.deepEqual(JSON.parse(request.messages.at(-1).content).conversation, conversation)
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(messages) } }] })
+  })
+  const host = await startObservedModelPlugin({ provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
+  try {
+    assert.deepEqual(await host.model.implementation.write({ ...input, conversation }, new AbortController().signal),
+      { messages, evidenceIds: ['internal-memory-id'] })
+  } finally {
+    await host.stop()
+  }
+})
+
 test('hosted model refuses to start without its required key or with an insecure compatible endpoint', async () => {
   await assert.rejects(startCognitionPlugins({}, undefined, { provider: 'openai', model: 'fixture-model' }),
     /INVALID_CONFIG: model\/hosted-models/)

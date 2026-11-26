@@ -50,8 +50,12 @@ const activeStates = new Set(['QUEUED', 'CONTEXT_READY', 'DRAFTED', 'WAITING_APP
 const bubbles = computed(() => (chat.value?.turns ?? []).flatMap(turn => {
   const inbound = { key: turn.id, run: turn.id, text: turn.message, at: turn.sentAt, sender: turn.speaker,
     state: turn.repliedAt ? '' : turn.state, isReply: false }
-  return turn.repliedAt ? [inbound, { key: turn.id + '-reply', run: turn.id, text: turn.reply, at: turn.repliedAt,
-    sender: props.identity(turn.identityId), state: '', isReply: true }] : [inbound]
+  if (!turn.repliedAt) return [inbound]
+  const at = turn.repliedAt
+  return [inbound, ...(turn.replies ?? [null]).map((text, index) => ({
+    key: `${turn.id}-reply-${index}`, run: turn.id, text, at,
+    sender: props.identity(turn.identityId), state: '', isReply: true,
+  }))]
 }).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)))
 
 function scrollToEnd() {

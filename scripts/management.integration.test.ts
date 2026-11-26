@@ -3616,7 +3616,8 @@ test('console simulation runs use an isolated conversation, one approval and one
     let reviewObserved = false
     const decisionOutput = '{\n  "action": "REPLY", "reason": "SOCIAL_OPENING"\n}'
     const reviewOutput = '{"status":"APPROVE","reason":"讨论相关的低风险回复。"}'
-    let writingOutput: string | undefined
+    const chatMessages = ['我看到了。', '两套方案我都在看。\n先比较运费吧。']
+    const writingOutput = JSON.stringify(chatMessages)
     const tracedModel = { ...localSimulationModel, implementation: {
       hostedModel: 'fixture',
       async decide(input: Parameters<typeof localSimulationModel.implementation.decide>[0]) {
@@ -3624,16 +3625,14 @@ test('console simulation runs use an isolated conversation, one approval and one
         if (captureOutput) await captureOutput(decisionOutput)
         return JSON.parse(decisionOutput)
       },
-      async write(input: Parameters<typeof localSimulationModel.implementation.write>[0], signal: AbortSignal) {
+      async write(input: Parameters<typeof localSimulationModel.implementation.write>[0]) {
         const captureOutput = await input.capture?.('Writing system prompt\nOriginal identity context')
-        const draft = await localSimulationModel.implementation.write(input, signal)
-        assert.ok(draft && typeof draft === 'object' && 'text' in draft && typeof draft.text === 'string')
-        writingOutput = draft.text
         if (captureOutput) await captureOutput(writingOutput)
-        return draft
+        return { messages: chatMessages, evidenceIds: [] }
       },
     } }
-    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, tracedModel, undefined, async (_settings, _reply, _attribution, capture) => {
+    await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, tracedModel, undefined, async (_settings, reply, _attribution, capture) => {
+      assert.deepEqual(JSON.parse(reply.draft), chatMessages)
       const captureOutput = await capture?.('Review system prompt\nOriginal policy', 'fixture/review')
       const duringReview = await request('GET', firstReplay)
       assert.equal(duringReview.body.autoReviewPending, true)
@@ -3641,6 +3640,15 @@ test('console simulation runs use an isolated conversation, one approval and one
       const proposalPath = character + '/actions/' + duringReview.body.proposal.id
       const preview = await request('GET', proposalPath)
       assert.equal(preview.body.autoReviewPending, true)
+      assert.deepEqual(preview.body.messages, chatMessages)
+      const draftKey = { characterId_runId: { characterId, runId: firstTurn.body.id } }
+      const stored = await owner.simulatedDraft.findUniqueOrThrow({ where: draftKey })
+      await owner.simulatedDraft.update({ where: draftKey, data: { content: chatMessages.join('\n\n') } })
+      try {
+        assert.equal((await request('GET', proposalPath)).body.messages, null)
+      } finally {
+        await owner.simulatedDraft.update({ where: draftKey, data: { content: stored.content } })
+      }
       const race = await request('POST', proposalPath + '/decisions', {
         key: randomUUID(), ifMatch: preview.headers.get('etag')!,
         data: { decision: 'APPROVE', reviewDigest: preview.body.reviewDigest },
@@ -3676,6 +3684,9 @@ test('console simulation runs use an isolated conversation, one approval and one
     // Keep the remaining group turns in quiet hours to exercise interactive receipt issuance.
     await owner.character.update({ where: { id: characterId }, data: { timezone: simulationZone(1) } })
     await executeSimulation(executor, automatic.body.proposal.id, simulationPlatforms.resolveAdapter)
+    await executeSimulation(executor, automatic.body.proposal.id, simulationPlatforms.resolveAdapter)
+    const receipts = await owner.simulationReceipt.findMany({ where: { actionId: automatic.body.proposal.id } })
+    assert.deepEqual(receipts.map(({ messageCount }) => messageCount), [chatMessages.length])
 
     const newIdentity = await request('POST', character + '/identities', {
       key: randomUUID(), data: { slug: 'another-persona', roleProfile: { displayName: '另一个身份' } },
@@ -3704,10 +3715,10 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.deepEqual(chat.body.turns.map(({ accountId, identityId }: { accountId: string; identityId: string }) =>
       [accountId, identityId]), [[account.id, identityId], [newAccount.id, newIdentityId]])
     assert.equal(chat.body.turns[0].state, 'SIMULATED')
-    assert.equal(chat.body.turns[1].reply, null)
-    assert.ok(chat.body.turns[0].reply)
+    assert.equal(chat.body.turns[1].replies, null)
+    assert.deepEqual(chat.body.turns[0].replies, chatMessages)
     assert.deepEqual(seenContext, { speaker: '小周', history: [
-      { speaker: '小林', message: '我们在比较两套方案。' }, { speaker: '角色', message: chat.body.turns[0].reply },
+      { speaker: '小林', message: '我们在比较两套方案。' }, ...chatMessages.map(message => ({ speaker: '角色', message })),
     ] })
     const quietTurn = await send('小周', '明天交作业哈哈', randomUUID(), newAccount.id)
     const quietDraft = await prepareTurn(quietTurn.body.id)

@@ -1,11 +1,11 @@
 import { logger } from '@ricajs/runtime/logging'
 import { createHash } from 'node:crypto'
 import { reviewTarget, type ChatReplyStop } from '../contracts/review.js'
-import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
+import { maxSimulatedTextLength, matchesSimulationAdapter, simulationMessageSeparator, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
-import { resolveParticipation, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
+import { maxChatReplyMessages, resolveParticipation, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
   type ReplyDecision, type WritingStyle } from '@ricajs/contracts/model-provider'
 import { localSimulationModel } from '../adapters/model.js'
 import type { Plugin } from '@ricajs/plugin-host'
@@ -37,20 +37,27 @@ async function readEvidence(
     : []) ?? null
 }
 
-function validateDraft(output: unknown, allowedIds: ReadonlyMap<string, number>) {
-  if (!output || typeof output !== 'object' || !('text' in output) || !('evidenceIds' in output)) {
+function validateDraft(output: unknown, allowedIds: ReadonlyMap<string, number>, chat: boolean) {
+  if (!output || typeof output !== 'object' || !('evidenceIds' in output)) {
     throw new Error('Invalid simulated writing output')
   }
 
-  const { text, evidenceIds } = output
-  if (typeof text !== 'string' || !text.trim() || text.length > maxSimulatedTextLength
+  const { evidenceIds } = output
+  const parts = 'messages' in output && !('text' in output) && chat ? output.messages
+    : 'text' in output && !('messages' in output) ? [output.text] : null
+  if (!Array.isArray(parts) || !parts.length || parts.length > maxChatReplyMessages
+    || !Array.from(parts).every((part): part is string => typeof part === 'string' && !!part.trim()
+      && !part.includes('\0') && !part.includes(simulationMessageSeparator))
     || !Array.isArray(evidenceIds) || evidenceIds.length > allowedIds.size
     || !Array.from(evidenceIds).every((id): id is string => typeof id === 'string' && allowedIds.has(id))
     || new Set(evidenceIds).size !== evidenceIds.length) {
     throw new Error('Invalid simulated writing output')
   }
 
-  return { text: text.trim(), evidenceIds: [...evidenceIds] }
+  const messages = parts.map(part => part.trim())
+  const payload = messages.join(simulationMessageSeparator)
+  if (payload.length > maxSimulatedTextLength) throw new Error('Invalid simulated writing output')
+  return { messages, payload, evidenceIds: [...evidenceIds] }
 }
 
 function evidenceMatches(current: readonly ModelEvidence[] | null, previous: ReadonlyMap<string, number>) {
@@ -178,8 +185,8 @@ async function buildSimulatedDraft(
     ? (prompt: string) => recordRunModelCall(db, runId, 'WRITING', observe.model, prompt) : undefined
   const output = await provider.write({ ...writing, capture: captureWriting }, signal)
   signal.throwIfAborted()
-  const draft = validateDraft(output, allowedRevisions)
-  if (containsWritingPrompt(draft.text, writing.corePrompt, writing.identityPrompt)) return null
+  const draft = validateDraft(output, allowedRevisions, !!writing.conversation)
+  if ([' ', ''].some(separator => containsWritingPrompt(draft.messages.join(separator), writing.corePrompt, writing.identityPrompt))) return null
   return { draft, conversation: writing.conversation, decisionRevisions, glossary,
     writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
@@ -213,7 +220,8 @@ export async function generateSimulatedDraft(
   const candidate = await buildSimulatedDraft(db, runId, text, request, provider, signal)
   if (!candidate || !await db.$transaction((tx) => recheckDraft(tx, runId, request, candidate))) return null
   signal.throwIfAborted()
-  return candidate.draft
+  const { messages, evidenceIds } = candidate.draft
+  return messages.length === 1 ? { text: messages[0], evidenceIds } : { messages, evidenceIds }
 }
 
 export type ResolveDraftModel = (profile?: string) => Plugin<ModelProvider> | Promise<Plugin<ModelProvider>>
@@ -305,7 +313,7 @@ export async function processSimulatedDraft(
           public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
       ` : []
       const target = bound?.target ? reviewTarget.parse(bound.target) : null
-      const content = accepted ? candidate.draft.text : null
+      const content = accepted ? candidate.draft.payload : null
       const adapter = target ? resolveAdapter(target.platform) : undefined
       const proposed = accepted && target && target.platform === input?.platform
         && adapter && matchesSimulationAdapter(input.adapter, adapter) && content

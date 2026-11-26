@@ -116,7 +116,7 @@ function statusTone(state: ActionView['state']) {
         <UiAlert v-if="!selected.autoReviewHandoff && selected.riskCodes.includes('CROSS_PLATFORM_NEAR_DUPLICATE')" tone="warning">
           此回复与其他平台的内容相似，请核对后再审批。
         </UiAlert>
-        <template v-if="selected.content">
+        <template v-if="selected.messages">
           <section aria-labelledby="simulation-context-heading">
             <h4 id="simulation-context-heading">原消息</h4>
             <template v-if="selected.messageContext">
@@ -139,7 +139,12 @@ function statusTone(state: ActionView['state']) {
             <p v-else class="console-record-meta">当前无法读取原消息。</p>
           </section>
           <h4>拟回复内容</h4>
-          <p class="console-payload">{{ selected.content }}</p>
+          <ol v-if="selected.messages.length > 1" class="outgoing-messages">
+            <li v-for="(message, index) in selected.messages" :key="index">
+              <p class="console-payload">{{ message }}</p>
+            </li>
+          </ol>
+          <p v-else class="console-payload">{{ selected.messages[0] }}</p>
           <UiAlert v-if="selected.followUp" tone="info">
             <strong>{{ selected.followUp.kind === 'PLAN' ? '曾拟定计划' : '曾拟登记承诺' }} · {{ selected.followUp.title }}</strong>
             <p v-if="selected.state === 'WAITING_APPROVAL'">批准回复只会执行模拟发送。</p>
@@ -184,6 +189,8 @@ function statusTone(state: ActionView['state']) {
 .proposal-actions { margin-bottom: .75rem; }
 .review-context-list { display: grid; gap: .75rem; margin-block: .75rem; padding-inline-start: 1.5rem; }
 .review-context-list .console-payload { margin-block: .25rem 0; }
+.outgoing-messages { list-style: decimal; margin-block: .5rem; padding-inline-start: 1.5rem; }
+.outgoing-messages .console-payload { margin-block: .25rem .5rem; }
 .metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.25rem; margin: 0 0 1rem; }
 .metadata dt { color: var(--console-muted); font-size: .8125rem; }
 .metadata dd { margin: .125rem 0 0; overflow-wrap: anywhere; }

@@ -2,6 +2,9 @@ import type { Plugin } from '@ricajs/plugin-host'
 
 export const maxSimulatedTextLength = 4_000
 
+// The stored payload and its digest include this boundary. Ordinary line breaks stay inside a message.
+export const simulationMessageSeparator = '\u001e'
+
 export type NormalizedPlatformEvent = Readonly<{
   remoteAccountId: string
   remoteConversationKey: string

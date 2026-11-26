@@ -40,6 +40,7 @@ export const actionView = z.object({
   version: z.number().int(), target: reviewTarget,
   expiresAt: z.iso.datetime(), reviewDigest: z.string(),
   riskCodes: z.array(z.string()), content: z.string().nullable(),
+  messages: z.array(z.string()).nullable(),
   chatStop: chatReplyStop.nullable(),
   messageContext: simulationReviewContext.nullable(),
   autoApproved: z.boolean(),

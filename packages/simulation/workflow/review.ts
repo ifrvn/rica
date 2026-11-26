@@ -3,7 +3,7 @@ import type { z } from '@hono/zod-openapi'
 import { reviewTarget, simulationReviewContext, type ActionView, type actionDecision, type ChatReplyStop } from '../contracts/review.js'
 import { simulationFollowUp } from '../contracts/follow-up.js'
 import { recordRunModelCall } from './model-calls.js'
-import { matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
+import { matchesSimulationAdapter, simulationMessageSeparator, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
 import { authorize, denyPermission, ManagementError, type Scope } from '@ricajs/persistence/management'
 import { autoReviewHandoff, autoReviewerId, missingAutoReviewHandoff, type AutoReviewHandoff, type ReviewPublicReply } from '@ricajs/contracts/auto-review'
@@ -122,7 +122,8 @@ export async function listReviewActions(
     const actions: ActionView[] = []
     for (const row of rows.slice(0, limit)) {
       const { target, state, content } = await inspect(tx, scope.characterId, row, resolveAdapter, Boolean(actionId))
-      const canSeeDraft = Boolean(actionId && content && row.proposerId !== scope.actor.id)
+      const messages = actionId && content && row.proposerId !== scope.actor.id ? content.split(simulationMessageSeparator) : null
+      const canSeeDraft = messages !== null
       const [context] = canSeeDraft ? await tx.$queryRaw<{ context: unknown }[]>`
         SELECT public.rica_simulation_review_context(${scope.characterId}::uuid, ${row.id}::uuid) AS context
       ` : []
@@ -144,7 +145,8 @@ export async function listReviewActions(
           ...(row.reviewerId === autoReviewerId ? [] : ['HUMAN_REVIEW_REQUIRED']),
           ...(row.crossPlatformDuplicate ? ['CROSS_PLATFORM_NEAR_DUPLICATE'] : []),
         ],
-        content: canSeeDraft ? content : null,
+        content: messages?.join('\n\n') ?? null,
+        messages,
         messageContext: context?.context == null ? null : simulationReviewContext.parse(context.context),
         followUp: canSeeDraft ? simulationFollowUp.safeParse(row.followUp).data ?? null : null,
       })
@@ -167,8 +169,9 @@ export async function autoReviewSimulation(
   }, { isolationLevel: 'RepeatableRead' })
   if (!input) return
   const { settings, proposal, target, content } = input
+  const messages = content.split(simulationMessageSeparator)
   const outcome = settings.enabled
-    ? await review(settings, { platform: target.platform, draft: content, discussion },
+    ? await review(settings, { platform: target.platform, draft: messages.length > 1 ? JSON.stringify(messages) : content, discussion },
       { characterId, identityId: target.identityId, platform: target.platform },
       (prompt, model) => recordRunModelCall(db, proposal.runId, 'REVIEW', model, prompt))
     : { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' } as const

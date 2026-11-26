@@ -28,7 +28,7 @@ export const simulationChatView = z.object({
   turns: z.array(z.object({
     id: resourceId, accountId: resourceId, identityId: resourceId,
     state: z.string(), speaker: z.string(), message: z.string().nullable(), sentAt: timestamp,
-    reply: z.string().nullable(), repliedAt: timestamp.nullable(),
+    replies: z.array(z.string()).nullable(), repliedAt: timestamp.nullable(),
   })),
 })
 export const simulationWritingContext = z.object({

@@ -27,6 +27,7 @@ export function resolveParticipation(explicit?: string | null, preferences?: str
     : /寡言|reserved/i.test(preferences ?? '') ? 'reserved' : 'balanced')
 }
 type ModelConversation = { speaker: string; history: { speaker: string; message: string }[] }
+export const maxChatReplyMessages = 3
 export const replyDecision = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('REPLY'), reason: z.enum(['DIRECT_REQUEST', 'RELEVANT_TOPIC', 'SOCIAL_OPENING']) }),
   z.strictObject({ action: z.literal('NO_OP'), reason: z.enum(['ALREADY_ADDRESSED', 'BYSTANDER', 'UNCLEAR']) }),
