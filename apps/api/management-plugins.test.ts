@@ -100,9 +100,7 @@ function fixture(plugins: ManagementPlugin[], reviewModel?: Parameters<typeof cr
   return createManagementApp({
     db: { $transaction: (read: (tx: object) => unknown) => read({
       managementMembership: { findUnique: async () => ({ subject: 'admin' }) },
-      character: { findUnique: async () => ({
-        autoReviewEnabled: false, imManualReviewEnabled: false, autoReviewPrompt: null, autoReviewVersion: 0,
-      }) },
+      $queryRaw: async () => [{ enabled: false, imManualReviewEnabled: false, templateId: null, prompt: null, version: 0 }],
     }) } as unknown as PrismaClient,
     origin, cookie: 'session', resolveAdapter: () => undefined, plugins, reviewModel,
     authenticate: async (request) => request.headers.has('Cookie')
@@ -137,7 +135,7 @@ test('auto-review settings only expose the model label and stay readable when mo
     if (!readable) throw new Error('Unreadable model settings')
     return configuration
   })
-  const path = '/characters/' + characterId + '/auto-review'
+  const path = '/characters/' + characterId + '/identities/' + characterId + '/auto-review'
   const headers = { Cookie: 'session=fixture' }
   assert.equal((await app.request(path)).status, 401)
   const response = await app.request(path, { headers })

@@ -471,10 +471,11 @@ export async function listIdentities(db: PrismaClient, scope: Scope, page: Page)
     const rows = await tx.identity.findMany({
       ...args, where,
       select: { id: true, slug: true, status: true, activeVersion: true, createdAt: true,
+        autoReviewEnabled: true, imManualReviewEnabled: true,
         activeProfile: { select: { roleProfile: true } } },
     })
-    return makePage(rows, page, ({ id, slug, status, activeVersion, activeProfile }) => ({
-      id, slug, status, version: activeVersion,
+    return makePage(rows, page, ({ id, slug, status, activeVersion, activeProfile, autoReviewEnabled, imManualReviewEnabled }) => ({
+      id, slug, status, version: activeVersion, autoReviewEnabled, imManualReviewEnabled,
       profile: profile.safeParse(activeProfile?.roleProfile).data ?? null,
     }))
   }, { isolationLevel: 'RepeatableRead' })

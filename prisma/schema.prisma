@@ -91,10 +91,6 @@ model Character {
   timezone              String                 @default("UTC")
   activeCoreVersion     Int?                   @map("active_core_version")
   authEpoch             Int                    @default(0) @map("auth_epoch")
-  autoReviewEnabled     Boolean                @default(false) @map("auto_review_enabled")
-  imManualReviewEnabled Boolean                @default(false) @map("im_manual_review_enabled")
-  autoReviewPrompt      String?                @map("auto_review_prompt")
-  autoReviewVersion     Int                    @default(0) @map("auto_review_version")
   simulationLimitsVersion Int                 @default(0) @map("simulation_limits_version")
   simulationDailyLimit  Int                    @default(5) @map("simulation_daily_limit")
   simulationCooldownMinutes Int                @default(60) @map("simulation_cooldown_minutes")
@@ -109,6 +105,7 @@ model Character {
   activeCore            CoreVersion?           @relation("ActiveCore", fields: [id, activeCoreVersion], references: [characterId, version], onDelete: NoAction, onUpdate: NoAction)
   coreVersions          CoreVersion[]          @relation("CharacterCoreVersions")
   identities            Identity[]
+  autoReviewTemplates   AutoReviewTemplate[]
   memories              Memory[]
   memorySources         SourceRecord[]
   managementMemberships ManagementMembership[]
@@ -165,8 +162,13 @@ model Identity {
   slug          String
   status        EntityStatus      @default(PAUSED)
   activeVersion Int?              @map("active_version")
+  autoReviewEnabled     Boolean @default(false) @map("auto_review_enabled")
+  imManualReviewEnabled Boolean @default(false) @map("im_manual_review_enabled")
+  autoReviewVersion     Int     @default(0) @map("auto_review_version")
+  autoReviewTemplateId  String? @map("auto_review_template_id") @db.Uuid
   createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz
   character     Character         @relation(fields: [characterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  autoReviewTemplate AutoReviewTemplate? @relation(fields: [characterId, autoReviewTemplateId], references: [characterId, id], onDelete: Restrict, onUpdate: NoAction)
   activeProfile IdentityVersion?  @relation("ActiveIdentity", fields: [characterId, id, activeVersion], references: [characterId, identityId, version], onDelete: NoAction, onUpdate: NoAction)
   versions      IdentityVersion[] @relation("IdentityVersions")
   accounts      PlatformAccount[]
@@ -176,11 +178,26 @@ model Identity {
 
   @@unique([characterId, id])
   @@unique([characterId, slug])
+  @@index([characterId, autoReviewTemplateId])
   goals GoalVersion[]
   beliefs BeliefVersion[]
   reflections IdentityReflection[]
 
   @@map("identities")
+}
+
+model AutoReviewTemplate {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  characterId String    @map("character_id") @db.Uuid
+  name        String
+  prompt      String
+  version     Int       @default(1)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  identities  Identity[]
+
+  @@unique([characterId, id])
+  @@unique([characterId, name])
+  @@map("auto_review_templates")
 }
 
 model IdentityReflection {

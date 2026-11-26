@@ -95,7 +95,8 @@ pnpm rica admin-user reset
 | `GET /c/outbox/quarantined`、`POST /c/outbox/{eventId}/retry` | ADMIN 分页读取隔离事件。ADMIN 用当前代次和理由恢复一个事件。 |
 | `GET /c/audit` | ADMIN 读取操作元数据、摘要哈希和请求 ID。可用 `runId` 限定运行相关记录，`order=desc` 按最新时间优先。 |
 | `GET /c/actions`、`GET /c/actions/{actionId}` | ADMIN 读取模拟待办和经复核的提案预览。列表支持 `status=HISTORY`、`APPROVE` 或 `REJECT`，并按决定时间分页。审批历史包含结果、时间、AI 或人工来源及详情中已填写的人工理由。可查看正文时，详情的 `messages` 按发送顺序返回消息列表。 |
-| `GET /c/auto-review`、`PUT /c/auto-review` | ADMIN 读取和修改当前角色的自动审批开关、提示词和 `imManualReviewEnabled`。IM 人工复核默认关闭，IM 回复若无法获得自动批准则结束提案。读取时返回只读的默认外部模型信息，配置不可用时 `model` 为 `null`。保存时在 If-Match 带上当前版本。 |
+| `GET /c/identities/{identityId}/auto-review`、`PUT /c/identities/{identityId}/auto-review` | ADMIN 读取和修改该身份的自动审批开关、`imManualReviewEnabled` 和 `templateId`。新身份的两个开关默认关闭，`templateId: null` 表示使用内置规则。读取时返回只读的默认外部模型信息，配置不可用时 `model` 为 `null`。保存时在 If-Match 带上当前版本。 |
+| `GET /c/auto-review/templates`、`POST /c/auto-review/templates`、`PUT /c/auto-review/templates/{templateId}` | ADMIN 列出、新建或更新该角色的审核规则模板。模板包含名称和提示词。新建使用 Idempotency-Key，更新使用 If-Match。更新同时推进使用该模板的身份审核版本。 |
 | `POST /c/actions/{actionId}/decisions` | ADMIN 提交批准或拒绝、reviewDigest 和理由。If-Match 使用提案详情的 ETag，例如 "run-v3"。 |
 | `GET /c/actions/{actionId}/reconciliation`、`POST /c/actions/{actionId}/reconciliation` | ADMIN 查看封存的本地账本证据并处置长期未知的模拟尝试。提交需要版本、幂等键、结论、证据引用和理由。 |
 
@@ -145,7 +146,7 @@ ADMIN 可在 `roleProfile.duplicateReview` 中为该身份启用提示。配置�
 
 用本地账号登录 Vue 控制台，在「审批」选择角色。批准将模拟提案推进到 READY，等待已启用的独立模拟执行进程。拒绝会终止提案。同一次运行只有一份提案和一个有效决定。[模拟执行说明](simulation.md)
 
-「自动审批设置」按角色生效，初始关闭。管理员可编辑提示词或恢复默认。新产生的合格公开回复使用插件中心配置的部署默认外部模型。审核模型收到待发正文和该讨论的公开内容。私聊、近似重复提示、拟定计划或承诺的模拟提案进入人工复审。
+「自动审批设置」按身份生效。身份列表返回 `autoReviewEnabled` 和 `imManualReviewEnabled`，身份可使用内置规则或选择同一角色的自定义模板。管理员在审批页创建和编辑模板。IM 人工复核关闭时，未获得自动批准的 IM 提案会结束。新产生的合格公开回复使用插件中心配置的部署默认外部模型。审核模型收到待发正文和该讨论的公开内容。私聊、近似重复提示、拟定计划或承诺的模拟提案进入人工复审。
 
 模型返回明确批准时，服务端在提交决定前复查策略版本、提案和当前授权。修改或关闭设置会使尚未提交的旧审核结果失效。提案详情和审计记录标识自动批准。对有权预览正文的待审提案，详情返回 `autoReviewHandoff`，显示模型建议转人工的理由，或跳过、审核未完成的原因。审核反馈随草稿正文清理。
 

@@ -10,7 +10,7 @@ import {
 import ConsoleNavigation from './ConsoleNavigation.vue'
 import { startAuthentication } from '@simplewebauthn/browser'
 import { RunOperations, SimulationReview, SimulationWorkspace, useSimulationReview } from '@ricajs/simulation/console'
-import AutoReviewSettings from '../features/review/AutoReviewSettings.vue'
+import AutoReviewTemplates from '../features/review/AutoReviewTemplates.vue'
 import AuditWorkspace from '../features/access/AuditWorkspace.vue'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import { consoleHash, readConsoleLocation, type ConsoleLocation, type ConsolePage } from './console-location.js'
@@ -524,7 +524,7 @@ function openRunAudit(id: string) {
           :tone="tab === 'connector' && activePlatformReview?.id === review.id ? 'primary' : 'default'"
           :aria-current="tab === 'connector' && activePlatformReview?.id === review.id ? 'page' : undefined" :disabled="busy || routing"
           @click="navigate({ characterId, page: 'connector', reviewPlugin: review.id })">{{ review.title }}</UiButton>
-        <AutoReviewSettings :key="characterId" :character-id="characterId" @expired="resetSession" />
+        <AutoReviewTemplates :key="characterId" :character-id="characterId" @expired="resetSession" />
       </nav>
       <UiSpinner v-if="routing && !characterId" />
       <ConsoleHome v-else-if="tab === 'home' && currentCharacter" :key="characterId" :character="currentCharacter"

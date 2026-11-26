@@ -21,14 +21,21 @@ export const defaultAutoReviewPrompt = `# 渠道差异化放行标准（严格�
 export const autoReviewInput = z.strictObject({
   enabled: z.boolean(),
   imManualReviewEnabled: z.boolean(),
-  prompt: z.string().trim().min(1).max(4_000).refine((value) => !value.includes('\0')),
+  templateId: z.uuid().nullable(),
 })
-const autoReviewSettings = autoReviewInput.extend({ version: z.number().int().nonnegative() })
+const reviewPrompt = z.string().trim().min(1).max(4_000).refine((value) => !value.includes('\0'))
+const identityReviewSettings = autoReviewInput.extend({ version: z.number().int().nonnegative() })
 const autoReviewModel = z.object({ name: z.string().optional(), provider: z.string(), model: z.string() })
-export const autoReviewView = autoReviewSettings.extend({ model: autoReviewModel.nullable() })
+export const autoReviewView = identityReviewSettings.extend({ model: autoReviewModel.nullable() })
+export const autoReviewTemplateInput = z.strictObject({
+  name: z.string().trim().min(1).max(80).regex(/^[^\p{Cc}]+$/u),
+  prompt: reviewPrompt,
+})
+export const autoReviewTemplateView = autoReviewTemplateInput.extend({ id: z.uuid(), version: z.number().int().positive() })
+export type AutoReviewTemplateView = z.infer<typeof autoReviewTemplateView>
 export const autoReviewerId = 'system:auto-review'
 
-export type AutoReviewSettings = z.infer<typeof autoReviewSettings>
+export type AutoReviewSettings = z.infer<typeof identityReviewSettings> & { prompt: string }
 export type AutoReviewView = z.infer<typeof autoReviewView>
 export type PublicReplyReview = Readonly<{
   scene: 'IM_CHAT' | 'PUBLIC_COMMUNITY'

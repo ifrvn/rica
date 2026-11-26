@@ -793,16 +793,19 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   const characterId: string = created.body.id
   characterIds.push(characterId)
   const base = characterPath(characterId)
+  const identityId = await activeIdentity({ writingPrompt: 'Internal account writing instructions' }, characterId)
   const { id: accountId } = await owner.platformAccount.create({ data: {
-    characterId, identityId: await activeIdentity({ writingPrompt: 'Internal account writing instructions' }, characterId), status: 'ACTIVE',
+    characterId, identityId, status: 'ACTIVE',
     platform: 'newbi', instanceKey: 'http://127.0.0.1:5000/agent-api/v1', remoteAccountId: randomUUID(),
   } })
   assert.equal((await request('POST', base + '/memberships', {
     key: randomUUID(), data: { subject: 'reviewer', action: 'GRANT', reason: 'Auto-review fixture' },
   })).status, 200)
   const prompt = '批准清楚简短的回复。'
-  assert.equal((await request('PUT', base + '/auto-review', {
-    ifMatch: '"0"', data: { enabled: true, imManualReviewEnabled: false, prompt },
+  const template = await request('POST', base + '/auto-review/templates', { key: randomUUID(), data: { name: 'Newbi 审批', prompt } })
+  assert.equal(template.status, 201)
+  assert.equal((await request('PUT', base + '/identities/' + identityId + '/auto-review', {
+    ifMatch: '"0"', data: { enabled: true, imManualReviewEnabled: false, templateId: template.body.id },
   })).status, 200)
   const previousComment = { id: randomUUID(), content: 'Previously approved', author: { username: 'fixture-agent' }, replyToCommentId: null }
   let calls = 0

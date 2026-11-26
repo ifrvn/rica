@@ -89,11 +89,15 @@ async function createDraftProposal(
     || !matchesSimulationAdapter(input.adapter, adapter) || !content || content.length > maxSimulatedTextLength) return
 
   const settings = await tx.character.findUniqueOrThrow({
-    where: { id: run.characterId }, select: { autoReviewEnabled: true, imManualReviewEnabled: true, simulationProposalHours: true },
+    where: { id: run.characterId }, select: { simulationProposalHours: true },
   })
+  const [flags] = await tx.$queryRaw<{ enabled: boolean; manual: boolean }[]>`
+    SELECT * FROM public.rica_simulation_review_flags(${run.id}::uuid)
+  `
+  if (!flags) return
   const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
-  const autoReview = reviewEnabled && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate
-  if (!autoReview && adapter.isIm && !settings.imManualReviewEnabled) return { skipReason: 'IM_MANUAL_REVIEW_DISABLED' }
+  const autoReview = reviewEnabled && flags.enabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate
+  if (!autoReview && adapter.isIm && !flags.manual) return { skipReason: 'IM_MANUAL_REVIEW_DISABLED' }
 
   const { isIm, ...adapterBinding } = adapter
   const expiresAt = new Date(Date.now() + settings.simulationProposalHours * 3_600_000)

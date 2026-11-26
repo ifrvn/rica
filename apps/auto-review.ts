@@ -6,7 +6,7 @@ const noModel = { status: 'SKIPPED', category: 'MODEL', reason: '部署未配置
 export function createAutoReviewer(useDefaultModel: (review: (model: ModelProvider) => Promise<AutoReviewOutcome>) =>
   Promise<AutoReviewOutcome | null>): ReviewPublicReply {
   return async (settings, reply, attribution, capture) => {
-    if (!settings.enabled) return { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' }
+    if (!settings.enabled) return { status: 'SKIPPED', category: 'POLICY', reason: '该身份未启用自动审批。' }
     if (!reply.draft.trim() || !reply.discussion.trim()) return { status: 'SKIPPED', category: 'CONTEXT', reason: '缺少可供审核的回复或讨论上下文。' }
     if (reply.discussion.length > 12_000) return { status: 'SKIPPED', category: 'CONTEXT', reason: '讨论上下文超过自动审核长度上限。' }
     let modelName: string | undefined

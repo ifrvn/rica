@@ -59,7 +59,7 @@ async function proposalRows(
   return tx.$queryRaw<Proposal[]>`
     SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest", a.follow_up AS "followUp",
       a.auto_review_handoff AS "autoReviewHandoff",
-      a.is_im AS "isIm", (NOT a.is_im OR c.im_manual_review_enabled) AS "manualReviewAllowed",
+      a.is_im AS "isIm", (NOT a.is_im OR i.im_manual_review_enabled) AS "manualReviewAllowed",
       a.policy_version AS "policyVersion", a.adapter_id AS "adapterId", a.adapter_version AS "adapterVersion",
       a.adapter_contract_version AS "adapterContractVersion",
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
@@ -68,11 +68,11 @@ async function proposalRows(
       r.state, r.state_version AS version, approval.reviewer_id AS "reviewerId", chat.stop AS "chatStop",
       approval.decision, approval.created_at AS "reviewedAt", approval.reason AS "reviewReason",
       COALESCE(r.state = 'WAITING_APPROVAL' AND a.auto_review_until > statement_timestamp()
-        AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL AND c.auto_review_enabled
+        AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL AND i.auto_review_enabled
         AND chat.stop IS NULL, false) AS "autoReviewPending"
     FROM public.action_proposals a
     JOIN public.agent_runs r ON (r.character_id, r.id) = (a.character_id, a.run_id)
-    JOIN public.characters c ON c.id = a.character_id
+    JOIN public.identities i ON (i.character_id, i.id) = (r.character_id, r.identity_id)
     LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
     CROSS JOIN LATERAL (SELECT CASE WHEN r.state_reason::text IN ('CHAT_REPEAT','CHAT_MOVED_ON') THEN r.state_reason::text
       WHEN r.state IN ('WAITING_APPROVAL','READY') THEN public.rica_chat_reply_stop(r.id) END AS stop OFFSET 0) chat
@@ -80,7 +80,7 @@ async function proposalRows(
       AND (${actionId}::uuid IS NULL OR a.id = ${actionId}::uuid)
       AND (${actionId}::uuid IS NOT NULL OR CASE ${status}
         WHEN 'WAITING' THEN r.state = 'WAITING_APPROVAL' AND chat.stop IS NULL
-          AND (NOT a.is_im OR c.im_manual_review_enabled)
+          AND (NOT a.is_im OR i.im_manual_review_enabled)
         WHEN 'HISTORY' THEN approval.action_id IS NOT NULL
         ELSE approval.decision::text = ${status} END)
       AND (${cursor}::uuid IS NULL OR (coalesce(approval.created_at, a.created_at), a.id) < (
@@ -169,11 +169,11 @@ export async function autoReviewSimulation(
 ) {
   const input = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
-    const settings = await readAutoReviewSettings(tx, characterId)
     const [proposal] = await proposalRows(tx, characterId, actionId)
-    if (!settings || !proposal || proposal.state !== 'WAITING_APPROVAL') return
+    if (!proposal || proposal.state !== 'WAITING_APPROVAL') return
     const { target, content } = await inspect(tx, characterId, proposal, resolveAdapter)
-    if (content && !skipSimulationReview(proposal, target)) return { settings, proposal, target, content }
+    const settings = content && await readAutoReviewSettings(tx, characterId, target.identityId)
+    if (settings && content && !skipSimulationReview(proposal, target)) return { settings, proposal, target, content }
   }, { isolationLevel: 'RepeatableRead' })
   if (!input) return
   const { settings, proposal, target, content } = input
@@ -183,11 +183,11 @@ export async function autoReviewSimulation(
       draft: messages.length > 1 ? JSON.stringify(messages) : content, discussion },
       { characterId, identityId: target.identityId, platform: target.platform },
       (prompt, model) => recordRunModelCall(db, proposal.runId, 'REVIEW', model, prompt))
-    : { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' } as const
+    : { status: 'SKIPPED', category: 'POLICY', reason: '该身份未启用自动审批。' } as const
 
   await db.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL ROLE rica_admin_api`
-    const policyMatches = settings.enabled && await lockAutoReview(tx, characterId, settings.version)
+    const policyMatches = settings.enabled && await lockAutoReview(tx, characterId, target.identityId, settings.version)
     const [current] = await proposalRows(tx, characterId, actionId)
     if (!current || current.state !== 'WAITING_APPROVAL' || current.version !== proposal.version
       || current.reviewDigest !== proposal.reviewDigest) return

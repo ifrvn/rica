@@ -29,7 +29,7 @@ const occurredAt = new Date('2026-11-06T00:00:00.000Z')
 
 async function createFixture() {
   return db.$transaction(async (tx) => {
-    const character = await tx.character.create({ data: { slug: fixtureKey, imManualReviewEnabled: true } })
+    const character = await tx.character.create({ data: { slug: fixtureKey } })
     await tx.coreVersion.create({
       data: {
         characterId: character.id,
@@ -50,7 +50,7 @@ async function createFixture() {
       ['public', 'mock-b'],
       ['private', 'mock-a'],
     ] as const) {
-      const identity = await tx.identity.create({ data: { characterId: character.id, slug } })
+      const identity = await tx.identity.create({ data: { characterId: character.id, slug, imManualReviewEnabled: true } })
       await tx.identityVersion.create({
         data: {
           characterId: character.id,

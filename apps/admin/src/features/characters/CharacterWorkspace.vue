@@ -6,6 +6,7 @@ import { maxAiDisclosureLength, type characterView, type identityView } from '@r
 import type { PluginStatus } from '../plugins/plugin-status.js'
 import CharacterEditorDialog from './CharacterEditorDialog.vue'
 import IdentityEditorDialog from './IdentityEditorDialog.vue'
+import IdentityAutoReviewDialog from '../review/IdentityAutoReviewDialog.vue'
 import { isSimulationPlatform, platformAccounts, type ConnectorAccount, type ConnectorRegistration, type ConsoleWorkspace } from '../../app/plugin-integrations.js'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import { hostedModelCatalog } from '@ricajs/plugin-hosted-models/shared'
@@ -45,6 +46,7 @@ const platformChoices = computed(() => [
 ])
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
+const reviewingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
 const target = ref<AccountControl>()
 const linkedAccount = ref<Account>()
@@ -87,6 +89,10 @@ const accountsByIdentity = computed(() => {
 })
 
 const identityName = (identity: Identity) => identity.profile?.displayName || identity.slug
+function updateReviewFlags(id: string, autoReviewEnabled: boolean, imManualReviewEnabled: boolean) {
+  const identity = identities.value.find((item) => item.id === id)
+  if (identity) Object.assign(identity, { autoReviewEnabled, imManualReviewEnabled })
+}
 const boundAccountLabel = (account: Account) => connectorFor(account.platform)?.plugin.label(account) ?? account.platform + ' · ' + account.instanceKey
 const isImPlatform = (platform: string) => workspace.value?.simulationImPlatforms.some((id) => id === platform)
 
@@ -424,6 +430,9 @@ onMounted(() => { if (props.characterId) void run(load) })
       :max-writing-prompt-length="schemas?.management.maxIdentityWritingPromptLength"
       :busy="busy" :error="error" :field-error="fieldError" :field-input="fieldInput"
       @touch="touched.add($event)" @save="save" @close="closeEditor" @closed="focusWorkspaceHeading" />
+    <IdentityAutoReviewDialog :character-id="characterId" :identity-id="reviewingIdentity?.id"
+      :identity-name="reviewingIdentity && identityName(reviewingIdentity)"
+      @saved="updateReviewFlags" @close="reviewingIdentity = undefined" @expired="emit('expired')" />
     <UiDialog id="character-workspace-editor" class="workspace-editor" :open="!!editor && !isCharacter && !isIdentity"
       :title="title" :busy="busy" @update:open="!$event && closeEditor()" @closed="focusWorkspaceHeading">
       <UiAlert v-if="error" class="editor-alert" tone="error" role="alert">{{ error }}</UiAlert>
@@ -551,9 +560,19 @@ onMounted(() => { if (props.characterId) void run(load) })
         <UiEmpty v-else-if="!identities.length" :description="workspace ? '尚未添加身份。' : '选择角色后查看身份。'" />
         <ul v-else class="record-list">
           <li v-for="identity in identities" :key="identity.id" class="record-row">
-            <div class="record-header">
+            <div class="record-header" :class="{ 'identity-record-header': admin }">
               <strong class="record-name">{{ identityName(identity) }}</strong>
               <UiBadge class="record-status" :tone="identity.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(identity.status) }}</UiBadge>
+              <button v-if="admin" class="row-icon-button record-auto-review" :class="{ 'record-review-off': !identity.autoReviewEnabled }"
+                type="button" aria-haspopup="dialog" :disabled="busy"
+                :aria-label="'自动审批 · ' + identityName(identity) + (identity.autoReviewEnabled ? ' · 已开启' : ' · 已关闭')"
+                :title="identity.autoReviewEnabled ? '自动审批已开启' : '自动审批已关闭'"
+                @click="reviewingIdentity = identity">审</button>
+              <button v-if="admin" class="row-icon-button record-manual-review" :class="{ 'record-review-off': !identity.imManualReviewEnabled }"
+                type="button" aria-haspopup="dialog" :disabled="busy"
+                :aria-label="'人工复核 · ' + identityName(identity) + (identity.imManualReviewEnabled ? ' · 已开启' : ' · 已关闭')"
+                :title="identity.imManualReviewEnabled ? '人工复核已开启' : '人工复核已关闭'"
+                @click="reviewingIdentity = identity">复</button>
               <button v-if="admin && identity.version" class="row-icon-button record-settings" type="button"
                 :aria-label="'编辑身份 ' + identityName(identity)" title="编辑身份" :disabled="busy" @click="open('identity-edit', identity)">
                 <span class="i-lucide-settings" aria-hidden="true" />
@@ -669,6 +688,8 @@ onMounted(() => { if (props.characterId) void run(load) })
 .record-row { display: grid; gap: .25rem; padding: .5rem .625rem; border-block-start: 1px solid var(--console-line); }
 .record-header { display: grid; grid-template-columns: minmax(0, 1fr) max-content repeat(2, var(--record-action-size));
   grid-template-areas: "name status settings control"; align-items: center; gap: .25rem; min-block-size: var(--record-action-size); }
+.identity-record-header { grid-template-columns: minmax(0, 1fr) max-content repeat(4, var(--record-action-size));
+  grid-template-areas: "name status auto-review manual-review settings control"; }
 .role-select, .row-icon-button { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; border-radius: 4px; }
 .role-select { align-self: stretch; padding: 0; text-align: start; }
 .role-select:enabled:hover, .row-icon-button:enabled:not([aria-disabled="true"]):hover { background: var(--console-hover); }
@@ -678,6 +699,10 @@ onMounted(() => { if (props.characterId) void run(load) })
 .record-status { grid-area: status; }
 .record-settings { grid-area: settings; }
 .record-control { grid-area: control; }
+.record-auto-review { grid-area: auto-review; }
+.record-manual-review { grid-area: manual-review; }
+.record-header .record-auto-review, .record-header .record-manual-review { color: var(--console-accent-text); font-weight: 650; }
+.record-header .record-review-off { color: var(--console-muted); }
 .role-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-icon-button { display: grid; place-items: center; inline-size: var(--record-action-size); block-size: var(--record-action-size); padding: 0; }
 .row-icon-button[aria-disabled="true"] { cursor: wait; opacity: .6; }
@@ -696,6 +721,10 @@ onMounted(() => { if (props.characterId) void run(load) })
 }
 @media (pointer: coarse) {
   .record-list { --record-action-size: 2.75rem; }
+}
+@media (max-width: 26rem) {
+  .identity-record-header { grid-template-columns: minmax(0, 1fr) repeat(4, var(--record-action-size));
+    grid-template-areas: "name name name name status" ". auto-review manual-review settings control"; }
 }
 </style>
 

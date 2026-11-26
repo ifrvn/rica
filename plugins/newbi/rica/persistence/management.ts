@@ -130,29 +130,29 @@ export async function autoReviewNewbiReply(
     Promise<z.infer<typeof newbiThreadView> | undefined>,
   requireConnector: (endpoint: string) => Promise<void>,
 ) {
-  const settings = await readAutoReviewSettings(db, characterId)
-  if (!settings) return
   const waiting = Prisma.sql`id = ${id}::uuid AND character_id = ${characterId}::uuid AND status = 'WAITING'`
 
   async function skipReview(tx: Prisma.TransactionClient, reason: string) {
     const handoff = JSON.stringify({ status: 'SKIPPED', category: 'POLICY', reason })
     await tx.$executeRaw`
       UPDATE rica_plugin_newbi.replies SET auto_review_handoff = ${handoff}::jsonb
-      WHERE ${waiting} AND content IS NOT NULL`
+      WHERE ${waiting} AND content IS NOT NULL AND auto_review_version IS NULL`
   }
 
   const reply = await db.$transaction(async (tx) => {
-    if (settings.enabled && !await lockAutoReview(tx, characterId, settings.version)) return
     const [current] = await tx.$queryRaw<(ReplyBinding & { identityId: string; postId: string; content: string | null; reviewDigest: string })[]>`
       SELECT account_id AS "accountId", identity_id AS "identityId", binding_version AS "bindingVersion", auth_epoch AS "authEpoch",
         expires_at AS "expiresAt", post_id AS "postId", content, review_digest AS "reviewDigest"
       FROM rica_plugin_newbi.replies
       WHERE ${waiting} AND executor_key = ${executorKey} AND auto_review_version IS NULL`
     if (!current?.content) return
+    const settings = await readAutoReviewSettings(tx, characterId, current.identityId)
+    if (!settings) return
     if (!settings.enabled) {
-      await skipReview(tx, '该角色未启用自动审批。')
+      await skipReview(tx, '该身份未启用自动审批。')
       return
     }
+    if (!await lockAutoReview(tx, characterId, current.identityId, settings.version)) return
     const account = await boundAccount(tx, characterId, current.accountId)
     if (!account || account.status !== 'ACTIVE' || account.identity.status !== 'ACTIVE'
       || account.bindingVersion !== current.bindingVersion || account.identity.character.authEpoch !== current.authEpoch
@@ -166,10 +166,11 @@ export async function autoReviewNewbiReply(
       await skipReview(tx, '此账号在该帖暂无已确认发送的回复，首次互动须由人工审核。')
       return
     }
-    await tx.$executeRaw`
+    const claimed = await tx.$executeRaw`
       UPDATE rica_plugin_newbi.replies SET auto_review_version = ${settings.version}
-      WHERE id = ${id}::uuid AND character_id = ${characterId}::uuid`
-    return { ...current, content: current.content, endpoint: account.instanceKey,
+      WHERE ${waiting} AND executor_key = ${executorKey} AND auto_review_version IS NULL`
+    if (!claimed) return
+    return { ...current, settings, content: current.content, endpoint: account.instanceKey,
       agentId: account.remoteAccountId, previousCommentId: prior.remoteCommentId }
   })
   if (!reply) return
@@ -196,10 +197,11 @@ export async function autoReviewNewbiReply(
         if (!count) throw new Error('Newbi proposal no longer accepts a model call')
       })
   }
+  const { settings } = reply
   const outcome = await evaluate(reply, settings)
 
   await db.$transaction(async (tx) => {
-    const policyMatches = await lockAutoReview(tx, characterId, settings.version)
+    const policyMatches = await lockAutoReview(tx, characterId, reply.identityId, settings.version)
     if (!policyMatches || outcome.status !== 'APPROVE') {
       const handoff = !policyMatches ? { status: 'SKIPPED', category: 'POLICY', reason: '审核期间自动审批设置已更改。' } : outcome
       await tx.$executeRaw`

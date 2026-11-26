@@ -106,8 +106,8 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
           'chatStop', chat.stop,
           'autoReviewPending', COALESCE(a.auto_review_until > statement_timestamp()
             AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL
-            AND r.state = 'WAITING_APPROVAL' AND c.auto_review_enabled AND chat.stop IS NULL, false),
-          'manualReviewAllowed', COALESCE(NOT a.is_im OR c.im_manual_review_enabled, true),
+            AND r.state = 'WAITING_APPROVAL' AND i.auto_review_enabled AND chat.stop IS NULL, false),
+          'manualReviewAllowed', COALESCE(NOT a.is_im OR i.im_manual_review_enabled, true),
           'autoApproved', COALESCE(approval.reviewer_id = ${autoReviewerId}, false),
           'autoReviewHandoff', CASE WHEN r.state = 'WAITING_APPROVAL' AND a.auto_review_handoff IS NOT NULL
             AND a.proposer_id IS DISTINCT FROM ${scope.actor.id}
@@ -124,7 +124,7 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
       LEFT JOIN public.action_proposals a ON (a.character_id, a.run_id) = (${scope.characterId}::uuid, ${runId}::uuid)
       LEFT JOIN public.action_approvals approval ON (approval.character_id, approval.action_id) = (a.character_id, a.id)
       LEFT JOIN public.agent_runs r ON (r.character_id,r.id) = (a.character_id,a.run_id)
-      LEFT JOIN public.characters c ON c.id = a.character_id
+      LEFT JOIN public.identities i ON (i.character_id, i.id) = (r.character_id, r.identity_id)
       CROSS JOIN LATERAL (SELECT CASE WHEN r.state IN ('WAITING_APPROVAL','READY') THEN public.rica_chat_reply_stop(r.id) END AS stop OFFSET 0) chat
     `
     if (!row?.view) throw new ManagementError(404, 'NOT_FOUND', 'Simulation run not found')

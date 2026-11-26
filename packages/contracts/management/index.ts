@@ -224,6 +224,7 @@ export const characterWorkspaceView = characterView.extend({
 export const identityView = z.object({
   id: z.uuid(), slug: z.string(), status: z.string(),
   version: z.number().int().nullable(), profile: identityProfile.nullable(),
+  autoReviewEnabled: z.boolean(), imManualReviewEnabled: z.boolean(),
 })
 export const accountView = z.object({
   id: z.uuid(), identityId: z.uuid(), platform: z.string(), instanceKey: z.string(),
