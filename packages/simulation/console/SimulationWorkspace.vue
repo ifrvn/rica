@@ -59,6 +59,7 @@ const stoppedReasons: Record<string, string> = {
   MODEL_NO_REPLY: '此身份选择旁听。',
   MODEL_DECISION_INVALID_OUTPUT: '模型的参与判断未通过格式校验，运行已停止。',
   MODEL_WRITING_INVALID_OUTPUT: '模型的写作结果未通过格式校验，未生成草稿。',
+  IM_MANUAL_REVIEW_DISABLED: 'IM 回复未获得自动批准。此角色已关闭 IM 人工复核。',
   ...chatReplyStopLabels,
 }
 const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }
@@ -66,7 +67,7 @@ const decisionLabels = { DIRECT_REQUEST: '收到直接提问或点名', RELEVANT
   SOCIAL_OPENING: '适合自然接话', ALREADY_ADDRESSED: '话题已回应或重复', BYSTANDER: '适合旁听', UNCLEAR: '对话意图不明确' }
 const modelStage = { DECISION: '参与判断', WRITING: '写作', REVIEW: 'AI 审核' }
 const stopReason = computed(() => stoppedReasons[selected.value?.stateReason ?? selected.value?.chatStop ?? ''])
-const awaitingHuman = computed(() => selected.value?.state === 'WAITING_APPROVAL' && !selected.value.chatStop)
+const awaitingHuman = computed(() => selected.value?.state === 'WAITING_APPROVAL' && selected.value.manualReviewAllowed && !selected.value.chatStop)
 const modelName = computed(() => [selected.value?.draft?.modelId, selected.value?.draft?.modelVersion].filter(Boolean).join(' · '))
 function accountName(id: string, platform?: string) {
   const account = accounts.value.find((item) => item.id === id)
@@ -78,7 +79,8 @@ const timeline = computed(() => {
   const inboundKind = { POST: '发帖', REPLY: '回复', MENTION: '提及' }
   const review = proposal?.reviewDecision === 'APPROVE' ? (selected.value.autoApproved ? 'AI 已批准' : '人工已批准')
     : proposal?.reviewDecision === 'REJECT' ? '已拒绝'
-      : state === 'WAITING_APPROVAL' ? (selected.value.autoReviewPending ? 'AI 审核中' : '待人工审批') : '无决定'
+      : state === 'WAITING_APPROVAL' ? (selected.value.autoReviewPending ? 'AI 审核中'
+        : selected.value.manualReviewAllowed ? '待人工审批' : '人工复核已关闭') : '无决定'
   const result = proposal?.receiptAt ? '已写入'
     : proposal?.attemptStatus === 'UNKNOWN' || state === 'RECONCILING' ? '待核对'
       : proposal?.attemptStatus === 'NOT_SENT' ? '已确认未写入' : '无回执'
@@ -282,6 +284,7 @@ async function openReview() {
   const wasWaiting = selected.value?.state === 'WAITING_APPROVAL'
   const view = await detail(id, true)
   if (previewId.value === id && view?.proposal && !view.autoReviewPending
+    && (view.state !== 'WAITING_APPROVAL' || view.manualReviewAllowed)
     && (!wasWaiting || view.state === 'WAITING_APPROVAL')) emit('review', view.proposal.id, view.proposal.reviewDecision !== null)
 }
 
@@ -377,7 +380,8 @@ onMounted(() => {
         <template v-if="selected">
           <div class="run-actions">
             <span v-if="trackingRun" class="run-muted">自动更新中</span>
-            <UiButton v-if="canReview && selected.proposal && !selected.autoReviewPending" size="small"
+            <UiButton v-if="canReview && selected.proposal && !selected.autoReviewPending
+              && (selected.state !== 'WAITING_APPROVAL' || selected.manualReviewAllowed)" size="small"
               :tone="awaitingHuman ? 'primary' : 'default'"
               :variant="awaitingHuman ? 'solid' : 'soft'" @click="openReview">
               {{ awaitingHuman ? '前往审批' : selected.proposal.reviewDecision ? '查看审批记录' : '查看提案' }}
@@ -387,7 +391,8 @@ onMounted(() => {
               size="small" variant="quiet" @click="emit('commitment', selected.id)">登记模拟承诺</UiButton>
           </div>
           <UiAlert v-if="selected.autoReviewPending && selected.state === 'WAITING_APPROVAL'" tone="info" title="AI 审核中">
-            审核完成后会自动更新；需要人工复审时可从这里进入审批。
+            {{ selected.manualReviewAllowed ? '审核完成后会自动更新，需要人工复核时可从这里进入审批。'
+              : '审核完成后会自动更新。此回复须由 AI 批准才会继续发送。' }}
           </UiAlert>
           <UiAlert v-else-if="awaitingHuman" tone="info"
             :title="canReview ? '草稿已生成，等待人工审批' : '此提案需要审批权限'">

@@ -4,10 +4,11 @@ import type { Prisma } from '../generated/client.js'
 
 export async function readAutoReviewSettings(db: Pick<Prisma.TransactionClient, 'character'>, characterId: string) {
   const row = await db.character.findUnique({ where: { id: characterId },
-    select: { autoReviewEnabled: true, autoReviewPrompt: true, autoReviewVersion: true },
+    select: { autoReviewEnabled: true, imManualReviewEnabled: true, autoReviewPrompt: true, autoReviewVersion: true },
   })
   return row && {
-    enabled: row.autoReviewEnabled, prompt: row.autoReviewPrompt ?? defaultAutoReviewPrompt, version: row.autoReviewVersion,
+    enabled: row.autoReviewEnabled, imManualReviewEnabled: row.imManualReviewEnabled,
+    prompt: row.autoReviewPrompt ?? defaultAutoReviewPrompt, version: row.autoReviewVersion,
   } satisfies AutoReviewSettings
 }
 

@@ -98,6 +98,7 @@ before(async () => {
     characterIds.push(created.body.id)
   }
   ;[a, b] = characterIds
+  await owner.character.updateMany({ where: { id: { in: [a, b] } }, data: { imManualReviewEnabled: true } })
   const ia = await request('POST', characterPath(a) + '/identities', {
     key: 'identity-a', data: { slug: 'one', roleProfile: { writingStyle: 'formal' } },
   })
@@ -884,9 +885,11 @@ test('role administrators can see the draft and concurrent approval has one effe
 test('role auto-review settings are private, versioned, and fence in-flight approval when disabled', async () => {
   const path = characterPath(a) + '/auto-review'
   const initial = await request('GET', path)
-  assert.deepEqual(initial.body, { enabled: false, prompt: defaultAutoReviewPrompt, version: 0, model: null })
+  assert.deepEqual(initial.body, {
+    enabled: false, imManualReviewEnabled: true, prompt: defaultAutoReviewPrompt, version: 0, model: null,
+  })
   const first = await proposeReview()
-  const input = { enabled: true, prompt: '只批准常规回复。' }
+  const input = { enabled: true, imManualReviewEnabled: true, prompt: '只批准常规回复。' }
   const save = (version: number, enabled: boolean, actor = 'admin-a') =>
     request('PUT', path, { actor, ifMatch: '"' + version + '"', data: { ...input, enabled } })
   assert.equal((await save(0, true, 'admin-b')).status, 404)
@@ -2712,6 +2715,102 @@ async function topicProposal(runtime: ReturnType<typeof createDatabase>, target:
   return owner.actionProposal.findUniqueOrThrow({ where: { runId } })
 }
 
+test('IM replies require automatic approval by default and opt in to the manual queue per role', { timeout: 30_000 }, async (t) => {
+  const created = await request('POST', '/characters', { key: randomUUID(), data: characterData('-im-review') })
+  assert.equal(created.status, 201)
+  const characterId: string = created.body.id
+  characterIds.push(characterId)
+  const base = characterPath(characterId)
+  const settingsPath = base + '/auto-review'
+  const queuePath = base + '/actions'
+  const initial = await request('GET', settingsPath)
+  assert.equal(initial.body.imManualReviewEnabled, false)
+  const save = (version: number, enabled: boolean, imManualReviewEnabled: boolean) =>
+    request('PUT', settingsPath, {
+      ifMatch: '"' + version + '"', data: { enabled, imManualReviewEnabled, prompt: defaultAutoReviewPrompt },
+    })
+  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  const identity = await request('POST', base + '/identities', {
+    key: randomUUID(), data: { slug: 'replies', roleProfile: { writingStyle: 'casual' } },
+  })
+  assert.equal(identity.status, 201, JSON.stringify(identity.body))
+  await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
+  const im = await topicAccount(identity.body.id, 'mock-a', false, characterId)
+  const feed = await topicAccount(identity.body.id, 'mock-b', false, characterId)
+  const url = new URL(config.databaseUrl)
+  url.searchParams.set('options', '-c role=rica_runtime')
+  const runtime = createDatabase(url.href)
+  t.after(() => runtime.$disconnect())
+  const draft = (eventId: string, review?: ReviewPublicReply) =>
+    processSimulatedDraft(runtime, eventId, simulationPlatforms.resolveAdapter, localSimulationModel, undefined, review)
+  const run = (id: string) => owner.agentRun.findUniqueOrThrow({ where: { id } })
+  const assertStopped = async (id: string) => {
+    const { state, stateReason } = await run(id)
+    assert.equal(state, 'CANCELED')
+    assert.equal(stateReason, 'IM_MANUAL_REVIEW_DISABLED')
+  }
+
+  const disabled = await prepareTopic(runtime, im, 'IM reply without automatic approval')
+  await draft(disabled.eventId)
+  await assertStopped(disabled.runId)
+  assert.equal(await owner.actionProposal.count({ where: { runId: disabled.runId } }), 0)
+  const feedAction = await topicProposal(runtime, feed, 'Feed still supports manual review')
+  assert.equal((await run(feedAction.runId)).state, 'WAITING_APPROVAL')
+
+  assert.equal((await save(0, true, false)).status, 200)
+  for (const outcome of [
+    { status: 'REVIEW', category: 'RISK', reason: 'Needs review' },
+    { status: 'UNAVAILABLE', category: 'MODEL', reason: 'Model unavailable' },
+  ] as const) {
+    const pending = await prepareTopic(runtime, im, outcome.reason)
+    await draft(pending.eventId, async () => outcome)
+    await assertStopped(pending.runId)
+  }
+
+  const approved = await prepareTopic(runtime, im, 'IM reply that can be approved')
+  await draft(approved.eventId, async () => ({ status: 'APPROVE', model: 'fixture' }))
+  assert.equal((await run(approved.runId)).state, 'READY')
+  const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: approved.runId } })
+  assert.equal((await owner.actionApproval.findUniqueOrThrow({ where: { actionId: action.id } })).reviewerId, autoReviewerId)
+
+  const timedOut = await prepareTopic(runtime, im, 'IM reply awaiting a slow model')
+  const reviewStarted = Promise.withResolvers<void>()
+  const finishReview = Promise.withResolvers<Awaited<ReturnType<ReviewPublicReply>>>()
+  const processing = draft(timedOut.eventId, () => {
+    reviewStarted.resolve()
+    return finishReview.promise
+  })
+  try {
+    await Promise.race([reviewStarted.promise, processing.then(() => assert.fail('Review did not start'))])
+    const pending = await owner.actionProposal.findUniqueOrThrow({ where: { runId: timedOut.runId } })
+    const queue = await request('GET', queuePath)
+    assert.ok(queue.body.items.some(({ id }: { id: string }) => id === feedAction.id))
+    assert.ok(!queue.body.items.some(({ id }: { id: string }) => id === pending.id))
+    const pendingPath = queuePath + '/' + pending.id
+    const detail = await request('GET', pendingPath)
+    assert.equal(detail.body.content, null)
+    const decision = await request('POST', pendingPath + '/decisions', {
+      key: randomUUID(), ifMatch: detail.headers.get('etag') ?? '',
+      data: { decision: 'APPROVE', reviewDigest: pending.reviewDigest },
+    })
+    assert.equal(decision.status, 409, JSON.stringify(decision.body))
+    assert.equal(decision.body.error.code, 'IM_MANUAL_REVIEW_DISABLED')
+    await owner.actionProposal.update({ where: { id: pending.id }, data: { autoReviewUntil: new Date(0) } })
+    await sweepSimulationRetention(runtime)
+    await assertStopped(timedOut.runId)
+  } finally {
+    finishReview.resolve({ status: 'APPROVE', model: 'fixture' })
+    await processing
+  }
+  await assertStopped(timedOut.runId)
+
+  assert.equal((await save(1, false, true)).status, 200)
+  assert.equal((await request('GET', settingsPath)).body.imManualReviewEnabled, true)
+  const optedIn = await topicProposal(runtime, im, 'Role opted into IM manual review')
+  const queue = await request('GET', queuePath)
+  assert.ok(queue.body.items.some(({ id }: { id: string }) => id === optedIn.id))
+})
+
 test('identity draft bindings reuse profiles across roles and keep separate profiles isolated', { timeout: 30_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'rica-identity-models-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -2750,7 +2849,9 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
     const id: string = created.body.id
     characterIds.push(id)
     characters.push(id)
-    await owner.character.update({ where: { id }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+    await owner.character.update({
+      where: { id }, data: { status: 'ACTIVE', timezone: simulationZone(12), imManualReviewEnabled: true },
+    })
   }
   const [firstRole, otherRole] = characters
   const [shared, separate] = profiles
@@ -3101,7 +3202,9 @@ test('M4 evaluates fourteen simulated days of scope, duplicate reviews, frequenc
   assert.equal(role.status, 200, JSON.stringify(role.body))
   const identityId = await reflectionIdentity({ duplicateReview }, characterId)
   const restrictedIdentity = await reflectionIdentity({}, characterId)
-  await owner.character.update({ where: { id: characterId }, data: { timezone: simulationZone(12) } })
+  await owner.character.update({
+    where: { id: characterId }, data: { timezone: simulationZone(12), imManualReviewEnabled: true },
+  })
   const first = await topicAccount(identityId, 'mock-a', false, characterId)
   const second = await topicAccount(identityId, 'mock-b', false, characterId)
   const marker = 'M4_FORBIDDEN_' + randomUUID()
@@ -3210,6 +3313,7 @@ test('concurrent model calls share one enforced character budget and report the 
   characterIds.push(characterId)
   const identityId = await reflectionIdentity({}, characterId)
   const target = await topicAccount(identityId, 'mock-a', false, characterId)
+  await owner.character.update({ where: { id: characterId }, data: { imManualReviewEnabled: true } })
   const runtime = createDatabase(scheduleRuntimeUrl())
   let decisions = 0
   let writes = 0
@@ -3425,7 +3529,9 @@ test('console simulation runs use an isolated conversation, one approval and one
   } })
   const inactive = await request('POST', path, { key: randomUUID(), data: { ...input, accountId: account.id } })
   assert.equal(inactive.status, 409)
-  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.character.update({
+    where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12), imManualReviewEnabled: true },
+  })
   await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
   await owner.platformAccount.update({ where: { id: account.id }, data: { status: 'ACTIVE' } })
   const data = { ...input, accountId: account.id }
@@ -3810,7 +3916,9 @@ test('group reply review drops exact repeats and stale social openings while kee
   const characterId: string = created.body.id
   characterIds.push(characterId)
   const root = characterPath(characterId)
-  await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  await owner.character.update({
+    where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12), imManualReviewEnabled: true },
+  })
   const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { slug: 'chat-reviewer', roleProfile: {} } })
   assert.equal(identity.status, 201)
   await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
@@ -3885,7 +3993,9 @@ test('group glossary requires independent examples, stays in its room, and obeys
   const characterId: string = created.body.id
   characterIds.push(characterId)
   const root = characterPath(characterId)
-  const character = await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
+  const character = await owner.character.update({
+    where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12), imManualReviewEnabled: true },
+  })
   const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { slug: 'glossary-reader', roleProfile: {} } })
   assert.equal(identity.status, 201)
   await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })

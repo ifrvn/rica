@@ -27,7 +27,7 @@ type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
 const decisionRequest = { purpose: 'DECISION_SUPPORT' } as const
 type ParticipationDecision = ReplyDecision & { participation: Participation; glossary: GlossarySnapshot }
 type DraftSkipReason = 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY'
-  | 'MODEL_DECISION_INVALID_OUTPUT' | 'MODEL_WRITING_INVALID_OUTPUT' | ChatReplyStop
+  | 'MODEL_DECISION_INVALID_OUTPUT' | 'MODEL_WRITING_INVALID_OUTPUT' | 'IM_MANUAL_REVIEW_DISABLED' | ChatReplyStop
 
 class InvalidDraftOutput extends Error {
   constructor() { super('Invalid simulated writing output') }
@@ -364,15 +364,15 @@ export async function processSimulatedDraft(
       const proposed = accepted && target && target.platform === input?.platform
         && adapter && input.adapter.isIm === adapter.isIm && matchesSimulationAdapter(input.adapter, adapter) && content
         && content.length <= maxSimulatedTextLength
-      if (proposed) {
-        const { isIm: _isIm, ...adapterBinding } = adapter
-        const settings = await tx.character.findUniqueOrThrow({
-          where: { id: run.characterId }, select: { autoReviewEnabled: true, simulationProposalHours: true },
-        })
+      const settings = proposed ? await tx.character.findUniqueOrThrow({
+        where: { id: run.characterId }, select: { autoReviewEnabled: true, imManualReviewEnabled: true, simulationProposalHours: true },
+      }) : undefined
+      const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
+      const autoReview = !!review && settings?.autoReviewEnabled && target?.audience === 'PUBLIC' && !crossPlatformDuplicate
+      if (proposed && settings && (autoReview || !adapter.isIm || settings.imManualReviewEnabled)) {
+        const { isIm, ...adapterBinding } = adapter
         const expiresAt = new Date(Date.now() + settings.simulationProposalHours * 3_600_000)
         const payloadHash = createHash('sha256').update(content).digest('hex')
-        const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
-        const autoReview = review && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate
         const reviewDigest = createHash('sha256').update(JSON.stringify({
           payloadHash, target, ...adapterBinding, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
@@ -400,18 +400,18 @@ export async function processSimulatedDraft(
         const action = await tx.actionProposal.create({
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
-            policyVersion: simulationReviewPolicyVersion, ...adapterBinding, expiresAt, crossPlatformDuplicate,
+            policyVersion: simulationReviewPolicyVersion, ...adapterBinding, expiresAt, crossPlatformDuplicate, isIm,
             autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
           }, select: { id: true },
         })
         actionId = action.id
-      }
+      } else if (proposed) skipReason = 'IM_MANUAL_REVIEW_DISABLED'
       const { count } = await tx.agentRun.updateMany({
         where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
         data: {
-          state: proposed ? 'WAITING_APPROVAL'
+          state: actionId ? 'WAITING_APPROVAL'
             : ['MODEL_NO_REPLY', 'CHAT_REPEAT', 'CHAT_MOVED_ON'].includes(skipReason) ? 'SKIPPED' : 'CANCELED',
-          stateReason: proposed ? null : skipReason,
+          stateReason: actionId ? null : skipReason,
           participationDecision,
           stateVersion: { increment: 1 },
         },

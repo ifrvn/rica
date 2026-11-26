@@ -62,6 +62,7 @@ export const runReplayView = z.object({
   chatId: resourceId.nullable(),
   chatStop: chatReplyStop.nullable(),
   autoReviewPending: z.boolean(),
+  manualReviewAllowed: z.boolean(),
   autoApproved: z.boolean(),
   autoReviewHandoff: autoReviewHandoff.nullable(),
   executionWait: z.object({

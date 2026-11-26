@@ -172,7 +172,8 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     }, async (tx) => {
       const updated = await tx.character.updateMany({
         where: { id: scope.characterId, autoReviewVersion: expected },
-        data: { autoReviewEnabled: input.enabled, autoReviewPrompt: input.prompt, autoReviewVersion: { increment: 1 } },
+        data: { autoReviewEnabled: input.enabled, imManualReviewEnabled: input.imManualReviewEnabled,
+          autoReviewPrompt: input.prompt, autoReviewVersion: { increment: 1 } },
       })
       if (updated.count !== 1) throw new management.ManagementError(412, 'STALE_VERSION', 'Review settings changed')
       return { id: scope.characterId, version: expected + 1 }

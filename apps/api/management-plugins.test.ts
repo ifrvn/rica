@@ -100,7 +100,9 @@ function fixture(plugins: ManagementPlugin[], reviewModel?: Parameters<typeof cr
   return createManagementApp({
     db: { $transaction: (read: (tx: object) => unknown) => read({
       managementMembership: { findUnique: async () => ({ subject: 'admin' }) },
-      character: { findUnique: async () => ({ autoReviewEnabled: false, autoReviewPrompt: null, autoReviewVersion: 0 }) },
+      character: { findUnique: async () => ({
+        autoReviewEnabled: false, imManualReviewEnabled: false, autoReviewPrompt: null, autoReviewVersion: 0,
+      }) },
     }) } as unknown as PrismaClient,
     origin, cookie: 'session', resolveAdapter: () => undefined, plugins, reviewModel,
     authenticate: async (request) => request.headers.has('Cookie')

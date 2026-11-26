@@ -802,7 +802,7 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
   })).status, 200)
   const prompt = '批准清楚简短的回复。'
   assert.equal((await request('PUT', base + '/auto-review', {
-    ifMatch: '"0"', data: { enabled: true, prompt },
+    ifMatch: '"0"', data: { enabled: true, imManualReviewEnabled: false, prompt },
   })).status, 200)
   const previousComment = { id: randomUUID(), content: 'Previously approved', author: { username: 'fixture-agent' }, replyToCommentId: null }
   let calls = 0

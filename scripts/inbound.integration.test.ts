@@ -29,7 +29,7 @@ const occurredAt = new Date('2026-11-06T00:00:00.000Z')
 
 async function createFixture() {
   return db.$transaction(async (tx) => {
-    const character = await tx.character.create({ data: { slug: fixtureKey } })
+    const character = await tx.character.create({ data: { slug: fixtureKey, imManualReviewEnabled: true } })
     await tx.coreVersion.create({
       data: {
         characterId: character.id,

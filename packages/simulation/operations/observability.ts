@@ -107,6 +107,7 @@ export async function replaySimulationRun(db: PrismaClient, scope: Scope, runId:
           'autoReviewPending', COALESCE(a.auto_review_until > statement_timestamp()
             AND a.auto_review_handoff IS NULL AND approval.action_id IS NULL
             AND r.state = 'WAITING_APPROVAL' AND c.auto_review_enabled AND chat.stop IS NULL, false),
+          'manualReviewAllowed', COALESCE(NOT a.is_im OR c.im_manual_review_enabled, true),
           'autoApproved', COALESCE(approval.reviewer_id = ${autoReviewerId}, false),
           'autoReviewHandoff', CASE WHEN r.state = 'WAITING_APPROVAL' AND a.auto_review_handoff IS NOT NULL
             AND a.proposer_id IS DISTINCT FROM ${scope.actor.id}

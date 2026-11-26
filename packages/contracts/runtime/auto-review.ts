@@ -9,6 +9,7 @@ export const defaultAutoReviewPrompt = [
 
 export const autoReviewInput = z.strictObject({
   enabled: z.boolean(),
+  imManualReviewEnabled: z.boolean(),
   prompt: z.string().trim().min(1).max(4_000).refine((value) => !value.includes('\0')),
 })
 const autoReviewSettings = autoReviewInput.extend({ version: z.number().int().nonnegative() })

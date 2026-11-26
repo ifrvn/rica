@@ -81,6 +81,7 @@ enum RunStateReason {
   CHAT_MOVED_ON
   MODEL_DECISION_INVALID_OUTPUT
   MODEL_WRITING_INVALID_OUTPUT
+  IM_MANUAL_REVIEW_DISABLED
 }
 
 model Character {
@@ -91,6 +92,7 @@ model Character {
   activeCoreVersion     Int?                   @map("active_core_version")
   authEpoch             Int                    @default(0) @map("auth_epoch")
   autoReviewEnabled     Boolean                @default(false) @map("auto_review_enabled")
+  imManualReviewEnabled Boolean                @default(false) @map("im_manual_review_enabled")
   autoReviewPrompt      String?                @map("auto_review_prompt")
   autoReviewVersion     Int                    @default(0) @map("auto_review_version")
   simulationLimitsVersion Int                 @default(0) @map("simulation_limits_version")
@@ -839,6 +841,7 @@ model ActionProposal {
   followUp          Json?              @map("follow_up")
   autoReviewHandoff Json?              @map("auto_review_handoff")
   autoReviewUntil   DateTime?          @map("auto_review_until") @db.Timestamptz
+  isIm              Boolean            @default(false) @map("is_im")
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
   draft             SimulatedDraft     @relation(fields: [characterId, runId], references: [characterId, runId], onDelete: Restrict, onUpdate: NoAction)

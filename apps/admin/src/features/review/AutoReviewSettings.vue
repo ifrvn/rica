@@ -10,11 +10,14 @@ const emit = defineEmits<{ expired: [] }>()
 const open = ref(false)
 const settings = ref<AutoReviewView>()
 const enabled = ref(false)
+const imManualReviewEnabled = ref(false)
 const prompt = ref('')
 const { active, busy, error, notice, run } = useConsoleTask(() => emit('expired'))
 const path = characterPath(props.characterId) + '/auto-review'
 const changed = computed(() => settings.value
-  && (enabled.value !== settings.value.enabled || prompt.value.trim() !== settings.value.prompt))
+  && (enabled.value !== settings.value.enabled
+    || imManualReviewEnabled.value !== settings.value.imManualReviewEnabled
+    || prompt.value.trim() !== settings.value.prompt))
 
 function load() {
   void run(async () => {
@@ -22,6 +25,7 @@ function load() {
     if (!active()) return
     settings.value = current
     enabled.value = current.enabled
+    imManualReviewEnabled.value = current.imManualReviewEnabled
     prompt.value = current.prompt
   })
 }
@@ -34,7 +38,7 @@ watch(open, (shown) => {
 
 function save() {
   const current = settings.value
-  const input = { enabled: enabled.value, prompt: prompt.value.trim() }
+  const input = { enabled: enabled.value, imManualReviewEnabled: imManualReviewEnabled.value, prompt: prompt.value.trim() }
   if (!current || !input.prompt || !changed.value) return
   void run(async () => {
     const result = await request<{ version: number }>(path, {
@@ -64,12 +68,20 @@ function save() {
           <input v-model="enabled" class="auto-review-switch" type="checkbox" role="switch"
             aria-describedby="auto-review-description" :disabled="busy" />
         </label>
-        <p id="auto-review-description">符合条件的公开回复及讨论内容会交给部署默认的外部模型审核。需复核的提案进入人工队列，真实平台的发送由管理员触发。</p>
+        <p id="auto-review-description">符合条件的公开回复及讨论内容会交给部署默认的外部模型审核。真实平台的发送由管理员触发。</p>
         <dl v-if="settings.model" class="auto-review-model">
           <dt>审核模型</dt>
           <dd>{{ [settings.model.name, settings.model.provider, settings.model.model].filter(Boolean).join(' · ') }}</dd>
         </dl>
-        <p v-else class="auto-review-model-warning">没有有效的默认外部模型配置，提案将由人工审批。</p>
+        <p v-else class="auto-review-model-warning">没有有效的默认外部模型配置，当前无法自动审批。</p>
+      </div>
+      <div class="auto-review-option">
+        <label class="auto-review-toggle">
+          <span>启用 IM 聊天的人工复核</span>
+          <input v-model="imManualReviewEnabled" class="auto-review-switch" type="checkbox" role="switch"
+            aria-describedby="im-manual-review-description" :disabled="busy" />
+        </label>
+        <p id="im-manual-review-description">关闭后，对于IM聊天中自动审核认为需要人工复核的内容一律拒绝，不再提交审核。这是考虑到聊天内容的时效性。</p>
       </div>
       <UiField class="auto-review-field" label="审核提示词" for="auto-review-prompt">
         <textarea id="auto-review-prompt" v-model="prompt" class="ui-control auto-review-prompt" rows="8"
@@ -101,7 +113,7 @@ function save() {
 }
 .auto-review-model dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .auto-review-option .auto-review-model-warning { margin-block-start: .625rem; color: var(--console-warning); }
-.auto-review-toggle { display: flex; align-items: center; justify-content: space-between; gap: .75rem; font-weight: 600; }
+.auto-review-toggle { display: flex; align-items: center; justify-content: space-between; min-block-size: 2.75rem; gap: .75rem; font-weight: 600; }
 .auto-review-switch {
   appearance: none;
   display: flex;

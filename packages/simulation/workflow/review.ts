@@ -35,6 +35,8 @@ type Proposal = {
   reviewerId: string | null
   autoReviewHandoff: unknown
   autoReviewPending: boolean
+  isIm: boolean
+  manualReviewAllowed: boolean
   decision: 'APPROVE' | 'REJECT' | null
   reviewedAt: Date | null
   reviewReason: string | null
@@ -57,6 +59,7 @@ async function proposalRows(
   return tx.$queryRaw<Proposal[]>`
     SELECT a.id, a.run_id AS "runId", a.target, a.review_digest AS "reviewDigest", a.follow_up AS "followUp",
       a.auto_review_handoff AS "autoReviewHandoff",
+      a.is_im AS "isIm", (NOT a.is_im OR c.im_manual_review_enabled) AS "manualReviewAllowed",
       a.policy_version AS "policyVersion", a.adapter_id AS "adapterId", a.adapter_version AS "adapterVersion",
       a.adapter_contract_version AS "adapterContractVersion",
       a.cross_platform_duplicate AS "crossPlatformDuplicate",
@@ -77,6 +80,7 @@ async function proposalRows(
       AND (${actionId}::uuid IS NULL OR a.id = ${actionId}::uuid)
       AND (${actionId}::uuid IS NOT NULL OR CASE ${status}
         WHEN 'WAITING' THEN r.state = 'WAITING_APPROVAL' AND chat.stop IS NULL
+          AND (NOT a.is_im OR c.im_manual_review_enabled)
         WHEN 'HISTORY' THEN approval.action_id IS NOT NULL
         ELSE approval.decision::text = ${status} END)
       AND (${cursor}::uuid IS NULL OR (coalesce(approval.created_at, a.created_at), a.id) < (
@@ -121,7 +125,11 @@ export async function listReviewActions(
     if (actionId && !rows.length) notFound()
     const actions: ActionView[] = []
     for (const row of rows.slice(0, limit)) {
-      const { target, state, content } = await inspect(tx, scope.characterId, row, resolveAdapter, Boolean(actionId))
+      const inspected = await inspect(tx, scope.characterId, row, resolveAdapter, Boolean(actionId))
+      const { target } = inspected
+      const needsAiApproval = inspected.state === 'WAITING_APPROVAL' && !row.manualReviewAllowed
+      const state = needsAiApproval && !row.autoReviewPending ? 'CANCELED' : inspected.state
+      const content = needsAiApproval ? null : inspected.content
       const messages = actionId && content && row.proposerId !== scope.actor.id ? content.split(simulationMessageSeparator) : null
       const canSeeDraft = messages !== null
       const [context] = canSeeDraft ? await tx.$queryRaw<{ context: unknown }[]>`
@@ -142,7 +150,7 @@ export async function listReviewActions(
           ? autoReviewHandoff.safeParse(row.autoReviewHandoff).data ?? skipSimulationReview(row, target) ?? missingAutoReviewHandoff
           : null,
         riskCodes: [
-          ...(row.reviewerId === autoReviewerId ? [] : ['HUMAN_REVIEW_REQUIRED']),
+          ...(row.reviewerId === autoReviewerId || !row.manualReviewAllowed ? [] : ['HUMAN_REVIEW_REQUIRED']),
           ...(row.crossPlatformDuplicate ? ['CROSS_PLATFORM_NEAR_DUPLICATE'] : []),
         ],
         content: messages?.join('\n\n') ?? null,
@@ -183,9 +191,12 @@ export async function autoReviewSimulation(
     if (!current || current.state !== 'WAITING_APPROVAL' || current.version !== proposal.version
       || current.reviewDigest !== proposal.reviewDigest) return
     if ((await inspect(tx, characterId, current, resolveAdapter)).content !== content) return
-    if (!policyMatches || outcome.status !== 'APPROVE') {
+    const reviewWindowClosed = !current.manualReviewAllowed && !current.autoReviewPending
+    if (!policyMatches || outcome.status !== 'APPROVE' || reviewWindowClosed) {
       const handoff = settings.enabled && !policyMatches
-        ? { status: 'SKIPPED', category: 'POLICY', reason: '审核期间自动审批设置已更改。' } : outcome
+        ? { status: 'SKIPPED', category: 'POLICY', reason: '审核期间自动审批设置已更改。' }
+        : outcome.status === 'APPROVE' && reviewWindowClosed
+          ? { status: 'SKIPPED', category: 'CONTEXT', reason: 'IM 自动审核已超过时限。' } : outcome
       await tx.$executeRaw`
         UPDATE public.action_proposals SET auto_review_handoff = ${JSON.stringify(handoff)}::jsonb
         WHERE character_id = ${characterId}::uuid AND id = ${actionId}::uuid
@@ -200,6 +211,7 @@ export async function autoReviewSimulation(
       digest: current.reviewDigest, requestId: randomUUID(),
     } })
   })
+  if (proposal.isIm) await db.$queryRaw`SELECT public.rica_close_unapproved_im_reply(${proposal.runId}::uuid)`
 }
 
 export async function decideReviewAction(
@@ -213,6 +225,7 @@ export async function decideReviewAction(
   if (proposal.state !== 'WAITING_APPROVAL' || proposal.reviewDigest !== input.reviewDigest) {
     throw new ManagementError(409, 'STALE_REVIEW', 'Proposal no longer matches the review')
   }
+  if (!proposal.manualReviewAllowed) throw new ManagementError(409, 'IM_MANUAL_REVIEW_DISABLED', 'Manual review is disabled for IM replies')
   if (proposal.autoReviewPending) throw new ManagementError(409, 'AUTO_REVIEW_PENDING', 'Automatic review is in progress')
   return finishReview(tx, scope.characterId, proposal, scope.actor.id, input.decision, input.reason ?? '', resolveAdapter)
 }
