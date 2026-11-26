@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, shallowRef } from 'vue'
-import { UiAlert, UiButton, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
-import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
+import { UiAlert, UiButton, UiDialog, UiEmpty, UiField, UiCombobox, UiSpinner, UiBadge } from '@ricajs/console-shared/ui'
 import type { z } from '@hono/zod-openapi'
 import { maxAiDisclosureLength, type characterView, type identityView } from '@ricajs/contracts/management'
 import type { PluginStatus } from '../plugins/plugin-status.js'
-import TimeZoneSelect from '../../shared/TimeZoneSelect.vue'
+import CharacterEditorDialog from './CharacterEditorDialog.vue'
+import IdentityEditorDialog from './IdentityEditorDialog.vue'
 import { isSimulationPlatform, platformAccounts, type ConnectorAccount, type ConnectorRegistration, type ConsoleWorkspace } from '../../app/plugin-integrations.js'
 import { request, RequestError } from '@ricajs/console-shared/request'
 import { hostedModelCatalog } from '@ricajs/plugin-hosted-models/shared'
@@ -17,7 +17,7 @@ type Account = ConnectorAccount
 type Registration = ConnectorRegistration
 type Page<T> = { items: T[]; nextCursor: string | null }
 type Editor = 'character' | 'core' | 'identity' | 'identity-edit' | 'account' | 'associate' | 'control' | 'linked-account' | 'remove-account'
-type Control = { scope: 'CHARACTER' | 'IDENTITY' | 'ACCOUNT'; id: string; name: string; status: string; platform?: string; revoke?: boolean }
+type AccountControl = { id: string; name: string; status: string; platform: string; revoke?: boolean }
 
 const props = defineProps<{
   characterId: string; canCreate: boolean; accountsOnly?: boolean; accountDetail?: string;
@@ -46,7 +46,7 @@ const platformChoices = computed(() => [
 const editor = ref<Editor>()
 const editingIdentity = ref<Identity>()
 const editingCore = ref<Workspace>()
-const target = ref<Control>()
+const target = ref<AccountControl>()
 const linkedAccount = ref<Account>()
 const busy = ref(false)
 const error = ref('')
@@ -71,17 +71,10 @@ const title = computed(() => ({
   character: '新建角色', core: '角色设置', identity: '添加身份', 'identity-edit': '编辑身份',
   account: '添加账号', associate: '关联平台账号',
   'linked-account': '已关联的平台账号', 'remove-account': '移除账号',
-  control: target.value?.revoke ? '撤销账号'
-    : (target.value?.status === 'ACTIVE' ? '暂停' : '恢复')
-      + ({ CHARACTER: '角色', IDENTITY: '身份', ACCOUNT: '账号' }[target.value?.scope ?? 'ACCOUNT']),
+  control: target.value?.revoke ? '撤销账号' : target.value?.status === 'ACTIVE' ? '暂停账号' : '恢复账号',
 })[editor.value ?? 'character'])
-const styles = [
-  { label: '中性', value: 'neutral' }, { label: '正式', value: 'formal' },
-  { label: '随和', value: 'casual' }, { label: '简洁', value: 'concise' },
-]
-const editorHeading = ref<HTMLElement>()
 const workspaceHeading = ref<HTMLElement>()
-let editorTrigger: HTMLElement | undefined
+const accountControlSummary = ref<HTMLElement>()
 const accountsByIdentity = computed(() => {
   const groups = new Map<string, Account[]>()
   for (const account of accounts.value) {
@@ -97,8 +90,10 @@ const identityName = (identity: Identity) => identity.profile?.displayName || id
 const boundAccountLabel = (account: Account) => connectorFor(account.platform)?.plugin.label(account) ?? account.platform + ' · ' + account.instanceKey
 
 function accountControl(account: Account, revoke = false) {
-  open('control', undefined, { scope: 'ACCOUNT', id: account.id, name: boundAccountLabel(account),
+  const fromLinkedAccount = editor.value === 'linked-account'
+  open('control', undefined, { id: account.id, name: boundAccountLabel(account),
     status: account.status, platform: account.platform, revoke })
+  if (fromLinkedAccount) void nextTick(() => accountControlSummary.value?.focus())
 }
 const schemas = shallowRef<{
   management: typeof import('@ricajs/contracts/management')
@@ -134,7 +129,7 @@ const parsed = computed(() => {
     })
     case 'control': {
       const item = target.value
-      if (item) return controlInput.safeParse({ scope: item.scope, scopeId: item.id, reason,
+      if (item) return controlInput.safeParse({ scope: 'ACCOUNT', scopeId: item.id, reason,
         operation: item.revoke ? 'REVOKE_ACCOUNT' : item.status === 'ACTIVE' ? 'PAUSE' : 'RESUME' })
     }
   }
@@ -165,9 +160,11 @@ function fieldError(field: string) {
   return invalidFields.value.has(field) && (attempted.value || touched.value.has(field)) ? validationMessages[field] : undefined
 }
 
-function fieldInput(field: string) {
-  return { id: 'workspace-' + field, 'aria-invalid': fieldError(field) ? true : undefined,
-    'aria-describedby': fieldError(field) ? 'workspace-' + field + '-error' : undefined }
+function fieldInput(field: string, hintId?: string) {
+  const id = 'workspace-' + field
+  const invalid = !!fieldError(field)
+  const describedBy = [hintId, invalid ? id + '-error' : undefined].filter(Boolean).join(' ')
+  return { id, 'aria-invalid': invalid || undefined, 'aria-describedby': describedBy || undefined }
 }
 
 function resetAccountEditor() {
@@ -183,16 +180,8 @@ function closeEditor() {
   editor.value = undefined
 }
 
-function updateEditorOpen(show: boolean) {
-  if (!show && !busy.value) closeEditor()
-}
-
-function restoreEditorFocus(event: Event) {
-  event.preventDefault()
-  if (!active) return
-  if (editorTrigger?.isConnected) editorTrigger.focus()
-  else workspaceHeading.value?.focus()
-  editorTrigger = undefined
+function focusWorkspaceHeading() {
+  if (active && !editor.value && document.activeElement === document.body) workspaceHeading.value?.focus()
 }
 
 let pending: { signature: string; key: string } | undefined
@@ -288,8 +277,7 @@ async function run(task: () => Promise<void>) {
   }
 }
 
-function open(kind: Editor, identity?: Identity, resource?: Control) {
-  if (!editor.value) editorTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+function open(kind: Editor, identity?: Identity, resource?: AccountControl) {
   attempted.value = false
   touched.value.clear()
   editor.value = kind
@@ -309,7 +297,6 @@ function open(kind: Editor, identity?: Identity, resource?: Control) {
     participation: identity?.profile?.participation ?? '',
     registrationId: null, platform: '',
     instance: 'local', remoteId: '', reason: '' })
-  void nextTick(() => editorHeading.value?.focus())
   void loadSchemas().catch(() => {})
 }
 
@@ -333,7 +320,6 @@ function removeAccount() {
     await request(path, { method: 'DELETE', headers: { 'Idempotency-Key': key } })
     if (!active) return
     accountPool.value = accountPool.value.filter(({ id }) => id !== account.id)
-    editorTrigger = undefined
     closeEditor()
     notice.value = '已从账号池移除。'
   })
@@ -411,7 +397,6 @@ async function save() {
     if (!active) return
     const label = title.value
     pending = undefined
-    if (kind === 'associate') editorTrigger = undefined
     closeEditor()
     notice.value = kind === 'associate' ? '账号已关联，当前为暂停状态。' : label + '成功。'
     if (kind !== 'character') await load()
@@ -425,21 +410,29 @@ onMounted(() => { if (props.characterId) void run(load) })
   <div class="character-workspace">
     <UiAlert v-if="error && !editor" tone="error" role="alert">{{ error }}</UiAlert>
     <UiAlert v-if="notice" tone="success" role="status">{{ notice }}</UiAlert>
-    <DialogRoot :open="!!editor" @update:open="updateEditorOpen">
-    <DialogPortal>
-    <DialogOverlay class="workspace-overlay" />
-    <DialogContent id="character-workspace-editor" class="workspace-editor" :aria-describedby="undefined" @close-auto-focus="restoreEditorFocus"
-      @open-auto-focus.prevent="editorHeading?.focus()" @pointer-down-outside.prevent>
-      <div class="workspace-editor-scroll">
-      <DialogTitle as-child><h3 ref="editorHeading" tabindex="-1">{{ title }}</h3></DialogTitle>
+    <CharacterEditorDialog :open="isCharacter" :creating="editor === 'character'"
+      v-model:slug="form.slug" v-model:name="form.name" v-model:timezone="form.timezone"
+      v-model:disclosure="form.disclosure" v-model:reason="form.reason"
+      :busy="busy" :error="error" :field-error="fieldError" :field-input="fieldInput"
+      @touch="touched.add($event)" @save="save" @close="closeEditor" @closed="focusWorkspaceHeading" />
+    <IdentityEditorDialog :open="isIdentity" :creating="editor === 'identity'"
+      v-model:slug="form.slug" v-model:name="form.name" v-model:timezone="form.timezone" v-model:writing-style="form.style"
+      v-model:draft-model-profile="form.draftModelProfile" v-model:participation="form.participation"
+      v-model:writing-prompt="form.writingPrompt" v-model:reason="form.reason"
+      :inherited-timezone="workspace?.timezone ?? 'UTC'" :draft-models="draftModels" :default-draft-model="defaultDraftModel"
+      :max-writing-prompt-length="schemas?.management.maxIdentityWritingPromptLength"
+      :busy="busy" :error="error" :field-error="fieldError" :field-input="fieldInput"
+      @touch="touched.add($event)" @save="save" @close="closeEditor" @closed="focusWorkspaceHeading" />
+    <UiDialog id="character-workspace-editor" class="workspace-editor" :open="!!editor && !isCharacter && !isIdentity"
+      :title="title" :busy="busy" @update:open="!$event && closeEditor()" @closed="focusWorkspaceHeading">
       <UiAlert v-if="error" class="editor-alert" tone="error" role="alert">{{ error }}</UiAlert>
-      <p v-if="editor === 'control' && target">{{ target.name }} · {{ status(target.status) }}</p>
+      <p v-if="editor === 'control' && target" ref="accountControlSummary" tabindex="-1">{{ target.name }} · {{ status(target.status) }}</p>
       <p v-if="target?.revoke">撤销后，原账号不能恢复，可为该身份关联其他账号。历史记录仍可查看。</p>
       <p v-else-if="connectorFor(target?.platform)">{{ target?.status === 'ACTIVE' ? connectorFor(target?.platform)?.plugin.pauseMessage
           : connectorFor(target?.platform)?.plugin.resumeMessage }}</p>
       <template v-if="editor === 'linked-account' && linkedAccount">
         <p>{{ boundAccountLabel(linkedAccount) }} · {{ status(linkedAccount.status) }}</p>
-        <div class="workspace-actions editor-actions">
+        <div class="editor-actions">
           <UiButton v-if="['ACTIVE', 'PAUSED'].includes(linkedAccount.status)" variant="soft"
             :tone="linkedAccount.status === 'ACTIVE' ? 'warning' : 'default'" @click="accountControl(linkedAccount)">
             {{ linkedAccount.status === 'ACTIVE' ? '暂停账号' : '恢复账号' }}
@@ -451,73 +444,12 @@ onMounted(() => { if (props.characterId) void run(load) })
       <template v-else-if="editor === 'remove-account' && removingAccount">
         <p class="remove-account-name">{{ accountLabel(removingAccount) }}</p>
         <p>移除后，如需使用此账号，可以重新添加。</p>
-        <div class="workspace-actions editor-actions">
+        <div class="editor-actions">
           <UiButton :disabled="busy" @click="closeEditor">取消</UiButton>
           <UiButton tone="error" :loading="busy" :disabled="busy" @click="removeAccount">确认移除</UiButton>
         </div>
       </template>
       <form v-else @submit.prevent="save">
-        <UiField v-if="editor === 'character' || editor === 'identity'" label="唯一标识" for="workspace-slug" :invalid="!!fieldError('slug')">
-          <input class="ui-control" v-model="form.slug" v-bind="fieldInput('slug')" @blur="touched.add('slug')" placeholder="小写字母、数字和连字符" maxlength="63" />
-          <template v-if="fieldError('slug')" #feedback>
-            <span id="workspace-slug-error">{{ fieldError('slug') }}</span>
-          </template>
-        </UiField>
-        <UiField v-if="isCharacter || isIdentity" label="名称" for="workspace-name" :invalid="!!fieldError('name')">
-          <input class="ui-control" placeholder="例如：小黎" v-model="form.name" v-bind="fieldInput('name')" @blur="touched.add('name')" maxlength="120" />
-          <template v-if="fieldError('name')" #feedback>
-            <span id="workspace-name-error">{{ fieldError('name') }}</span>
-          </template>
-        </UiField>
-        <UiField v-if="editor === 'character' || isIdentity" label="时区" for="workspace-timezone" :invalid="!!fieldError('timezone')">
-          <TimeZoneSelect v-model:value="form.timezone" id="workspace-timezone" :inherited="isIdentity ? workspace?.timezone ?? 'UTC' : undefined"
-            :invalid="!!fieldError('timezone')" @blur="touched.add('timezone')" />
-          <template v-if="fieldError('timezone')" #feedback>
-            <span id="workspace-timezone-error">{{ fieldError('timezone') }}</span>
-          </template>
-        </UiField>
-        <UiField v-if="isCharacter" label="角色核心设定" for="workspace-disclosure" :invalid="!!fieldError('disclosure')"
-          :feedback="fieldError('disclosure') ? undefined : `可分行填写，最多 ${maxAiDisclosureLength} 个字符。内容用于内部写作提示。`">
-          <textarea class="ui-control" rows="5" placeholder="例如：我是由 AI 驱动的虚拟角色" v-model="form.disclosure"
-            :maxlength="maxAiDisclosureLength" v-bind="fieldInput('disclosure')" @blur="touched.add('disclosure')" />
-          <template v-if="fieldError('disclosure')" #feedback>
-            <span id="workspace-disclosure-error">{{ fieldError('disclosure') }}</span>
-          </template>
-        </UiField>
-        <UiField v-if="isIdentity" label="写作风格" for="workspace-style" :invalid="!!fieldError('style')">
-          <UiCombobox placeholder="选择写作风格" v-model="form.style" :options="styles" :input-attrs="fieldInput('style')" @blur="touched.add('style')" />
-          <template v-if="fieldError('style')" #feedback>
-            <span id="workspace-style-error">{{ fieldError('style') }}</span>
-          </template>
-        </UiField>
-        <UiField v-if="isIdentity" label="公开草稿模型" for="workspace-draft-model">
-          <select id="workspace-draft-model" class="ui-control" v-model="form.draftModelProfile" :disabled="busy">
-            <option value="">使用部署默认{{ defaultDraftModel ? ' · ' + defaultDraftModel.label : '' }}</option>
-            <option value="simulated">使用本地模型</option>
-            <option v-if="form.draftModelProfile && form.draftModelProfile !== 'simulated'
-              && !draftModels.some(({ id }) => id === form.draftModelProfile)" :value="form.draftModelProfile">配置不可用时使用本地模型</option>
-            <option v-for="model in draftModels" :key="model.id" :value="model.id">{{ model.label }}</option>
-          </select>
-        </UiField>
-        <UiField v-if="isIdentity" label="参与程度" for="workspace-participation">
-          <select id="workspace-participation" class="ui-control" v-model="form.participation" :disabled="busy">
-            <option value="">按身份设定（默认适中）</option>
-            <option value="talkative">话痨</option>
-            <option value="balanced">适中</option>
-            <option value="reserved">寡言</option>
-          </select>
-        </UiField>
-        <UiField v-if="isIdentity" label="身份提示词（可选）" for="workspace-writingPrompt"
-          :invalid="!!fieldError('writingPrompt')">
-          <textarea class="ui-control" v-model="form.writingPrompt" :rows="4"
-            :maxlength="schemas?.management.maxIdentityWritingPromptLength" v-bind="fieldInput('writingPrompt')"
-            placeholder="例如：你负责回答产品使用问题。先给操作步骤，遇到不确定的信息就请对方补充背景。"
-            @blur="touched.add('writingPrompt')"></textarea>
-          <template #feedback>
-            <span v-if="fieldError('writingPrompt')" id="workspace-writingPrompt-error">{{ fieldError('writingPrompt') }}</span>
-            <span v-else>用于内部写作提示。模拟模型按模板生成回复。</span>
-          </template>
-        </UiField>
         <template v-if="editor === 'account'">
           <UiField label="平台" for="workspace-platform" :invalid="!!fieldError('platform')">
             <UiCombobox placeholder="选择平台" v-model="form.platform" :input-attrs="fieldInput('platform')"
@@ -558,36 +490,23 @@ onMounted(() => { if (props.characterId) void run(load) })
             </template>
           </UiField>
         </template>
-        <UiField v-if="editor === 'core' || editor === 'identity-edit' || editor === 'control'" label="变更原因说明（可选）"
+        <UiField v-if="editor === 'control'" label="变更原因说明（可选）"
           for="workspace-reason" :invalid="!!fieldError('reason')">
-          <input class="ui-control" :placeholder="editor === 'core' ? '例如：更新角色核心设定' : editor === 'identity-edit' ? '例如：调整此身份的写作风格' : '例如：维护期间暂停运行'" v-model="form.reason" v-bind="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
+          <input class="ui-control" placeholder="例如：维护期间暂停运行" v-model="form.reason" v-bind="fieldInput('reason')" @blur="touched.add('reason')" maxlength="240" />
           <template v-if="fieldError('reason')" #feedback>
             <span id="workspace-reason-error">{{ fieldError('reason') }}</span>
           </template>
         </UiField>
-        <div class="workspace-actions editor-actions">
-          <UiButton v-if="editor === 'core' && workspace" class="editor-state-control" type="button"
-            variant="soft" :tone="workspace.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
-            @click="open('control', undefined, { scope: 'CHARACTER', id: workspace.id, name: workspace.profile?.name || workspace.slug, status: workspace.status })">
-            {{ workspace.status === 'ACTIVE' ? '暂停角色' : '恢复角色' }}
-          </UiButton>
-          <UiButton v-if="editor === 'identity-edit' && editingIdentity" class="editor-state-control" type="button"
-            variant="soft" :tone="editingIdentity.status === 'ACTIVE' ? 'warning' : 'default'" :disabled="busy"
-            @click="open('control', undefined, { scope: 'IDENTITY', id: editingIdentity.id, name: identityName(editingIdentity), status: editingIdentity.status })">
-            {{ editingIdentity.status === 'ACTIVE' ? '暂停身份' : '恢复身份' }}
-          </UiButton>
+        <div class="editor-actions">
           <UiButton :tone="target?.revoke ? 'error' : target?.status === 'ACTIVE' ? 'warning' : 'primary'"
             type="submit" :loading="busy" :disabled="busy || (editor === 'associate' && !accountPool.length)
               || (editor === 'account' && (!form.platform || (registrationConnector && !registrationConnector.state.ready())))">
-            {{ editor === 'core' || editor === 'identity-edit' ? '保存修改' : editor === 'account' ? '确定' : title }}
+            {{ editor === 'account' ? '确定' : title }}
           </UiButton>
           <UiButton :disabled="busy" @click="closeEditor">取消</UiButton>
         </div>
       </form>
-      </div>
-    </DialogContent>
-    </DialogPortal>
-    </DialogRoot>
+    </UiDialog>
     <div v-if="!accountsOnly" class="workspace-card" :class="{ 'character-columns': characters.length }">
       <section class="character-list" aria-labelledby="characters-heading">
         <div class="console-section-heading">
@@ -758,16 +677,7 @@ onMounted(() => { if (props.characterId) void run(load) })
 .row-icon-button[aria-disabled="true"] { cursor: wait; opacity: .6; }
 .workspace-muted { color: var(--console-muted); font-size: .8125rem; }
 .account-summary { display: grid; gap: .5rem; }
-.workspace-overlay { position: fixed; inset: 0; z-index: 1000; background: #0006; }
-.workspace-editor { position: fixed; z-index: 1001; inset-block-start: 50%; inset-inline-start: 50%; transform: translate(-50%, -50%);
-  box-sizing: border-box; width: min(34rem, calc(100% - 2rem));
-  color: var(--console-text); background: var(--console-surface); border: 1px solid var(--console-line); border-radius: 8px; }
-.workspace-editor-scroll { box-sizing: border-box; max-height: calc(100dvh - 2rem - 2px); overflow: auto; border-radius: inherit; padding: 1.25rem; }
 .remove-account-name { overflow-wrap: anywhere; }
-.workspace-editor h3 { margin: 0 0 1rem; }
-.editor-alert { margin-block-end: 1rem; }
-.editor-actions { justify-content: flex-end; }
-.editor-state-control { margin-inline-end: auto; }
 .workspace-list > li { padding-block: .625rem; }
 .workspace-actions, .workspace-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .workspace-row { justify-content: space-between; overflow-wrap: anywhere; }
@@ -781,4 +691,11 @@ onMounted(() => { if (props.characterId) void run(load) })
 @media (pointer: coarse) {
   .record-list { --record-action-size: 2.75rem; }
 }
+</style>
+
+<style>
+.workspace-editor { overscroll-behavior: contain; }
+.workspace-editor .editor-alert { margin-block-end: 1rem; }
+.workspace-editor .editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .5rem; }
+.workspace-editor .editor-hint { color: var(--console-muted); }
 </style>
