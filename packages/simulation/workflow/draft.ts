@@ -1,325 +1,25 @@
 import { logger } from '@ricajs/runtime/logging'
 import { createHash } from 'node:crypto'
-import { reviewTarget, type ChatReplyStop } from '../contracts/review.js'
-import { maxSimulatedTextLength, matchesSimulationAdapter, simulationMessageSeparator, type ResolveSimulationAdapter } from '../contracts/platforms.js'
+import { reviewTarget } from '../contracts/review.js'
+import { maxSimulatedTextLength, matchesSimulationAdapter, type ResolveSimulationAdapter } from '../contracts/platforms.js'
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
-import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
-import { chatDraftDecision, maxChatReplyMessages, ModelProviderError, resolveParticipation, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
-  type ReplyDecision, type WritingStyle } from '@ricajs/contracts/model-provider'
-import { localSimulationModel } from '../adapters/model.js'
+import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import type { Plugin } from '@ricajs/plugin-host'
 import type { Prisma, PrismaClient } from '@ricajs/persistence/prisma'
-import { captureMemorySnapshot, captureSelfModelSnapshot, replayMemorySnapshotInTransaction } from '@ricajs/persistence/memory-snapshot'
-import { loadMemoryReadScope, type MemoryRequest } from '@ricajs/persistence/memory'
-import { loadRunContinuity } from '@ricajs/persistence/run-continuity'
-import type { RunContinuity } from '@ricajs/contracts/run-continuity'
+import { loadMemoryReadScope } from '@ricajs/persistence/memory'
 import { draftQueuedEvent, outboxAttemptFence, type OutboxAttempt } from '@ricajs/persistence/run-context'
-import { simulationWritingContext } from '../contracts/observability.js'
-import { recordRunModelCall } from './model-calls.js'
+import { localSimulationModel } from '../adapters/model.js'
+import { buildSimulatedDraft, decisionRequest, recheckDraft, type DraftCandidate, type DraftSkipReason,
+  type ParticipationDecision, type WritingRequest } from './draft-builder.js'
 import { readChatReplyStop } from './chat-review.js'
-import { glossaryReferences, learningExamples, matchChatGlossary, readChatGlossary, saveChatTerms, sourcesForTerms,
-  type GlossarySnapshot } from './glossary.js'
+import { saveChatTerms, type sourcesForTerms } from './glossary.js'
 
-type WritingRequest = Extract<MemoryRequest, { purpose: 'PUBLIC_REFERENCE' }>
-  | { purpose: 'PRIVATE_REPLY' }
-
-const decisionRequest = { purpose: 'DECISION_SUPPORT' } as const
-type ParticipationDecision = ReplyDecision & { participation: Participation; glossary: GlossarySnapshot }
-type DraftSkipReason = 'DRAFT_UNAVAILABLE' | 'MODEL_BUDGET_EXHAUSTED' | 'MODEL_NO_REPLY'
-  | 'MODEL_DECISION_INVALID_OUTPUT' | 'MODEL_WRITING_INVALID_OUTPUT' | 'IM_MANUAL_REVIEW_DISABLED' | ChatReplyStop
-
-class InvalidDraftOutput extends Error {
-  constructor() { super('Invalid simulated writing output') }
-}
-
-function invalidModelOutput(error: unknown) {
-  return error instanceof ModelProviderError && error.code === 'INVALID_OUTPUT'
-}
-
-async function readDecisionOutput(call: () => Promise<unknown>, signal: AbortSignal) {
-  signal.throwIfAborted()
-  let output: unknown
-  try {
-    output = await call()
-  } catch (error) {
-    signal.throwIfAborted()
-    if (invalidModelOutput(error)) return null
-    throw error
-  }
-  signal.throwIfAborted()
-  return output
-}
-
-async function readParticipationDecision(provider: ModelProvider, input: Parameters<ModelProvider['decide']>[0], signal: AbortSignal) {
-  const output = await readDecisionOutput(() => provider.decide(input, signal), signal)
-  const structured = output && typeof output === 'object' && 'action' in output && 'reason' in output
-    ? { action: output.action, reason: output.reason } : output
-  const decision = replyDecision.safeParse(structured === 'NO_OP' ? { action: 'NO_OP', reason: 'BYSTANDER' }
-    : structured === 'REPLY' ? { action: 'REPLY', reason: 'RELEVANT_TOPIC' } : structured)
-  return decision.success ? { decision: decision.data, output } : null
-}
-
-async function readEvidence(
-  tx: Prisma.TransactionClient, runId: string, request: MemoryRequest,
-): Promise<ModelEvidence[] | null> {
-  const replay = await replayMemorySnapshotInTransaction(tx, runId, request)
-  return replay?.flatMap(({ candidate }) => candidate
-    ? [{ id: candidate.id, revision: candidate.revision, content: candidate.content }]
-    : []) ?? null
-}
-
-function validateDraft(output: unknown, allowedIds: ReadonlyMap<string, number>, chat: boolean) {
-  if (!output || typeof output !== 'object' || !('evidenceIds' in output)) {
-    throw new InvalidDraftOutput()
-  }
-
-  const { evidenceIds } = output
-  const parts = 'messages' in output && !('text' in output) && chat ? output.messages
-    : 'text' in output && !('messages' in output) ? [output.text] : null
-  if (!Array.isArray(parts) || !parts.length || parts.length > maxChatReplyMessages
-    || !Array.from(parts).every((part): part is string => typeof part === 'string' && !!part.trim()
-      && !part.includes('\0') && !part.includes(simulationMessageSeparator))
-    || !Array.isArray(evidenceIds) || evidenceIds.length > allowedIds.size
-    || !Array.from(evidenceIds).every((id): id is string => typeof id === 'string' && allowedIds.has(id))
-    || new Set(evidenceIds).size !== evidenceIds.length) {
-    throw new InvalidDraftOutput()
-  }
-
-  const messages = parts.map(part => part.trim())
-  const payload = messages.join(simulationMessageSeparator)
-  if (payload.length > maxSimulatedTextLength) throw new InvalidDraftOutput()
-  return { messages, payload, evidenceIds: [...evidenceIds] }
-}
-
-function evidenceMatches(current: readonly ModelEvidence[] | null, previous: ReadonlyMap<string, number>) {
-  return current !== null && current.length === previous.size
-    && current.every(({ id, revision }) => previous.get(id) === revision)
-}
-
-function beliefRefs(context: RunContinuity) {
-  return context.beliefs.map(({ id, version }) => ({ id, version }))
-}
-
-async function reserveModelBudget(tx: Prisma.TransactionClient, runId: string, input: object, outputUnits: number) {
-  const units = Buffer.byteLength(JSON.stringify(input), 'utf8') + outputUnits
-  const [row] = await tx.$queryRaw<{ allowed: boolean }[]>`
-    SELECT public.rica_reserve_model_budget(${runId}::uuid, ${units}::int) AS allowed
-  `
-  return row.allowed
-}
-
-async function readChatWritingContext(tx: Prisma.TransactionClient, runId: string) {
-  const [row] = await tx.$queryRaw<{ conversation: unknown }[]>`
-    SELECT public.rica_console_chat_writing(${runId}::uuid) AS conversation
-  `
-  return row?.conversation == null ? undefined : simulationWritingContext.parse(row.conversation)
-}
-
-// Internal simulation only. The trusted caller supplies the writing scope separately from message text.
-async function buildSimulatedDraft(
-  db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
-  provider: ModelProvider, signal: AbortSignal, isIm = false, observe?: {
-    model: string
-    skip: (reason: DraftSkipReason) => void
-    decision: (decision: ParticipationDecision) => void
-    learned: (terms: ReturnType<typeof sourcesForTerms>) => void
-  },
-) {
-  if (text.length > maxSimulatedTextLength) throw new Error('Simulated message is too long')
-  signal.throwIfAborted()
-
-  if (!await captureMemorySnapshot(db, runId, writingRequest, text)
-    || !await captureMemorySnapshot(db, runId, decisionRequest, text)) return null
-
-  const writingOutputUnits = maxSimulatedTextLength * 4 + 1024
-  async function readWritingInput(tx: Prisma.TransactionClient, context: RunContinuity, glossary: GlossarySnapshot) {
-    const evidence = await readEvidence(tx, runId, writingRequest)
-    if (!evidence) return null
-    const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null; corePrompt: string | null }[]>`
-      SELECT style, prompt, public.rica_simulation_core_prompt(${runId}::uuid) AS "corePrompt"
-      FROM public.rica_simulated_writing_profile(${runId}::uuid)
-    `
-    if (!profile || !await glossaryStillAvailable(tx, runId, glossary)) return null
-    const { characterId, identityId, platform } = context
-    return { text, evidence, style: profile.style, time: { ...context.time }, identityPrompt: profile.prompt ?? undefined,
-      isIm, corePrompt: profile.corePrompt ?? undefined, glossary: glossary.length ? glossaryReferences(glossary) : undefined,
-      attribution: { characterId, identityId, platform } }
-  }
-
-  const prepared = await db.$transaction(async (tx) => {
-    const evidence = await readEvidence(tx, runId, decisionRequest)
-    const context = evidence && await loadRunContinuity(tx, runId)
-    if (!context || !await captureSelfModelSnapshot(tx, runId, context.characterId, context.self.facts)) return null
-    const [profile] = await tx.$queryRaw<{ prompt: string | null; participation: string | null }[]>`
-      SELECT prompt, public.rica_simulation_participation(${runId}::uuid) AS participation
-      FROM public.rica_simulated_writing_profile(${runId}::uuid)
-    `
-    if (!profile) return null
-    const conversation = isIm && writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
-    const identityPrompt = profile.prompt ?? undefined
-    const participation = resolveParticipation(profile.participation, identityPrompt)
-    const localGlossary = conversation && provider.hostedModel ? await readChatGlossary(tx, runId) : undefined
-    const glossary = localGlossary && conversation
-      ? matchChatGlossary(localGlossary, text, conversation.history.slice(-2).map(({ message }) => message)) : []
-    if (conversation && provider.participateAndWrite) {
-      const writing = await readWritingInput(tx, context, glossary)
-      if (!writing) return null
-      const visibleMessages = [...conversation.history, { speaker: conversation.speaker, message: text }]
-      const learning = localGlossary && observe && {
-        ...localGlossary,
-        examples: localGlossary.examples.filter(example =>
-          visibleMessages.some(({ speaker, message }) => speaker === example.speaker && message === example.message)),
-      }
-      const glossaryExamples = learning ? learningExamples(learning) : undefined
-      const input = { ...writing, conversation, participation, glossaryExamples }
-      if (await reserveModelBudget(tx, runId, input, writingOutputUnits)) {
-        return { input, context, decisionEvidence: evidence, localGlossary: learning, glossary, combined: provider.participateAndWrite.bind(provider) }
-      }
-      observe?.skip('MODEL_BUDGET_EXHAUSTED')
-      return null
-    }
-    const examples = localGlossary && observe ? learningExamples(localGlossary) : undefined
-    const input = { text, evidence, context, conversation, isIm, identityPrompt, participation,
-      glossary: glossary.length ? glossaryReferences(glossary) : undefined, glossaryExamples: examples } as const
-    const outputUnits = examples ? 1024 : 64
-    if (await reserveModelBudget(tx, runId, input, outputUnits)) return { input, context, decisionEvidence: evidence, localGlossary, glossary, outputUnits }
-    observe?.skip('MODEL_BUDGET_EXHAUSTED')
-    return null
-  })
-  if (!prepared) return null
-  const { input: decisionInput, context, decisionEvidence, localGlossary, glossary } = prepared
-  const selfRevisions = new Map(context.self.facts.map(({ id, revision }) => [id, revision]))
-  const goalVersions = context.goals.map(({ id, version }) => id + ':' + version).join(',')
-  const beliefVersions = beliefRefs(context)
-
-  signal.throwIfAborted()
-  const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
-  const capture = observe && provider.hostedModel && writingRequest.purpose === 'PUBLIC_REFERENCE'
-    ? (stage: 'DECISION' | 'WRITING' | 'DECISION_AND_WRITING') =>
-      (prompt: string) => recordRunModelCall(db, runId, stage, observe.model, prompt) : undefined
-  let result: { decision: ReplyDecision; output: unknown } | null = null
-  let combinedMessages: string[] | undefined
-  let combinedRevisions: Map<string, number> | undefined
-  if (prepared.combined) {
-    const { input, combined } = prepared
-    combinedRevisions = new Map(input.evidence.map(({ id, revision }) => [id, revision]))
-    const output = await readDecisionOutput(() => combined({ ...input, capture: capture?.('DECISION_AND_WRITING') }, signal), signal)
-    const parsed = chatDraftDecision.safeParse(output)
-    if (parsed.success) {
-      const { action, reason } = parsed.data
-      if (action === 'REPLY') {
-        combinedMessages = parsed.data.messages
-        result = { decision: { action, reason }, output: parsed.data }
-      } else {
-        result = { decision: { action, reason }, output: parsed.data }
-      }
-    }
-  } else {
-    const decisionCall = { ...prepared.input, capture: capture?.('DECISION') }
-    result = await readParticipationDecision(provider, decisionCall, signal)
-    if (!result) {
-      const { input, outputUnits } = prepared
-      if (!await db.$transaction(tx => reserveModelBudget(tx, runId, input, outputUnits))) {
-        observe?.skip('MODEL_BUDGET_EXHAUSTED')
-        return null
-      }
-      result = await readParticipationDecision(provider, decisionCall, signal)
-    }
-  }
-  if (!result) {
-    observe?.skip('MODEL_DECISION_INVALID_OUTPUT')
-    return null
-  }
-  const { decision, output: outputDecision } = result
-  if (localGlossary && decisionInput.glossaryExamples && outputDecision && typeof outputDecision === 'object' && 'glossaryCandidates' in outputDecision) {
-    observe?.learned(sourcesForTerms(localGlossary, outputDecision.glossaryCandidates))
-  }
-  observe?.decision({ ...decision, participation: decisionInput.participation, glossary })
-  if (decision.action === 'NO_OP') {
-    observe?.skip('MODEL_NO_REPLY')
-    return null
-  }
-
-  const writing = prepared.combined ? prepared.input : await db.$transaction(async (tx) => {
-    if (decisionInput.conversation) {
-      const stop = await readChatReplyStop(tx, runId, decision.reason)
-      if (stop) {
-        observe?.skip(stop)
-        return null
-      }
-    }
-    const input = await readWritingInput(tx, context, glossary)
-    if (!input) return null
-    const { attribution, ...writingInput } = input
-    const writing = { ...writingInput, conversation: decisionInput.conversation }
-    if (!await reserveModelBudget(tx, runId, writing, writingOutputUnits)) {
-      observe?.skip('MODEL_BUDGET_EXHAUSTED')
-      return null
-    }
-    return { ...writing, attribution }
-  })
-  if (!writing) return null
-
-  // Preserve the authorized revisions independently of the objects passed to the provider.
-  const allowedRevisions = combinedRevisions ?? new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
-  signal.throwIfAborted()
-  let draft: ReturnType<typeof validateDraft>
-  try {
-    const output = prepared.combined ? { messages: combinedMessages, evidenceIds: [...allowedRevisions.keys()] }
-      : await provider.write({ ...writing, capture: capture?.('WRITING') }, signal)
-    signal.throwIfAborted()
-    draft = validateDraft(output, allowedRevisions, !!writing.conversation)
-  } catch (error) {
-    signal.throwIfAborted()
-    if (!observe || !(invalidModelOutput(error) || error instanceof InvalidDraftOutput)) throw error
-    observe.skip('MODEL_WRITING_INVALID_OUTPUT')
-    return null
-  }
-  if ([' ', ''].some(separator => containsWritingPrompt(draft.messages.join(separator), writing.corePrompt, writing.identityPrompt))) return null
-  return { draft, conversation: writing.conversation, isIm, decisionRevisions, glossary,
-    writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
-}
-
-type DraftCandidate = NonNullable<Awaited<ReturnType<typeof buildSimulatedDraft>>>
-
-async function glossaryStillAvailable(tx: Prisma.TransactionClient, runId: string, glossary: GlossarySnapshot) {
-  if (!glossary.length) return true
-  const current = await readChatGlossary(tx, runId)
-  return glossary.every(({ id, version }) => current?.terms.some((term) => term.id === id && term.version === version))
-}
-
-async function recheckDraft(
-  tx: Prisma.TransactionClient, runId: string, request: WritingRequest, candidate: DraftCandidate,
-) {
-  if (!evidenceMatches(await readEvidence(tx, runId, decisionRequest), candidate.decisionRevisions)
-    || !evidenceMatches(await readEvidence(tx, runId, request), candidate.writingRevisions)
-    || !await glossaryStillAvailable(tx, runId, candidate.glossary)) return false
-  const context = await loadRunContinuity(tx, runId)
-  return !!context && evidenceMatches(context.self.facts, candidate.selfRevisions)
-    && context.goals.map(({ id, version }) => id + ':' + version).join(',') === candidate.goalVersions
-    && JSON.stringify(beliefRefs(context)) === JSON.stringify(candidate.beliefVersions)
-    && (!candidate.isIm || request.purpose !== 'PUBLIC_REFERENCE'
-      || JSON.stringify(await readChatWritingContext(tx, runId)) === JSON.stringify(candidate.conversation))
-}
-
-export async function generateSimulatedDraft(
-  db: PrismaClient, runId: string, text: string, request: WritingRequest,
-  provider: ModelProvider, signal: AbortSignal = AbortSignal.timeout(5_000),
-) {
-  const candidate = await buildSimulatedDraft(db, runId, text, request, provider, signal)
-  if (!candidate || !await db.$transaction((tx) => recheckDraft(tx, runId, request, candidate))) return null
-  signal.throwIfAborted()
-  const { messages, evidenceIds } = candidate.draft
-  return messages.length === 1 ? { text: messages[0], evidenceIds } : { messages, evidenceIds }
-}
+export { generateSimulatedDraft } from './draft-builder.js'
 
 export type ResolveDraftModel = (profile?: string) => Plugin<ModelProvider> | Promise<Plugin<ModelProvider>>
 
-export async function processSimulatedDraft(
-  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter,
-  configuredModel: Plugin<ModelProvider> | ResolveDraftModel, attempt?: OutboxAttempt, review?: ReviewPublicReply,
-) {
+async function findDraftRun(db: PrismaClient, eventId: string, attempt?: OutboxAttempt) {
   const event = await db.outboxEvent.findFirst({
     where: { eventId, type: draftQueuedEvent, processedAt: null, quarantinedAt: null,
       ...(attempt ? { generation: attempt.generation, attempts: attempt.ticket } : {}) },
@@ -327,10 +27,14 @@ export async function processSimulatedDraft(
       run: { include: { inboundEvent: { select: { adapterId: true, adapterVersion: true, consoleSpeakerId: true } } } },
     },
   })
-  const run = event?.run
-  if (!run) return
+  return event?.run
+}
+
+type DraftRun = NonNullable<Awaited<ReturnType<typeof findDraftRun>>>
+
+async function readDraftTarget(db: PrismaClient, run: DraftRun, resolveAdapter: ResolveSimulationAdapter) {
   const inbound = run.inboundEvent
-  const input = await db.$transaction(async (tx) => {
+  return db.$transaction(async (tx) => {
     const scope = await loadMemoryReadScope(tx, run.id, decisionRequest)
     if (!scope) return null
     const platform = inbound.adapterId ?? (await tx.$queryRaw<{ platform: string | null }[]>`
@@ -346,13 +50,13 @@ export async function processSimulatedDraft(
     const stop = inbound.consoleSpeakerId ? await readChatReplyStop(tx, run.id) : null
     return { scope, text: messageText, platform, adapter, stop }
   })
-  const scope = input?.stop ? undefined : input?.scope
-  const request: WritingRequest | null = scope?.channel === 'PRIVATE'
-    ? { purpose: 'PRIVATE_REPLY' }
-    : scope?.channel === 'PUBLIC' && scope.conversation_id
-      ? { purpose: 'PUBLIC_REFERENCE', audience: scope.conversation_id }
-      : null
+}
 
+type DraftTarget = NonNullable<Awaited<ReturnType<typeof readDraftTarget>>>
+
+async function resolveSimulationDraftModel(
+  db: PrismaClient, runId: string, request: WritingRequest | null, configuredModel: Plugin<ModelProvider> | ResolveDraftModel,
+) {
   // Private simulation stays local. Hosted plugins receive only the public writing input.
   let selected = localSimulationModel
   if (typeof configuredModel === 'function') {
@@ -360,12 +64,133 @@ export async function processSimulatedDraft(
       selected = await configuredModel('simulated')
     } else if (request?.purpose === 'PUBLIC_REFERENCE') {
       const [profile] = await db.$queryRaw<{ model_profile: string | null }[]>`
-        SELECT model_profile FROM public.rica_simulated_writing_profile(${run.id}::uuid)
+        SELECT model_profile FROM public.rica_simulated_writing_profile(${runId}::uuid)
       `
       if (profile) selected = await configuredModel(profile.model_profile ?? undefined)
     }
   } else selected = configuredModel
-  const model = request?.purpose === 'PRIVATE_REPLY' && selected.implementation.hostedModel ? localSimulationModel : selected
+  return request?.purpose === 'PRIVATE_REPLY' && selected.implementation.hostedModel ? localSimulationModel : selected
+}
+
+type DraftModelDetails = { modelId: string; modelVersion: string; signal: AbortSignal }
+
+async function createDraftProposal(
+  tx: Prisma.TransactionClient, run: DraftRun, input: DraftTarget, candidate: DraftCandidate,
+  resolveAdapter: ResolveSimulationAdapter, reviewEnabled: boolean, { modelId, modelVersion, signal }: DraftModelDetails,
+): Promise<{ actionId?: string; skipReason?: DraftSkipReason } | undefined> {
+  const [bound] = await tx.$queryRaw<{ target: unknown; crossPlatformDuplicate: boolean }[]>`
+    SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
+      public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
+  `
+  const target = bound?.target ? reviewTarget.parse(bound.target) : null
+  const content = candidate.draft.payload
+  const adapter = target ? resolveAdapter(target.platform) : undefined
+  if (!target || target.platform !== input.platform || !adapter || input.adapter.isIm !== adapter.isIm
+    || !matchesSimulationAdapter(input.adapter, adapter) || !content || content.length > maxSimulatedTextLength) return
+
+  const settings = await tx.character.findUniqueOrThrow({
+    where: { id: run.characterId }, select: { autoReviewEnabled: true, imManualReviewEnabled: true, simulationProposalHours: true },
+  })
+  const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
+  const autoReview = reviewEnabled && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate
+  if (!autoReview && adapter.isIm && !settings.imManualReviewEnabled) return { skipReason: 'IM_MANUAL_REVIEW_DISABLED' }
+
+  const { isIm, ...adapterBinding } = adapter
+  const expiresAt = new Date(Date.now() + settings.simulationProposalHours * 3_600_000)
+  const payloadHash = createHash('sha256').update(content).digest('hex')
+  const reviewDigest = createHash('sha256').update(JSON.stringify({
+    payloadHash, target, ...adapterBinding, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
+    kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
+    characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
+    identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
+    decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
+    selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
+    citationIds: candidate.draft.evidenceIds, modelId, modelVersion,
+    glossary: candidate.glossary.map(({ id, version }) => [id, version]),
+  })).digest('hex')
+  signal.throwIfAborted()
+  await tx.simulatedDraft.createMany({
+    data: {
+      runId: run.id,
+      characterId: run.characterId,
+      content,
+      decisionEvidenceIds: [...candidate.decisionRevisions.keys()],
+      writingEvidenceIds: [...candidate.writingRevisions.keys()],
+      citationIds: candidate.draft.evidenceIds,
+      beliefRefs: candidate.beliefVersions,
+      modelId,
+      modelVersion,
+    },
+  })
+  const action = await tx.actionProposal.create({
+    data: {
+      characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
+      policyVersion: simulationReviewPolicyVersion, ...adapterBinding, expiresAt, crossPlatformDuplicate, isIm,
+      autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
+    }, select: { id: true },
+  })
+  return { actionId: action.id }
+}
+
+async function commitDraft(db: PrismaClient, draft: DraftModelDetails & {
+  eventId: string; attempt?: OutboxAttempt; run: DraftRun; input: DraftTarget | null; request: WritingRequest | null;
+  candidate: DraftCandidate | null; resolveAdapter: ResolveSimulationAdapter; reviewEnabled: boolean; skipReason: DraftSkipReason;
+  participationDecision?: ParticipationDecision; learnedTerms: ReturnType<typeof sourcesForTerms>;
+}) {
+  const { eventId, attempt, run, input, request, candidate, resolveAdapter, reviewEnabled, participationDecision, learnedTerms } = draft
+  return db.$transaction(async (tx) => {
+    const [pending] = await tx.$queryRaw<{ eventId: string }[]>`
+      SELECT event_id AS "eventId" FROM public.outbox
+      WHERE event_id = ${eventId}::uuid AND type = ${draftQueuedEvent} AND processed_at IS NULL
+        AND quarantined_at IS NULL ${outboxAttemptFence(attempt)}
+      FOR UPDATE
+    `
+    if (!pending) return
+
+    let actionId: string | undefined
+    let skipReason = draft.skipReason
+    if (run.state === 'CONTEXT_READY') {
+      await saveChatTerms(tx, run.id, learnedTerms)
+      const checked = candidate && request && await recheckDraft(tx, run.id, request, candidate)
+      const stop = checked && run.inboundEvent.consoleSpeakerId ? await readChatReplyStop(tx, run.id, participationDecision?.reason) : null
+      if (stop) skipReason = stop
+      if (checked && !stop && input) {
+        const proposal = await createDraftProposal(tx, run, input, candidate, resolveAdapter, reviewEnabled, draft)
+        actionId = proposal?.actionId
+        if (proposal?.skipReason) skipReason = proposal.skipReason
+      }
+      const { count } = await tx.agentRun.updateMany({
+        where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
+        data: {
+          state: actionId ? 'WAITING_APPROVAL'
+            : ['MODEL_NO_REPLY', 'CHAT_REPEAT', 'CHAT_MOVED_ON'].includes(skipReason) ? 'SKIPPED' : 'CANCELED',
+          stateReason: actionId ? null : skipReason,
+          participationDecision,
+          stateVersion: { increment: 1 },
+        },
+      })
+      if (count !== 1) throw new Error('Simulated run changed during drafting')
+    }
+    await tx.outboxEvent.update({ where: { eventId }, data: { processedAt: new Date() } })
+    return actionId
+  }, { isolationLevel: 'ReadCommitted' })
+}
+
+export async function processSimulatedDraft(
+  db: PrismaClient, eventId: string, resolveAdapter: ResolveSimulationAdapter,
+  configuredModel: Plugin<ModelProvider> | ResolveDraftModel, attempt?: OutboxAttempt, review?: ReviewPublicReply,
+) {
+  const run = await findDraftRun(db, eventId, attempt)
+  if (!run) return
+  const input = await readDraftTarget(db, run, resolveAdapter)
+  const scope = input?.stop ? undefined : input?.scope
+  const request: WritingRequest | null = scope?.channel === 'PRIVATE'
+    ? { purpose: 'PRIVATE_REPLY' }
+    : scope?.channel === 'PUBLIC' && scope.conversation_id
+      ? { purpose: 'PUBLIC_REFERENCE', audience: scope.conversation_id }
+      : null
+
+  const model = await resolveSimulationDraftModel(db, run.id, request, configuredModel)
   const modelId = model.implementation.hostedProvider ?? model.id
   const modelVersion = model.implementation.hostedModel ?? model.version
   // Stay within the 30-second outbox lease. Model calls run outside the write transaction.
@@ -383,89 +208,10 @@ export async function processSimulatedDraft(
     })
     : null
 
-  const actionId = await db.$transaction(async (tx) => {
-    const [pending] = await tx.$queryRaw<{ eventId: string }[]>`
-      SELECT event_id AS "eventId" FROM public.outbox
-      WHERE event_id = ${eventId}::uuid AND type = ${draftQueuedEvent} AND processed_at IS NULL
-        AND quarantined_at IS NULL ${outboxAttemptFence(attempt)}
-      FOR UPDATE
-    `
-    if (!pending) return
-
-    let actionId: string | undefined
-    if (run.state === 'CONTEXT_READY') {
-      await saveChatTerms(tx, run.id, learnedTerms)
-      const checked = candidate && request && await recheckDraft(tx, run.id, request, candidate)
-      const stop = checked && inbound.consoleSpeakerId ? await readChatReplyStop(tx, run.id, participationDecision?.reason) : null
-      if (stop) skipReason = stop
-      const accepted = checked && !stop
-      const [bound] = accepted ? await tx.$queryRaw<{ target: unknown; crossPlatformDuplicate: boolean }[]>`
-        SELECT public.rica_simulated_review_target(${run.id}::uuid) AS target,
-          public.rica_cross_platform_duplicate(${run.id}::uuid) AS "crossPlatformDuplicate"
-      ` : []
-      const target = bound?.target ? reviewTarget.parse(bound.target) : null
-      const content = accepted ? candidate.draft.payload : null
-      const adapter = target ? resolveAdapter(target.platform) : undefined
-      const proposed = accepted && target && target.platform === input?.platform
-        && adapter && input.adapter.isIm === adapter.isIm && matchesSimulationAdapter(input.adapter, adapter) && content
-        && content.length <= maxSimulatedTextLength
-      const settings = proposed ? await tx.character.findUniqueOrThrow({
-        where: { id: run.characterId }, select: { autoReviewEnabled: true, imManualReviewEnabled: true, simulationProposalHours: true },
-      }) : undefined
-      const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
-      const autoReview = !!review && settings?.autoReviewEnabled && target?.audience === 'PUBLIC' && !crossPlatformDuplicate
-      if (proposed && settings && (autoReview || !adapter.isIm || settings.imManualReviewEnabled)) {
-        const { isIm, ...adapterBinding } = adapter
-        const expiresAt = new Date(Date.now() + settings.simulationProposalHours * 3_600_000)
-        const payloadHash = createHash('sha256').update(content).digest('hex')
-        const reviewDigest = createHash('sha256').update(JSON.stringify({
-          payloadHash, target, ...adapterBinding, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
-          kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
-          characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
-          identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
-          decisionEvidence: [...candidate.decisionRevisions], writingEvidence: [...candidate.writingRevisions],
-          selfEvidence: [...candidate.selfRevisions], goalVersions: candidate.goalVersions, beliefRefs: candidate.beliefVersions,
-          citationIds: candidate.draft.evidenceIds, modelId, modelVersion,
-          glossary: candidate.glossary.map(({ id, version }) => [id, version]),
-        })).digest('hex')
-        signal.throwIfAborted()
-        await tx.simulatedDraft.createMany({
-          data: {
-            runId: run.id,
-            characterId: run.characterId,
-            content,
-            decisionEvidenceIds: [...candidate.decisionRevisions.keys()],
-            writingEvidenceIds: [...candidate.writingRevisions.keys()],
-            citationIds: candidate.draft.evidenceIds,
-            beliefRefs: candidate.beliefVersions,
-            modelId,
-            modelVersion,
-          },
-        })
-        const action = await tx.actionProposal.create({
-          data: {
-            characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
-            policyVersion: simulationReviewPolicyVersion, ...adapterBinding, expiresAt, crossPlatformDuplicate, isIm,
-            autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
-          }, select: { id: true },
-        })
-        actionId = action.id
-      } else if (proposed) skipReason = 'IM_MANUAL_REVIEW_DISABLED'
-      const { count } = await tx.agentRun.updateMany({
-        where: { id: run.id, state: 'CONTEXT_READY', stateVersion: run.stateVersion },
-        data: {
-          state: actionId ? 'WAITING_APPROVAL'
-            : ['MODEL_NO_REPLY', 'CHAT_REPEAT', 'CHAT_MOVED_ON'].includes(skipReason) ? 'SKIPPED' : 'CANCELED',
-          stateReason: actionId ? null : skipReason,
-          participationDecision,
-          stateVersion: { increment: 1 },
-        },
-      })
-      if (count !== 1) throw new Error('Simulated run changed during drafting')
-    }
-    await tx.outboxEvent.update({ where: { eventId }, data: { processedAt: new Date() } })
-    return actionId
-  }, { isolationLevel: 'ReadCommitted' })
+  const actionId = await commitDraft(db, {
+    eventId, attempt, run, input, request, candidate, resolveAdapter, reviewEnabled: !!review,
+    modelId, modelVersion, signal, skipReason, participationDecision, learnedTerms,
+  })
 
   if (actionId && review && text !== null && request?.purpose === 'PUBLIC_REFERENCE') {
     const discussion = candidate?.conversation ? JSON.stringify({ ...candidate.conversation, message: text }) : text
