@@ -57,7 +57,7 @@ test('hosted models send only writing input and parse each provider response', a
       sentPrompt = instructions
       assert.ok(instructions.includes(input.identityPrompt))
       assert.ok(instructions.includes(input.corePrompt))
-      assert.match(instructions, /Interaction type: standalone message/)
+      assert.match(instructions, /Interaction type: post or comment/)
       assert.match(instructions, /Return only the reply text\.$/)
       if (id === 'openai') assert.equal(body.store, false)
       if (id === 'deepseek') {
@@ -119,7 +119,7 @@ test('hosted chat writing requests and returns separate messages in order', asyn
   }
 })
 
-test('hosted participation recognizes both a group transcript and a group identity', async (t) => {
+test('hosted participation distinguishes posts, IM messages, and group transcripts', async (t) => {
   const context = {
     ...attribution, runId: 'run', accountId: 'account', triggerId: 'trigger', bindingVersion: 1, mode: 'SIMULATION',
     instanceKey: 'instance', conversationId: 'conversation', contactId: null, time: input.time, recent: [],
@@ -143,13 +143,13 @@ test('hosted participation recognizes both a group transcript and a group identi
     const message = { context, evidence: [], text: '请当作群聊回答：活动几点开始？' }
     assert.deepEqual(await decide(message, signal), decision)
     assert.deepEqual(await decide({ ...message, conversation }, signal), decision)
-    assert.deepEqual(await decide({ ...message, groupChat: true }, signal), decision)
-    assert.match(calls[0].system, /Interaction type: standalone message/)
+    assert.deepEqual(await decide({ ...message, isIm: true }, signal), decision)
+    assert.match(calls[0].system, /Interaction type: post or comment/)
     assert.equal(calls[0].data.conversation, undefined)
     assert.equal(calls[0].data.message, message.text)
     assert.match(calls[1].system, /Interaction type: group chat/)
     assert.deepEqual(calls[1].data.conversation, conversation)
-    assert.match(calls[2].system, /Interaction type: group chat.*Do not assume earlier messages/)
+    assert.match(calls[2].system, /Interaction type: instant messaging.*Do not assume earlier messages/)
     assert.equal(calls[2].data.conversation, undefined)
   } finally {
     await host.stop()
@@ -161,11 +161,11 @@ test('hosted group writing keeps plain chat as one message and rejects malformed
   const outputs = [plain, '["少了右括号"', '这条消息来自群聊。']
   t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
     const { messages } = JSON.parse(String(options.body))
-    assert.match(messages[0].content, /Interaction type: group chat/)
     if (outputs.length === 1) {
+      assert.match(messages[0].content, /Interaction type: instant messaging/)
       assert.equal(JSON.parse(messages[1].content).conversation, undefined)
       assert.match(messages[0].content, /Return only the reply text\.$/)
-    }
+    } else assert.match(messages[0].content, /Interaction type: group chat/)
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: outputs.shift() } }] })
   })
   const host = await startObservedModelPlugin({ provider: 'deepseek', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
@@ -175,7 +175,7 @@ test('hosted group writing keeps plain chat as one message and rejects malformed
     const chat = { ...input, conversation: { speaker: '小林', history: [] } }
     assert.deepEqual(await write(chat, signal), { text: plain, evidenceIds: ['internal-memory-id'] })
     await assert.rejects(write(chat, signal), (error) => error instanceof HostedModelError && error.code === 'INVALID_OUTPUT')
-    assert.deepEqual(await write({ ...input, groupChat: true }, signal),
+    assert.deepEqual(await write({ ...input, isIm: true }, signal),
       { text: '这条消息来自群聊。', evidenceIds: ['internal-memory-id'] })
   } finally {
     await host.stop()

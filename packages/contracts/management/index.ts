@@ -42,7 +42,6 @@ export const maxIdentityWritingPromptLength = 4000
 
 export const identityProfile = z.strictObject({
   participation: z.enum(['talkative', 'balanced', 'reserved']).optional(),
-  groupChat: z.boolean().optional(),
   displayName: shortText.optional(),
   timezone: timezone.optional(),
   stateRule: stateRule.optional(),
@@ -220,6 +219,7 @@ export const characterView = z.object({
 })
 export const characterWorkspaceView = characterView.extend({
   simulationPlatforms: z.array(accountInput.shape.platform),
+  simulationImPlatforms: z.array(accountInput.shape.platform),
 })
 export const identityView = z.object({
   id: z.uuid(), slug: z.string(), status: z.string(),

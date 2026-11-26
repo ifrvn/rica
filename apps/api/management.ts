@@ -277,8 +277,9 @@ export function createManagementApp({ db, authenticate, origin, cookie, resolveA
     c.header('ETag', `"${result.version ?? 0}"`)
     const platforms = schema.accountInput.shape.platform.options
     const simulationPlatforms = platforms.filter((id) => resolveAdapter(id))
+    const simulationImPlatforms = simulationPlatforms.filter((id) => resolveAdapter(id)?.isIm)
     const fields = await Promise.all(plugins.map(async ({ workspace }) => workspace && z.object(workspace.fields).parse(await workspace.read())))
-    return c.json({ ...result, simulationPlatforms, ...Object.assign({}, ...fields) }, 200)
+    return c.json({ ...result, simulationPlatforms, simulationImPlatforms, ...Object.assign({}, ...fields) }, 200)
   })
 
   app.openapi(createRoute({

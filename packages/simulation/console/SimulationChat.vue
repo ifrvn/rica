@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { UiAlert, UiButton, UiEmpty, UiField, UiSpinner } from '@ricajs/console-shared/ui'
 import { formatTime, queryPath, type Page } from '@ricajs/console-shared/console-data'
 import { request, RequestError } from '@ricajs/console-shared/request'
@@ -10,11 +10,11 @@ type Chat = z.infer<typeof simulationChatView>
 type Room = z.infer<typeof simulationChatSummary>
 type Term = Chat['glossary'][number]
 const props = defineProps<{
-  base: string; accounts: { value: string; label: string }[]; canStart: boolean
-  selected?: string; requestedChat?: string | null; focusComposer: boolean
+  base: string; accounts: { value: string; label: string; isIm: boolean }[]; canStart: boolean
+  selected?: string; requestedChat?: string | null; requestedAccount?: string; focusComposer: boolean
   identity: (identityId: string) => string; stateName: (state: string) => string
 }>()
-const emit = defineEmits<{ expired: []; open: [id?: string]; latest: [id?: string]; browse: []; sent: []; identities: [] }>()
+const emit = defineEmits<{ expired: []; open: [id?: string]; latest: [id?: string]; browse: [following: boolean]; sent: []; identities: [] }>()
 const account = ref('')
 const room = ref('')
 const rooms = ref<Room[]>([])
@@ -38,7 +38,8 @@ const termStates = { LEARNED: '自动习得', CORRECTED: '已纠正', DISABLED: 
 const transcript = ref<HTMLElement>()
 const composer = ref<HTMLTextAreaElement>()
 const author = computed(() => (addingSpeaker.value ? newSpeaker.value : speaker.value).trim())
-const activeAccount = computed(() => props.accounts.some(({ value }) => value === account.value))
+const activeAccount = computed(() => props.accounts.find(({ value }) => value === account.value))
+const isIm = computed(() => activeAccount.value?.isIm === true)
 let active = true
 let revision = 0
 let loadGeneration = 0
@@ -67,9 +68,10 @@ function scrollToEnd() {
 function handle(cause: unknown, fallback: string) {
   const status = cause instanceof RequestError ? cause.status : 0
   if (status === 401) emit('expired')
+  else if (cause instanceof RequestError && cause.code === 'SIMULATION_ACCOUNT_NOT_IM') error.value = '此账号用于发帖或评论，请选择 IM 账号发起群聊。'
   else error.value = ({
-    403: '当前账号无权访问此模拟会话。', 404: '找不到此模拟会话。',
-    409: '会话、模拟账号或群员当前不可用。', 422: '请核对群员昵称和消息内容。',
+    403: '当前账号无权执行此操作。', 404: '找不到此模拟会话或账号。',
+    409: '会话或模拟账号当前不可用。', 422: isIm.value ? '请核对群员昵称和消息内容。' : '请核对帖子或评论内容。',
   } as Record<number, string>)[status] ?? fallback
 }
 
@@ -122,7 +124,7 @@ async function selectRoom(id: string, user = false) {
   glossaryError.value = ''
   emit('latest', undefined)
   if (user) {
-    emit('browse')
+    emit('browse', true)
     emit('open')
   }
   if (id) await fetchRoom(id, token)
@@ -136,7 +138,7 @@ async function loadRooms(append = false, selectLatest = false) {
     const page = await request<Page<Room>>(queryPath(props.base + '/simulation-chats', {
       limit: '50', cursor: append ? roomCursor.value : null,
     }))
-    if (!active) return
+    if (!active || !isIm.value) return
     if (append) {
       const known = new Set(rooms.value.map(({ id }) => id))
       rooms.value = [...rooms.value, ...page.items.filter(({ id }) => !known.has(id))]
@@ -144,20 +146,32 @@ async function loadRooms(append = false, selectLatest = false) {
     roomCursor.value = page.nextCursor
     if (selectLatest && !room.value && token === revision && rooms.value[0]) await selectRoom(rooms.value[0].id)
   } catch (cause) {
-    if (active) handle(cause, '无法读取会话列表，请刷新后重试。')
+    if (active && isIm.value) handle(cause, '无法读取会话列表，请刷新后重试。')
   } finally {
     if (active) loadingRooms.value = false
   }
 }
 
-watch(() => props.accounts, (options) => {
-  if (!options.some(({ value }) => value === account.value)) account.value = options[0]?.value ?? ''
+watch([() => props.accounts, () => props.requestedAccount], ([options, requested]) => {
+  if (requested && options.some(({ value }) => value === requested)) account.value = requested
+  else if (!options.some(({ value }) => value === account.value)) account.value = options[0]?.value ?? ''
 }, { immediate: true })
-watch(() => props.requestedChat, (chatId) => {
-  if (chatId && chatId !== room.value) void selectRoom(chatId)
+watch(isIm, (enabled) => {
+  error.value = ''
+  if (enabled) {
+    void loadRooms(false, !props.requestedChat)
+    if (room.value && (!props.requestedChat || props.requestedChat === room.value)) void fetchRoom(room.value)
+  } else {
+    revision++
+    clearTimeout(timer)
+    loading.value = false
+    emit('browse', false)
+  }
+}, { immediate: true })
+watch([isIm, () => props.requestedChat], ([enabled, chatId]) => {
+  if (enabled && chatId && chatId !== room.value) void selectRoom(chatId)
 }, { immediate: true })
 watch(() => props.focusComposer, value => { if (value) void nextTick(() => composer.value?.focus()) }, { immediate: true })
-onMounted(() => { void loadRooms(false, true) })
 
 function refresh() {
   error.value = ''
@@ -199,10 +213,10 @@ async function saveTerm(operation: 'CORRECT' | 'DISABLE') {
 }
 
 async function send() {
-  if (!props.canStart || sending.value || loading.value || !author.value || !message.value.trim()
+  if (!props.canStart || sending.value || (isIm.value && (loading.value || !author.value)) || !message.value.trim()
     || !activeAccount.value) return
-  const id = room.value || (draftRoom ||= crypto.randomUUID())
-  const body = JSON.stringify({ accountId: account.value, chatId: id, speaker: author.value, message: message.value.trim() })
+  const id = isIm.value ? room.value || (draftRoom ||= crypto.randomUUID()) : undefined
+  const body = JSON.stringify({ accountId: account.value, message: message.value.trim(), ...(id && { chatId: id, speaker: author.value }) })
   if (pending?.body !== body) pending = { body, key: crypto.randomUUID() }
   const token = revision
   sending.value = true
@@ -215,6 +229,11 @@ async function send() {
     if (!active || revision !== token) return
     message.value = ''
     pending = undefined
+    if (!id) {
+      emit('open', result.id)
+      emit('sent')
+      return
+    }
     speaker.value = author.value
     newSpeaker.value = ''
     addingSpeaker.value = false
@@ -223,7 +242,7 @@ async function send() {
       rooms.value = [{ id, createdAt: new Date().toISOString() }, ...rooms.value]
     }
     emit('latest', result.id)
-    emit('browse')
+    emit('browse', true)
     emit('open')
     emit('sent')
     await fetchRoom(id, token)
@@ -231,7 +250,7 @@ async function send() {
   } catch (cause) {
     if (active && revision === token) {
       handle(cause, '发送模拟消息失败，请重试。')
-      if (room.value) timer = setTimeout(() => { void fetchRoom(room.value, token, true) }, 2500)
+      if (id && room.value) timer = setTimeout(() => { void fetchRoom(room.value, token, true) }, 2500)
     }
   } finally {
     sending.value = false
@@ -244,8 +263,8 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
 <template>
   <section class="console-card simulation-chat" aria-labelledby="simulation-chat-heading">
     <div class="console-section-heading">
-      <h3 id="simulation-chat-heading" tabindex="-1">模拟群聊</h3>
-      <UiButton size="small" variant="quiet" :disabled="loadingRooms || loading || sending" @click="refresh">刷新会话</UiButton>
+      <h3 id="simulation-chat-heading" tabindex="-1">{{ isIm ? '模拟群聊' : activeAccount ? '模拟发帖／评论' : '发起模拟' }}</h3>
+      <UiButton v-if="isIm" size="small" variant="quiet" :disabled="loadingRooms || loading || sending" @click="refresh">刷新会话</UiButton>
     </div>
     <div class="chat-controls">
       <UiField label="接收账号" for="chat-account">
@@ -254,7 +273,7 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
           <option v-for="choice in accounts" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
         </select>
       </UiField>
-      <UiField label="会话" for="chat-room">
+      <UiField v-if="isIm" label="会话" for="chat-room">
         <select id="chat-room" :value="room" class="ui-control" :disabled="loading || loadingRooms || sending"
           @change="selectRoom(($event.target as HTMLSelectElement).value, true)">
           <option value="">新群聊</option>
@@ -263,14 +282,17 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
         </select>
       </UiField>
     </div>
+    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
+    <UiEmpty v-if="!activeAccount" description="启用并关联模拟账号后即可发起模拟。">
+      <UiButton v-if="canStart" size="small" variant="soft" @click="emit('identities')">前往角色与身份</UiButton>
+    </UiEmpty>
+    <template v-if="isIm">
     <UiButton v-if="roomCursor" class="chat-more" size="small" variant="quiet" :loading="loadingRooms"
       :disabled="sending" @click="loadRooms(true)">加载更早会话</UiButton>
-    <UiAlert v-if="error" tone="error" role="alert">{{ error }}</UiAlert>
     <div ref="transcript" class="chat-transcript" tabindex="0" role="region" aria-label="群聊消息">
       <UiSpinner v-if="loading && !chat" aria-label="正在读取群聊" />
       <div v-else-if="!bubbles.length" class="chat-empty">
-        <UiEmpty :description="accounts.length ? '发送第一条消息，开始模拟群聊。' : '启用并关联模拟账号后即可发起群聊。'" />
-        <UiButton v-if="!accounts.length && canStart" size="small" variant="soft" @click="emit('identities')">前往角色与身份</UiButton>
+        <UiEmpty description="发送第一条消息，开始模拟群聊。" />
       </div>
       <ol v-else class="chat-messages">
         <li v-for="item in bubbles" :key="item.key" class="chat-message" :class="{ 'chat-message--reply': item.isReply }">
@@ -314,8 +336,9 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
         </li>
       </ul>
     </details>
+    </template>
     <form v-if="canStart && activeAccount" class="chat-composer" @submit.prevent="send">
-      <UiField :label="addingSpeaker ? '新群员昵称' : '发言群员'" :for="addingSpeaker ? 'chat-new-speaker' : 'chat-speaker'">
+      <UiField v-if="isIm" :label="addingSpeaker ? '新群员昵称' : '发言群员'" :for="addingSpeaker ? 'chat-new-speaker' : 'chat-speaker'">
         <div class="chat-controls chat-speaker-controls">
           <select v-if="!addingSpeaker" id="chat-speaker" v-model="speaker" class="ui-control" :disabled="sending || loading">
             <option v-for="name in chat?.speakers" :key="name">{{ name }}</option>
@@ -326,12 +349,12 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer) })
             @click="addingSpeaker = !addingSpeaker">{{ addingSpeaker ? '选择已有群员' : '新建群员' }}</UiButton>
         </div>
       </UiField>
-      <UiField label="消息" for="chat-message">
+      <UiField :label="isIm ? '消息' : '帖子或评论内容'" for="chat-message">
         <textarea id="chat-message" ref="composer" v-model="message" class="ui-control" rows="2" maxlength="4000"
-          placeholder="输入这位群员要说的话" :disabled="sending" @keydown.ctrl.enter.prevent="send" />
+          :placeholder="isIm ? '输入这位群员要说的话' : '输入角色要回应的帖子或评论'" :disabled="sending" @keydown.ctrl.enter.prevent="send" />
       </UiField>
       <UiButton class="chat-send" type="submit" tone="primary" :loading="sending"
-        :disabled="sending || loading || !author || !message.trim()">发送模拟消息</UiButton>
+        :disabled="sending || (isIm && (loading || !author)) || !message.trim()">{{ isIm ? '发送模拟消息' : '发起模拟' }}</UiButton>
     </form>
   </section>
 </template>

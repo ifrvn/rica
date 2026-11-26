@@ -18,6 +18,9 @@ export async function startConsoleSimulation(
   if (!account) throw new ManagementError(404, 'NOT_FOUND', 'Simulation account not found')
   const adapter = resolveAdapter(account.platform)
   if (!adapter) throw new ManagementError(409, 'SIMULATION_ADAPTER_UNAVAILABLE', 'Simulation adapter is unavailable')
+  if ('chatId' in input && !adapter.isIm) {
+    throw new ManagementError(422, 'SIMULATION_ACCOUNT_NOT_IM', 'This platform account does not support chat')
+  }
   const [row] = 'chatId' in input ? await tx.$queryRaw<{ id: string | null }[]>`
     SELECT public.rica_start_console_chat_message(${scope.characterId}::uuid, ${input.accountId}::uuid,
       ${input.chatId}::uuid, ${adapter.adapterId}, ${adapter.adapterVersion}, ${input.speaker}, ${input.message}) AS id

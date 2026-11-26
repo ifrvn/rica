@@ -1024,26 +1024,18 @@ test('revocation during private writing prevents the draft from committing', asy
   }
 })
 
-test('group identities and invalid model output reach the correct terminal or approval state', async () => {
+test('platform interaction mode follows the bound adapter through model output recovery', async () => {
   assert.ok(fixture)
-  const { characterId } = fixture
-  const account = await db.$transaction(async (tx) => {
-    const { id: identityId } = await tx.identity.create({ data: { characterId, slug: 'group-output-fixture' } })
-    await tx.identityVersion.create({ data: { characterId, identityId, version: 1,
-      roleProfile: { groupChat: true }, actorId: fixtureKey, reason: 'Group chat fixture' } })
-    await tx.identity.update({ where: { id: identityId }, data: { activeVersion: 1, status: 'ACTIVE' } })
-    return tx.platformAccount.create({ data: { characterId, identityId, platform: 'mock-a',
-      instanceKey: 'integration', remoteAccountId: `${fixtureKey}-group-output`, status: 'ACTIVE' } })
-  })
+  const { characterId, accounts: [imAccount, feedAccount] } = fixture
   const runtime = testDatabaseRole('rica_runtime')
   try {
-    const conversation = await db.conversation.create({ data: { characterId, identityId: account.identityId,
-      accountId: account.id, channel: 'PUBLIC', remoteKey: randomUUID() } })
-    for (const [messageText, state, stateReason, decisions, writes] of [
-      ['recover decision', 'WAITING_APPROVAL', null, 2, 1],
-      ['invalid decision', 'CANCELED', 'MODEL_DECISION_INVALID_OUTPUT', 2, 0],
-      ['invalid writing', 'CANCELED', 'MODEL_WRITING_INVALID_OUTPUT', 1, 1],
+    for (const [account, isIm, messageText, state, stateReason, decisions, writes] of [
+      [imAccount, true, 'recover decision', 'WAITING_APPROVAL', null, 2, 1],
+      [imAccount, true, 'invalid decision', 'CANCELED', 'MODEL_DECISION_INVALID_OUTPUT', 2, 0],
+      [feedAccount, false, 'invalid writing', 'CANCELED', 'MODEL_WRITING_INVALID_OUTPUT', 1, 1],
     ] as const) {
+      const conversation = await db.conversation.create({ data: { characterId, identityId: account.identityId,
+        accountId: account.id, channel: 'PUBLIC', remoteKey: randomUUID() } })
       const result = await ingestSimulatedEvent(runtime, { accountId: account.id, conversationId: conversation.id,
         sourceKey: randomUUID(), kind: 'REPLY', occurredAt, messageText })
       assert.equal(result.status, 'ACCEPTED')
@@ -1057,7 +1049,7 @@ test('group identities and invalid model output reach the correct terminal or ap
         implementation: {
           async decide(input, signal) {
             if (input.context.runId !== runId) return simulatedModel.decide(input, signal)
-            assert.equal(input.groupChat, true)
+            assert.equal(input.isIm, isIm)
             assert.equal(input.conversation, undefined)
             decideCount++
             if (messageText === 'invalid decision' || (messageText === 'recover decision' && decideCount === 1)) {
@@ -1067,7 +1059,7 @@ test('group identities and invalid model output reach the correct terminal or ap
           },
           async write(input, signal) {
             if (input.text !== messageText) return simulatedModel.write(input, signal)
-            assert.equal(input.groupChat, true)
+            assert.equal(input.isIm, isIm)
             writeCount++
             return messageText === 'invalid writing' ? { messages: [], evidenceIds: [] } : { text: '收到。', evidenceIds: [] }
           },

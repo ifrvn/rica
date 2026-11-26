@@ -16,6 +16,7 @@ export type NormalizedPlatformEvent = Readonly<{
 }>
 
 export type PlatformAdapter = Readonly<{
+  isIm: boolean
   normalize(payload: unknown): NormalizedPlatformEvent
 }>
 
@@ -26,11 +27,7 @@ type SimulationAdapterBinding = Readonly<{
   adapterContractVersion: number
 }>
 
-type ActiveSimulationAdapter = Readonly<{
-  adapterId: string
-  adapterVersion: string
-  adapterContractVersion: number
-}>
+type ActiveSimulationAdapter = SimulationAdapterBinding & Readonly<{ isIm: boolean }>
 
 export type ResolveSimulationAdapter = (platformId: string) => ActiveSimulationAdapter | undefined
 

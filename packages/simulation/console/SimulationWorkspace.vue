@@ -149,6 +149,7 @@ function identityName(id: string) {
 
 const options = computed(() => simulationAccounts(character.value, identities.value, accounts.value).map((item) => ({
   value: item.id, label: identityName(item.identityId) + ' · ' + item.platform + ' · ' + item.instanceKey,
+  isIm: character.value?.simulationImPlatforms.some(platform => platform === item.platform) ?? false,
 })))
 
 async function list(append = false) {
@@ -284,7 +285,7 @@ async function openReview() {
     && (!wasWaiting || view.state === 'WAITING_APPROVAL')) emit('review', view.proposal.id, view.proposal.reviewDecision !== null)
 }
 
-function returnToChat() {
+function returnToSimulation() {
   emit('open')
   void nextTick(() => document.getElementById('simulation-chat-heading')?.focus())
 }
@@ -304,10 +305,11 @@ onMounted(() => {
       <div class="run-left">
         <SimulationChat :base="base" :accounts="options" :can-start="canStart" :selected="previewId"
           :requested-chat="detailId || !followingRoom ? selected?.chatId : undefined"
+          :requested-account="detailId ? selected?.accountId : undefined"
           :focus-composer="showForm" :state-name="stateName"
           :identity="identityName"
           @expired="emit('expired')" @identities="emit('identities')" @open="emit('open', $event)"
-          @latest="chatLatest = $event" @browse="followingRoom = true" @sent="list()" />
+          @latest="chatLatest = $event" @browse="followingRoom = $event" @sent="list()" />
         <details class="console-card run-list" :open="!!runQuery">
           <summary id="run-list-heading" ref="listHeading" tabindex="-1">运行历史</summary>
           <div class="console-section-heading">
@@ -365,7 +367,7 @@ onMounted(() => {
           <UiBadge v-if="selected" :tone="stateTone(selected.state)">{{ selected.chatStop ? '不再待处理' : stateName(selected.state) }}</UiBadge>
           <div v-if="!wide" class="run-actions">
             <UiButton size="small" variant="quiet" :disabled="busy || loadingDetail" @click="refresh">刷新运行</UiButton>
-            <UiButton size="small" variant="quiet" @click="returnToChat">返回群聊</UiButton>
+            <UiButton size="small" variant="quiet" @click="returnToSimulation">返回模拟</UiButton>
           </div>
         </div>
         <UiAlert v-if="resolutionNotice" tone="success" role="status">{{ resolutionNotice }}</UiAlert>

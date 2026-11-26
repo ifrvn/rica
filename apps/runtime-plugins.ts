@@ -48,7 +48,8 @@ export async function startSimulationPlatforms(env = process.env, service?: stri
   const host = await startHost<PlatformAdapter>('platform', simulationPlatformDefinitions, ids.map((id) => ({ id })), service)
   const resolveAdapter: ResolveSimulationAdapter = (id) => {
     const plugin = host.find(id)
-    return plugin && { adapterId: plugin.id, adapterVersion: plugin.version, adapterContractVersion: plugin.contractVersion }
+    return plugin && { adapterId: plugin.id, adapterVersion: plugin.version, adapterContractVersion: plugin.contractVersion,
+      isIm: plugin.implementation.isIm }
   }
   return { ...host, resolveAdapter, source, plugins: simulationPlatformCatalog.filter(({ id }) => !!host.find(id)) }
 }

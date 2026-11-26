@@ -64,6 +64,6 @@ function mockB(payload: unknown): NormalizedPlatformEvent {
 }
 
 export const simulationPlatforms: readonly Plugin<PlatformAdapter>[] = [
-  { id: 'mock-a', version: '1.0.0', contractVersion: 1, implementation: { normalize: mockA } },
-  { id: 'mock-b', version: '1.0.0', contractVersion: 1, implementation: { normalize: mockB } },
+  { id: 'mock-a', version: '1.0.0', contractVersion: 1, implementation: { isIm: true, normalize: mockA } },
+  { id: 'mock-b', version: '1.0.0', contractVersion: 1, implementation: { isIm: false, normalize: mockB } },
 ]

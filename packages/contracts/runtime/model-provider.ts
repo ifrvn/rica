@@ -43,10 +43,10 @@ export type ModelProvider = Readonly<{
     capture: CaptureSystemPrompt): Promise<unknown>
   review?(prompt: string, reply: PublicReplyReview, signal: AbortSignal, attribution?: ModelAttribution,
     capture?: CaptureModelCall): Promise<unknown>
-  decide(input: ModelInput & Readonly<{ context: RunContinuity; conversation?: ModelConversation; groupChat?: boolean; participation?: Participation;
+  decide(input: ModelInput & Readonly<{ context: RunContinuity; conversation?: ModelConversation; isIm?: boolean; participation?: Participation;
     identityPrompt?: string; capture?: CaptureModelCall; glossary?: readonly GlossaryReference[];
     glossaryExamples?: readonly { speaker: string; message: string }[] }>, signal: AbortSignal): Promise<unknown>
   write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
-    attribution?: ModelAttribution; conversation?: ModelConversation; groupChat?: boolean; capture?: CaptureModelCall;
+    attribution?: ModelAttribution; conversation?: ModelConversation; isIm?: boolean; capture?: CaptureModelCall;
     glossary?: readonly GlossaryReference[] }>, signal: AbortSignal): Promise<unknown>
 }>

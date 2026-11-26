@@ -114,7 +114,7 @@ async function readChatWritingContext(tx: Prisma.TransactionClient, runId: strin
 // Internal simulation only. The trusted caller supplies the writing scope separately from message text.
 async function buildSimulatedDraft(
   db: PrismaClient, runId: string, text: string, writingRequest: WritingRequest,
-  provider: ModelProvider, signal: AbortSignal, observe?: {
+  provider: ModelProvider, signal: AbortSignal, isIm = false, observe?: {
     model: string
     skip: (reason: DraftSkipReason) => void
     decision: (decision: ParticipationDecision) => void
@@ -131,20 +131,19 @@ async function buildSimulatedDraft(
     const evidence = await readEvidence(tx, runId, decisionRequest)
     const context = evidence && await loadRunContinuity(tx, runId)
     if (!context || !await captureSelfModelSnapshot(tx, runId, context.characterId, context.self.facts)) return null
-    const [profile] = await tx.$queryRaw<{ prompt: string | null; participation: string | null; group_chat: boolean }[]>`
-      SELECT prompt, group_chat, public.rica_simulation_participation(${runId}::uuid) AS participation
+    const [profile] = await tx.$queryRaw<{ prompt: string | null; participation: string | null }[]>`
+      SELECT prompt, public.rica_simulation_participation(${runId}::uuid) AS participation
       FROM public.rica_simulated_writing_profile(${runId}::uuid)
     `
     if (!profile) return null
-    const conversation = writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
-    const groupChat = conversation !== undefined || (writingRequest.purpose === 'PUBLIC_REFERENCE' && profile.group_chat)
+    const conversation = isIm && writingRequest.purpose === 'PUBLIC_REFERENCE' ? await readChatWritingContext(tx, runId) : undefined
     const identityPrompt = profile.prompt ?? undefined
     const participation = resolveParticipation(profile.participation, identityPrompt)
     const localGlossary = conversation && provider.hostedModel ? await readChatGlossary(tx, runId) : undefined
     const glossary = localGlossary && conversation
       ? matchChatGlossary(localGlossary, text, conversation.history.slice(-2).map(({ message }) => message)) : []
     const examples = localGlossary && observe ? learningExamples(localGlossary) : undefined
-    const input = { text, evidence, context, conversation, groupChat, identityPrompt, participation,
+    const input = { text, evidence, context, conversation, isIm, identityPrompt, participation,
       glossary: glossary.length ? glossaryReferences(glossary) : undefined, glossaryExamples: examples } as const
     const outputUnits = examples ? 1024 : 64
     if (await reserveModelBudget(tx, runId, input, outputUnits)) return { input, localGlossary, glossary, outputUnits }
@@ -204,7 +203,7 @@ async function buildSimulatedDraft(
     if (!await glossaryStillAvailable(tx, runId, glossary)) return null
     const conversation = decisionInput.conversation
     const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined, conversation,
-      groupChat: decisionInput.groupChat,
+      isIm,
       corePrompt: profile.corePrompt ?? undefined, glossary: decisionInput.glossary }
     const outputUnits = maxSimulatedTextLength * 4 + 1024
     if (!await reserveModelBudget(tx, runId, input, outputUnits)) {
@@ -233,7 +232,7 @@ async function buildSimulatedDraft(
     return null
   }
   if ([' ', ''].some(separator => containsWritingPrompt(draft.messages.join(separator), writing.corePrompt, writing.identityPrompt))) return null
-  return { draft, conversation: writing.conversation, decisionRevisions, glossary,
+  return { draft, conversation: writing.conversation, isIm, decisionRevisions, glossary,
     writingRevisions: allowedRevisions, selfRevisions, goalVersions, beliefVersions }
 }
 
@@ -255,7 +254,7 @@ async function recheckDraft(
   return !!context && evidenceMatches(context.self.facts, candidate.selfRevisions)
     && context.goals.map(({ id, version }) => id + ':' + version).join(',') === candidate.goalVersions
     && JSON.stringify(beliefRefs(context)) === JSON.stringify(candidate.beliefVersions)
-    && (request.purpose !== 'PUBLIC_REFERENCE'
+    && (!candidate.isIm || request.purpose !== 'PUBLIC_REFERENCE'
       || JSON.stringify(await readChatWritingContext(tx, runId)) === JSON.stringify(candidate.conversation))
 }
 
@@ -294,7 +293,8 @@ export async function processSimulatedDraft(
     `)[0]?.platform
     const adapter = platform ? resolveAdapter(platform) : undefined
     if (!adapter || (inbound.adapterId !== null
-      && (inbound.adapterId !== adapter.adapterId || inbound.adapterVersion !== adapter.adapterVersion))) return null
+      && (inbound.adapterId !== adapter.adapterId || inbound.adapterVersion !== adapter.adapterVersion))
+      || (inbound.consoleSpeakerId && !adapter.isIm)) return null
     const { messageText } = await tx.inboundEvent.findUniqueOrThrow({
       where: { id: run.inboundEventId }, select: { messageText: true },
     })
@@ -330,7 +330,7 @@ export async function processSimulatedDraft(
   let participationDecision: ParticipationDecision | undefined
   let learnedTerms: ReturnType<typeof sourcesForTerms> = []
   const candidate = request && text !== null && !input?.stop
-    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal, {
+    ? await buildSimulatedDraft(db, run.id, text, request, model.implementation, signal, input?.adapter.isIm === true, {
       model: `${modelId}/${modelVersion}`,
       skip: reason => { skipReason = reason },
       decision: decision => { participationDecision = decision },
@@ -362,9 +362,10 @@ export async function processSimulatedDraft(
       const content = accepted ? candidate.draft.payload : null
       const adapter = target ? resolveAdapter(target.platform) : undefined
       const proposed = accepted && target && target.platform === input?.platform
-        && adapter && matchesSimulationAdapter(input.adapter, adapter) && content
+        && adapter && input.adapter.isIm === adapter.isIm && matchesSimulationAdapter(input.adapter, adapter) && content
         && content.length <= maxSimulatedTextLength
       if (proposed) {
+        const { isIm: _isIm, ...adapterBinding } = adapter
         const settings = await tx.character.findUniqueOrThrow({
           where: { id: run.characterId }, select: { autoReviewEnabled: true, simulationProposalHours: true },
         })
@@ -373,7 +374,7 @@ export async function processSimulatedDraft(
         const crossPlatformDuplicate = bound?.crossPlatformDuplicate ?? false
         const autoReview = review && settings.autoReviewEnabled && target.audience === 'PUBLIC' && !crossPlatformDuplicate
         const reviewDigest = createHash('sha256').update(JSON.stringify({
-          payloadHash, target, ...adapter, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
+          payloadHash, target, ...adapterBinding, expiresAt: expiresAt.toISOString(), crossPlatformDuplicate,
           kind: 'REPLY', mode: run.mode, policyVersion: simulationReviewPolicyVersion,
           characterId: run.characterId, runId: run.id, coreVersion: run.coreVersion,
           identityVersion: run.identityVersion, bindingVersion: run.bindingVersion, authEpoch: run.authEpoch,
@@ -399,7 +400,7 @@ export async function processSimulatedDraft(
         const action = await tx.actionProposal.create({
           data: {
             characterId: run.characterId, runId: run.id, target, payloadHash, reviewDigest,
-            policyVersion: simulationReviewPolicyVersion, ...adapter, expiresAt, crossPlatformDuplicate,
+            policyVersion: simulationReviewPolicyVersion, ...adapterBinding, expiresAt, crossPlatformDuplicate,
             autoReviewUntil: autoReview ? new Date(Date.now() + 12_000) : undefined,
           }, select: { id: true },
         })

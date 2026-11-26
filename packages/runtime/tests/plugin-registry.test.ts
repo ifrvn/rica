@@ -6,7 +6,8 @@ import { PluginHostError, startPluginHost, type PluginDefinition } from '@ricajs
 test('registration rejects duplicate IDs, incompatible contracts and unknown model configuration', async () => {
   const enabled = await startCognitionPlugins({})
   assert.equal(enabled.model.id, 'simulated')
-  assert.deepEqual(enabled.resolveAdapter('mock-a'), { adapterId: 'mock-a', adapterVersion: '1.0.0', adapterContractVersion: 1 })
+  assert.deepEqual(enabled.resolveAdapter('mock-a'), { adapterId: 'mock-a', adapterVersion: '1.0.0', adapterContractVersion: 1, isIm: true })
+  assert.equal(enabled.resolveAdapter('mock-b')?.isIm, false)
   assert.equal(enabled.resolveAdapter('mock-b')?.adapterVersion, '1.0.0')
   await enabled.stop()
   const selected = await startSimulationPlatforms({ RICA_SIMULATED_PLATFORMS: 'mock-b' })

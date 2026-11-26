@@ -616,6 +616,7 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
   const adminWorkspace = await request('GET', characterPath(a))
   assert.equal(adminWorkspace.status, 200)
   assert.deepEqual(adminWorkspace.body.simulationPlatforms, ['mock-a', 'mock-b'])
+  assert.deepEqual(adminWorkspace.body.simulationImPlatforms, ['mock-a'])
   const membersPath = characterPath(a) + '/memberships'
   const firstMembers = await request('GET', membersPath + '?limit=1')
   assert.equal(firstMembers.status, 200, JSON.stringify(firstMembers.body))
@@ -3428,6 +3429,14 @@ test('console simulation runs use an isolated conversation, one approval and one
   await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
   await owner.platformAccount.update({ where: { id: account.id }, data: { status: 'ACTIVE' } })
   const data = { ...input, accountId: account.id }
+  const feedIdentity = await owner.identity.create({ data: { characterId, slug: 'console-feed-persona' } })
+  const feedAccount = await owner.platformAccount.create({ data: { characterId, identityId: feedIdentity.id,
+    platform: 'mock-b', instanceKey: 'console-fixture', remoteAccountId: randomUUID(), status: 'PAUSED' } })
+  const notIm = await request('POST', path, { key: randomUUID(), data: {
+    ...data, accountId: feedAccount.id, chatId: randomUUID(), speaker: '访客',
+  } })
+  assert.equal(notIm.status, 422)
+  assert.equal(notIm.body.error.code, 'SIMULATION_ACCOUNT_NOT_IM')
   const key = randomUUID()
   const [first, duplicate] = await Promise.all([
     request('POST', path, { key, data }), request('POST', path, { key, data }),
@@ -3695,7 +3704,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     const newIdentityId: string = newIdentity.body.id
     await owner.identity.update({ where: { id: newIdentityId }, data: { status: 'ACTIVE' } })
     const newAccount = await owner.platformAccount.create({ data: {
-      characterId, identityId: newIdentityId, status: 'ACTIVE', platform: 'mock-b',
+      characterId, identityId: newIdentityId, status: 'ACTIVE', platform: 'mock-a',
       instanceKey: 'console-fixture', remoteAccountId: randomUUID(),
     } })
     const secondTurn = await send('小周', '刚才那套方案包含运费吗？', randomUUID(), newAccount.id)
@@ -3740,7 +3749,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     const secondAction = await owner.actionProposal.findUniqueOrThrow({ where: { runId: secondTurn.body.id } })
     const secondProposal = character + '/actions/' + secondAction.id
     const approvalPreview = await request('GET', secondProposal)
-    assert.equal(approvalPreview.body.target.platform, 'mock-b')
+    assert.equal(approvalPreview.body.target.platform, 'mock-a')
     assert.deepEqual(approvalPreview.body.messageContext.previous.map(({ content }: { content: string }) =>
       content), ['我们在比较两套方案。'])
     assert.equal((await request('POST', secondProposal + '/decisions', {
