@@ -5,7 +5,7 @@ import { maxSimulatedTextLength, matchesSimulationAdapter, simulationMessageSepa
 import { autoReviewSimulation, simulationReviewPolicyVersion } from './review.js'
 import type { ReviewPublicReply } from '@ricajs/contracts/auto-review'
 import { containsWritingPrompt } from '@ricajs/runtime/writing-prompts'
-import { maxChatReplyMessages, ModelProviderError, resolveParticipation, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
+import { chatDraftDecision, maxChatReplyMessages, ModelProviderError, resolveParticipation, replyDecision, type ModelEvidence, type ModelProvider, type Participation,
   type ReplyDecision, type WritingStyle } from '@ricajs/contracts/model-provider'
 import { localSimulationModel } from '../adapters/model.js'
 import type { Plugin } from '@ricajs/plugin-host'
@@ -37,17 +37,22 @@ function invalidModelOutput(error: unknown) {
   return error instanceof ModelProviderError && error.code === 'INVALID_OUTPUT'
 }
 
-async function readParticipationDecision(provider: ModelProvider, input: Parameters<ModelProvider['decide']>[0], signal: AbortSignal) {
+async function readDecisionOutput(call: () => Promise<unknown>, signal: AbortSignal) {
   signal.throwIfAborted()
   let output: unknown
   try {
-    output = await provider.decide(input, signal)
+    output = await call()
   } catch (error) {
     signal.throwIfAborted()
     if (invalidModelOutput(error)) return null
     throw error
   }
   signal.throwIfAborted()
+  return output
+}
+
+async function readParticipationDecision(provider: ModelProvider, input: Parameters<ModelProvider['decide']>[0], signal: AbortSignal) {
+  const output = await readDecisionOutput(() => provider.decide(input, signal), signal)
   const structured = output && typeof output === 'object' && 'action' in output && 'reason' in output
     ? { action: output.action, reason: output.reason } : output
   const decision = replyDecision.safeParse(structured === 'NO_OP' ? { action: 'NO_OP', reason: 'BYSTANDER' }
@@ -127,6 +132,21 @@ async function buildSimulatedDraft(
   if (!await captureMemorySnapshot(db, runId, writingRequest, text)
     || !await captureMemorySnapshot(db, runId, decisionRequest, text)) return null
 
+  const writingOutputUnits = maxSimulatedTextLength * 4 + 1024
+  async function readWritingInput(tx: Prisma.TransactionClient, context: RunContinuity, glossary: GlossarySnapshot) {
+    const evidence = await readEvidence(tx, runId, writingRequest)
+    if (!evidence) return null
+    const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null; corePrompt: string | null }[]>`
+      SELECT style, prompt, public.rica_simulation_core_prompt(${runId}::uuid) AS "corePrompt"
+      FROM public.rica_simulated_writing_profile(${runId}::uuid)
+    `
+    if (!profile || !await glossaryStillAvailable(tx, runId, glossary)) return null
+    const { characterId, identityId, platform } = context
+    return { text, evidence, style: profile.style, time: { ...context.time }, identityPrompt: profile.prompt ?? undefined,
+      isIm, corePrompt: profile.corePrompt ?? undefined, glossary: glossary.length ? glossaryReferences(glossary) : undefined,
+      attribution: { characterId, identityId, platform } }
+  }
+
   const prepared = await db.$transaction(async (tx) => {
     const evidence = await readEvidence(tx, runId, decisionRequest)
     const context = evidence && await loadRunContinuity(tx, runId)
@@ -142,38 +162,74 @@ async function buildSimulatedDraft(
     const localGlossary = conversation && provider.hostedModel ? await readChatGlossary(tx, runId) : undefined
     const glossary = localGlossary && conversation
       ? matchChatGlossary(localGlossary, text, conversation.history.slice(-2).map(({ message }) => message)) : []
+    if (conversation && provider.participateAndWrite) {
+      const writing = await readWritingInput(tx, context, glossary)
+      if (!writing) return null
+      const visibleMessages = [...conversation.history, { speaker: conversation.speaker, message: text }]
+      const learning = localGlossary && observe && {
+        ...localGlossary,
+        examples: localGlossary.examples.filter(example =>
+          visibleMessages.some(({ speaker, message }) => speaker === example.speaker && message === example.message)),
+      }
+      const glossaryExamples = learning ? learningExamples(learning) : undefined
+      const input = { ...writing, conversation, participation, glossaryExamples }
+      if (await reserveModelBudget(tx, runId, input, writingOutputUnits)) {
+        return { input, context, decisionEvidence: evidence, localGlossary: learning, glossary, combined: provider.participateAndWrite.bind(provider) }
+      }
+      observe?.skip('MODEL_BUDGET_EXHAUSTED')
+      return null
+    }
     const examples = localGlossary && observe ? learningExamples(localGlossary) : undefined
     const input = { text, evidence, context, conversation, isIm, identityPrompt, participation,
       glossary: glossary.length ? glossaryReferences(glossary) : undefined, glossaryExamples: examples } as const
     const outputUnits = examples ? 1024 : 64
-    if (await reserveModelBudget(tx, runId, input, outputUnits)) return { input, localGlossary, glossary, outputUnits }
+    if (await reserveModelBudget(tx, runId, input, outputUnits)) return { input, context, decisionEvidence: evidence, localGlossary, glossary, outputUnits }
     observe?.skip('MODEL_BUDGET_EXHAUSTED')
     return null
   })
   if (!prepared) return null
-  const { input: decisionInput, localGlossary, glossary } = prepared
-  const { evidence: decisionEvidence, context } = decisionInput
+  const { input: decisionInput, context, decisionEvidence, localGlossary, glossary } = prepared
   const selfRevisions = new Map(context.self.facts.map(({ id, revision }) => [id, revision]))
-  const time = { ...context.time }
   const goalVersions = context.goals.map(({ id, version }) => id + ':' + version).join(',')
   const beliefVersions = beliefRefs(context)
 
   signal.throwIfAborted()
   const decisionRevisions = new Map(decisionEvidence.map(({ id, revision }) => [id, revision]))
-  const captureDecision = observe && provider.hostedModel && writingRequest.purpose === 'PUBLIC_REFERENCE'
-    ? (prompt: string) => recordRunModelCall(db, runId, 'DECISION', observe.model, prompt) : undefined
-  const decisionCall = { ...decisionInput, capture: captureDecision }
-  let result = await readParticipationDecision(provider, decisionCall, signal)
-  if (!result) {
-    if (!await db.$transaction(tx => reserveModelBudget(tx, runId, decisionInput, prepared.outputUnits))) {
-      observe?.skip('MODEL_BUDGET_EXHAUSTED')
-      return null
+  const capture = observe && provider.hostedModel && writingRequest.purpose === 'PUBLIC_REFERENCE'
+    ? (stage: 'DECISION' | 'WRITING' | 'DECISION_AND_WRITING') =>
+      (prompt: string) => recordRunModelCall(db, runId, stage, observe.model, prompt) : undefined
+  let result: { decision: ReplyDecision; output: unknown } | null = null
+  let combinedMessages: string[] | undefined
+  let combinedRevisions: Map<string, number> | undefined
+  if (prepared.combined) {
+    const { input, combined } = prepared
+    combinedRevisions = new Map(input.evidence.map(({ id, revision }) => [id, revision]))
+    const output = await readDecisionOutput(() => combined({ ...input, capture: capture?.('DECISION_AND_WRITING') }, signal), signal)
+    const parsed = chatDraftDecision.safeParse(output)
+    if (parsed.success) {
+      const { action, reason } = parsed.data
+      if (action === 'REPLY') {
+        combinedMessages = parsed.data.messages
+        result = { decision: { action, reason }, output: parsed.data }
+      } else {
+        result = { decision: { action, reason }, output: parsed.data }
+      }
     }
+  } else {
+    const decisionCall = { ...prepared.input, capture: capture?.('DECISION') }
     result = await readParticipationDecision(provider, decisionCall, signal)
     if (!result) {
-      observe?.skip('MODEL_DECISION_INVALID_OUTPUT')
-      return null
+      const { input, outputUnits } = prepared
+      if (!await db.$transaction(tx => reserveModelBudget(tx, runId, input, outputUnits))) {
+        observe?.skip('MODEL_BUDGET_EXHAUSTED')
+        return null
+      }
+      result = await readParticipationDecision(provider, decisionCall, signal)
     }
+  }
+  if (!result) {
+    observe?.skip('MODEL_DECISION_INVALID_OUTPUT')
+    return null
   }
   const { decision, output: outputDecision } = result
   if (localGlossary && decisionInput.glossaryExamples && outputDecision && typeof outputDecision === 'object' && 'glossaryCandidates' in outputDecision) {
@@ -185,7 +241,7 @@ async function buildSimulatedDraft(
     return null
   }
 
-  const writing = await db.$transaction(async (tx) => {
+  const writing = prepared.combined ? prepared.input : await db.$transaction(async (tx) => {
     if (decisionInput.conversation) {
       const stop = await readChatReplyStop(tx, runId, decision.reason)
       if (stop) {
@@ -193,36 +249,25 @@ async function buildSimulatedDraft(
         return null
       }
     }
-    const evidence = await readEvidence(tx, runId, writingRequest)
-    if (!evidence) return null
-    const [profile] = await tx.$queryRaw<{ style: WritingStyle; prompt: string | null; corePrompt: string | null }[]>`
-      SELECT style, prompt, public.rica_simulation_core_prompt(${runId}::uuid) AS "corePrompt"
-      FROM public.rica_simulated_writing_profile(${runId}::uuid)
-    `
-    if (!profile) return null
-    if (!await glossaryStillAvailable(tx, runId, glossary)) return null
-    const conversation = decisionInput.conversation
-    const input = { text, evidence, style: profile.style, time, identityPrompt: profile.prompt ?? undefined, conversation,
-      isIm,
-      corePrompt: profile.corePrompt ?? undefined, glossary: decisionInput.glossary }
-    const outputUnits = maxSimulatedTextLength * 4 + 1024
-    if (!await reserveModelBudget(tx, runId, input, outputUnits)) {
+    const input = await readWritingInput(tx, context, glossary)
+    if (!input) return null
+    const { attribution, ...writingInput } = input
+    const writing = { ...writingInput, conversation: decisionInput.conversation }
+    if (!await reserveModelBudget(tx, runId, writing, writingOutputUnits)) {
       observe?.skip('MODEL_BUDGET_EXHAUSTED')
       return null
     }
-    const { characterId, identityId, platform } = context
-    return { ...input, attribution: { characterId, identityId, platform } }
+    return { ...writing, attribution }
   })
   if (!writing) return null
 
   // Preserve the authorized revisions independently of the objects passed to the provider.
-  const allowedRevisions = new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
+  const allowedRevisions = combinedRevisions ?? new Map(writing.evidence.map(({ id, revision }) => [id, revision]))
   signal.throwIfAborted()
-  const captureWriting = captureDecision && observe
-    ? (prompt: string) => recordRunModelCall(db, runId, 'WRITING', observe.model, prompt) : undefined
   let draft: ReturnType<typeof validateDraft>
   try {
-    const output = await provider.write({ ...writing, capture: captureWriting }, signal)
+    const output = prepared.combined ? { messages: combinedMessages, evidenceIds: [...allowedRevisions.keys()] }
+      : await provider.write({ ...writing, capture: capture?.('WRITING') }, signal)
     signal.throwIfAborted()
     draft = validateDraft(output, allowedRevisions, !!writing.conversation)
   } catch (error) {

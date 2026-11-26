@@ -119,6 +119,29 @@ test('hosted chat writing requests and returns separate messages in order', asyn
   }
 })
 
+test('hosted public chat combines participation and writing without sending internal context', async (t) => {
+  const conversation = { speaker: '小林', history: [] }
+  const reply = { action: 'REPLY', reason: 'DIRECT_REQUEST', messages: ['下午三点。'] }
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const { messages } = JSON.parse(String(options.body))
+    assert.match(messages[0].content, /Participation: balanced/u)
+    assert.match(messages[0].content, /For NO_OP,.*Omit messages/u)
+    assert.ok(messages[0].content.includes(input.identityPrompt))
+    assert.deepEqual(JSON.parse(messages[1].content), {
+      message: input.text, conversation, localDate: input.time.localDate, references: [input.evidence[0].content],
+    })
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(reply) } }] })
+  })
+  const host = await startObservedModelPlugin({ provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
+  try {
+    const participateAndWrite = host.model.implementation.participateAndWrite!
+    assert.deepEqual(await participateAndWrite({ ...input, conversation, participation: 'balanced' }, AbortSignal.timeout(1_000)), reply)
+    assert.equal(fetch.mock.callCount(), 1)
+  } finally {
+    await host.stop()
+  }
+})
+
 test('hosted participation distinguishes posts, IM messages, and group transcripts', async (t) => {
   const context = {
     ...attribution, runId: 'run', accountId: 'account', triggerId: 'trigger', bindingVersion: 1, mode: 'SIMULATION',

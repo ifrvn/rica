@@ -65,7 +65,7 @@ const stoppedReasons: Record<string, string> = {
 const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }
 const decisionLabels = { DIRECT_REQUEST: '收到直接提问或点名', RELEVANT_TOPIC: '话题适合此身份回应',
   SOCIAL_OPENING: '适合自然接话', ALREADY_ADDRESSED: '话题已回应或重复', BYSTANDER: '适合旁听', UNCLEAR: '对话意图不明确' }
-const modelStage = { DECISION: '参与判断', WRITING: '写作', REVIEW: 'AI 审核' }
+const modelStage = { DECISION: '参与判断', WRITING: '写作', DECISION_AND_WRITING: '参与判断与写作', REVIEW: 'AI 审核' }
 const stopReason = computed(() => stoppedReasons[selected.value?.stateReason ?? selected.value?.chatStop ?? ''])
 const awaitingHuman = computed(() => selected.value?.state === 'WAITING_APPROVAL' && selected.value.manualReviewAllowed && !selected.value.chatStop)
 const modelName = computed(() => [selected.value?.draft?.modelId, selected.value?.draft?.modelVersion].filter(Boolean).join(' · '))
@@ -429,7 +429,7 @@ onMounted(() => {
           </dl>
           <section aria-labelledby="run-prompts-heading" class="run-prompts">
             <h4 id="run-prompts-heading">模型调用</h4>
-            <p v-if="selected.participationDecision && !selected.modelCalls.some(call => call.stage === 'DECISION')">参与决定由本地规则产生。</p>
+            <p v-if="selected.participationDecision && !selected.modelCalls.some(call => call.stage === 'DECISION' || call.stage === 'DECISION_AND_WRITING')">参与决定由本地规则产生。</p>
             <p v-else-if="!selected.modelCalls.length">暂无模型调用记录。</p>
             <details v-for="call in selected.modelCalls" :key="call.id">
               <summary>{{ modelStage[call.stage] }} · {{ call.model }} · {{ formatTime(call.at) }}</summary>

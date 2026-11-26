@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@ricajs/persistence/prisma'
 
-export async function recordRunModelCall(db: PrismaClient, runId: string, stage: 'DECISION' | 'WRITING' | 'REVIEW',
+export async function recordRunModelCall(db: PrismaClient, runId: string, stage: 'DECISION' | 'WRITING' | 'DECISION_AND_WRITING' | 'REVIEW',
   model: string, systemPrompt: string,
 ) {
   const [record] = await db.$queryRaw<{ id: string | null }[]>`

@@ -33,8 +33,19 @@ export const replyDecision = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('NO_OP'), reason: z.enum(['ALREADY_ADDRESSED', 'BYSTANDER', 'UNCLEAR']) }),
 ])
 export type ReplyDecision = z.infer<typeof replyDecision>
+const glossaryCandidates = z.unknown().optional()
+export const chatDraftDecision = z.discriminatedUnion('action', [
+  replyDecision.options[0].extend({
+    messages: z.array(z.string().trim().min(1)).min(1).max(maxChatReplyMessages),
+    glossaryCandidates,
+  }),
+  replyDecision.options[1].extend({ glossaryCandidates }),
+])
 export type CaptureSystemPrompt = (prompt: string) => Promise<void>
 export type CaptureModelCall = (prompt: string) => Promise<void | ((output: string) => Promise<void>)>
+type WritingInput = ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
+  attribution?: ModelAttribution; conversation?: ModelConversation; isIm?: boolean; capture?: CaptureModelCall;
+  glossary?: readonly GlossaryReference[] }>
 
 export type ModelProvider = Readonly<{
   hostedProvider?: string
@@ -46,7 +57,7 @@ export type ModelProvider = Readonly<{
   decide(input: ModelInput & Readonly<{ context: RunContinuity; conversation?: ModelConversation; isIm?: boolean; participation?: Participation;
     identityPrompt?: string; capture?: CaptureModelCall; glossary?: readonly GlossaryReference[];
     glossaryExamples?: readonly { speaker: string; message: string }[] }>, signal: AbortSignal): Promise<unknown>
-  write(input: ModelInput & Readonly<{ style: WritingStyle; time: RunTime; corePrompt?: string; identityPrompt?: string;
-    attribution?: ModelAttribution; conversation?: ModelConversation; isIm?: boolean; capture?: CaptureModelCall;
-    glossary?: readonly GlossaryReference[] }>, signal: AbortSignal): Promise<unknown>
+  write(input: WritingInput, signal: AbortSignal): Promise<unknown>
+  participateAndWrite?(input: WritingInput & Readonly<{ conversation: ModelConversation; participation: Participation;
+    glossaryExamples?: readonly { speaker: string; message: string }[] }>, signal: AbortSignal): Promise<unknown>
 }>

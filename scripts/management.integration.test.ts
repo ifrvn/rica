@@ -3727,6 +3727,13 @@ test('console simulation runs use an isolated conversation, one approval and one
       return owner.outboxEvent.findFirstOrThrow({ where: { runId: turn, type: draftQueuedEvent } })
     }
     await owner.character.update({ where: { id: characterId }, data: { autoReviewEnabled: true } })
+    const decisionOnlyMemory = await owner.memory.create({ data: {
+      characterId, identityId, scope: 'IDENTITY', visibility: 'PERSONAL', content: '比较两套方案的私人备注。',
+    } })
+    const privateSource = await owner.sourceRecord.create({ data: {
+      characterId, identityId, kind: 'fixture', sourceKey: randomUUID(), classification: 'PERSONAL',
+    } })
+    await owner.memorySource.create({ data: { characterId, memoryId: decisionOnlyMemory.id, sourceId: privateSource.id } })
     const firstKey = randomUUID()
     const firstTurn = await send('小林', '我们在比较两套方案。', firstKey)
     assert.equal(firstTurn.status, 201, JSON.stringify(firstTurn.body))
@@ -3734,21 +3741,21 @@ test('console simulation runs use an isolated conversation, one approval and one
     const firstDraft = await prepareTurn(firstTurn.body.id)
     const firstReplay = path + '/' + firstTurn.body.id + '/replay'
     let reviewObserved = false
-    const decisionOutput = '{\n  "action": "REPLY", "reason": "SOCIAL_OPENING"\n}'
     const reviewOutput = '{"status":"APPROVE","reason":"讨论相关的低风险回复。"}'
     const chatMessages = ['我看到了。', '两套方案我都在看。\n先比较运费吧。']
-    const writingOutput = JSON.stringify(chatMessages)
-    const tracedModel = { ...localSimulationModel, implementation: {
+    const combinedOutput = JSON.stringify({ action: 'REPLY', reason: 'SOCIAL_OPENING', messages: chatMessages })
+    const combinedPrompt = 'Participation and writing system prompt\nOriginal identity context'
+    const tracedModel: typeof localSimulationModel = { ...localSimulationModel, implementation: {
       hostedModel: 'fixture',
-      async decide(input: Parameters<typeof localSimulationModel.implementation.decide>[0]) {
-        const captureOutput = await input.capture?.('Participation system prompt\nOriginal identity context')
-        if (captureOutput) await captureOutput(decisionOutput)
-        return JSON.parse(decisionOutput)
-      },
-      async write(input: Parameters<typeof localSimulationModel.implementation.write>[0]) {
-        const captureOutput = await input.capture?.('Writing system prompt\nOriginal identity context')
-        if (captureOutput) await captureOutput(writingOutput)
-        return { messages: chatMessages, evidenceIds: [] }
+      async decide() { assert.fail('Unexpected separate decision') },
+      async write() { assert.fail('Unexpected separate writing') },
+      async participateAndWrite(input) {
+        assert.equal(input.conversation.speaker, '小林')
+        assert.ok(!('context' in input))
+        assert.ok(!input.evidence.some(({ id }) => id === decisionOnlyMemory.id))
+        const captureOutput = await input.capture?.(combinedPrompt)
+        if (captureOutput) await captureOutput(combinedOutput)
+        return JSON.parse(combinedOutput)
       },
     } }
     await processSimulatedDraft(runtime, firstDraft.eventId, simulationPlatforms.resolveAdapter, tracedModel, undefined, async (_settings, reply, _attribution, capture) => {
@@ -3783,11 +3790,12 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.equal(automatic.body.chatId, chatId)
     assert.equal(automatic.body.autoReviewPending, false)
     assert.equal(automatic.body.autoApproved, true)
+    assert.ok(automatic.body.snapshots.find(({ purpose }: { purpose: string }) => purpose === 'DECISION_SUPPORT')
+      .evidence.some(({ memoryId }: { memoryId: string }) => memoryId === decisionOnlyMemory.id))
     assert.deepEqual(automatic.body.modelCalls.map(({ stage, systemPrompt, output }: {
       stage: string; systemPrompt: string; output: string
     }) => [stage, systemPrompt, output]), [
-      ['DECISION', 'Participation system prompt\nOriginal identity context', decisionOutput],
-      ['WRITING', 'Writing system prompt\nOriginal identity context', writingOutput],
+      ['DECISION_AND_WRITING', combinedPrompt, combinedOutput],
       ['REVIEW', 'Review system prompt\nOriginal policy', reviewOutput],
     ])
     assert.match((await request('GET', character + '/actions/' + automatic.body.proposal.id)).body.review.reason,
@@ -3842,11 +3850,19 @@ test('console simulation runs use an isolated conversation, one approval and one
     ] })
     const quietTurn = await send('小周', '明天交作业哈哈', randomUUID(), newAccount.id)
     const quietDraft = await prepareTurn(quietTurn.body.id)
-    await processSimulatedDraft(runtime, quietDraft.eventId, simulationPlatforms.resolveAdapter, localSimulationModel)
+    await processSimulatedDraft(runtime, quietDraft.eventId, simulationPlatforms.resolveAdapter, {
+      ...tracedModel, implementation: { ...tracedModel.implementation, async participateAndWrite(input) {
+        const decision = { action: 'NO_OP', reason: 'BYSTANDER' }
+        const captureOutput = await input.capture?.(combinedPrompt)
+        if (captureOutput) await captureOutput(JSON.stringify(decision))
+        return decision
+      } },
+    }, undefined, async () => { assert.fail('Unexpected review of a skipped reply') })
     const quietReplay = await request('GET', path + '/' + quietTurn.body.id + '/replay')
     assert.deepEqual(quietReplay.body.participationDecision, { participation: 'balanced', action: 'NO_OP', reason: 'BYSTANDER' })
     assert.equal(quietReplay.body.state, 'SKIPPED')
     assert.equal(quietReplay.body.proposal, null)
+    assert.deepEqual(quietReplay.body.modelCalls.map(({ stage }: { stage: string }) => stage), ['DECISION_AND_WRITING'])
     assert.equal((await request('GET', chatPath, { actor: 'nonmember' })).status, 404)
     assert.equal((await request('GET', characterPath(b) + '/simulation-chats/' + chatId, { actor: 'admin-b' })).status, 404)
     assert.deepEqual((await request('GET', characterPath(b) + '/simulation-chats', { actor: 'admin-b' })).body.items, [])
@@ -3908,7 +3924,7 @@ test('console simulation runs use an isolated conversation, one approval and one
       assert.equal(Boolean(replay.body.proposal), action === 'REPLY')
     }
     await owner.character.update({ where: { id: characterId }, data: { authEpoch: { increment: 1 } } })
-    const revoked = (await request('GET', firstReplay)).body.modelCalls.find(({ stage }: { stage: string }) => stage === 'WRITING')
+    const revoked = (await request('GET', firstReplay)).body.modelCalls.find(({ stage }: { stage: string }) => stage === 'DECISION_AND_WRITING')
     assert.equal(revoked.output, null)
   } finally {
     await Promise.all([runtime.$disconnect(), executor.$disconnect()])
