@@ -24,7 +24,7 @@ const props = defineProps<{
   characters: Character[]; moreCharacters: boolean;
 }>()
 const emit = defineEmits<{
-  created: [character: Workspace]; updated: [character: Workspace]; expired: [];
+  created: [character: Workspace]; updated: [character: Character]; expired: [];
   account: [id?: string]; proposals: [platform: string, accountId: string, proposalId?: string]; selectCharacter: [id: string]; loadCharacters: [];
 }>()
 const workspace = ref<Workspace>()
@@ -212,6 +212,10 @@ function status(value: string) {
   return labels[value] ?? value
 }
 
+function stateAction(value: string) {
+  return value === 'ACTIVE' ? '暂停' : value === 'PAUSED' ? '恢复' : '启用'
+}
+
 async function all<T>(path: string) {
   const items: T[] = []
   let cursor: string | null = null
@@ -346,6 +350,28 @@ function command(path: string, data: object, version?: number) {
     headers['If-Match'] = '"' + version + '"'
   }
   return request<{ id: string }>(path, { method: version === undefined ? 'POST' : 'PUT', headers, body })
+}
+
+function changeState(scope: 'CHARACTER' | 'IDENTITY', item: Character | Identity, name: string) {
+  const action = stateAction(item.status)
+  const pause = item.status === 'ACTIVE'
+  const status = pause ? 'PAUSED' : 'ACTIVE'
+  const characterId = scope === 'CHARACTER' ? item.id : props.characterId
+  void run(async () => {
+    await command('/v1/characters/' + encodeURIComponent(characterId) + '/controls', {
+      scope, scopeId: item.id, operation: pause ? 'PAUSE' : 'RESUME',
+    })
+    if (!active) return
+    pending = undefined
+    if (scope === 'CHARACTER') {
+      if (workspace.value?.id === item.id) workspace.value = { ...workspace.value, status }
+      const character = props.characters.find(({ id }) => id === item.id)
+      if (character) emit('updated', { ...character, status })
+    } else {
+      identities.value = identities.value.map((identity) => identity.id === item.id ? { ...identity, status } : identity)
+    }
+    notice.value = `已${action}${scope === 'CHARACTER' ? '角色' : '身份'}「${name}」。`
+  })
 }
 
 async function save() {
@@ -569,18 +595,25 @@ onMounted(() => { if (props.characterId) void run(load) })
           <UiButton v-if="canCreate" size="small" :tone="characters.length ? 'default' : 'primary'" :disabled="busy" @click="open('character')">新建角色</UiButton>
         </div>
         <UiEmpty v-if="!characters.length" :description="canCreate ? '尚未创建角色。' : '当前账号没有可访问的角色。'" />
-        <ul v-else class="role-list">
-          <li v-for="character in characters" :key="character.id" class="role-row">
-            <button type="button" class="role-select" :disabled="busy" :aria-pressed="character.id === characterId"
-              @click="emit('selectCharacter', character.id)">
-              <span class="role-title"><strong>{{ character.profile?.name || character.slug }}</strong>
-                <UiBadge :tone="character.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(character.status) }}</UiBadge></span>
-              <span class="role-note workspace-muted">{{ character.profile?.aiDisclosure || character.timezone }}</span>
-            </button>
-            <button v-if="character.id === characterId && admin && workspace?.version" class="role-settings" type="button"
-              :aria-label="'设置角色 ' + (character.profile?.name || character.slug)" :disabled="busy" @click="open('core')">
-              <span class="i-lucide-settings" aria-hidden="true" />
-            </button>
+        <ul v-else class="record-list">
+          <li v-for="character in characters" :key="character.id" class="record-row" :class="{ 'role-selected': character.id === characterId }">
+            <div class="record-header">
+              <button type="button" class="record-name role-select" :disabled="busy" :aria-pressed="character.id === characterId"
+                @click="emit('selectCharacter', character.id)">{{ character.profile?.name || character.slug }}</button>
+              <UiBadge class="record-status" :tone="character.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(character.status) }}</UiBadge>
+              <button v-if="character.id === characterId && admin && workspace?.version" class="row-icon-button record-settings" type="button"
+                :aria-label="'设置角色 ' + (character.profile?.name || character.slug)" title="设置角色"
+                :disabled="busy" @click="open('core')">
+                <span class="i-lucide-settings" aria-hidden="true" />
+              </button>
+              <button v-if="character.version != null" class="row-icon-button record-control" type="button" :aria-disabled="busy"
+                :aria-label="stateAction(character.status) + '角色 ' + (character.profile?.name || character.slug)"
+                :title="stateAction(character.status) + '角色'"
+                @click="changeState('CHARACTER', character, character.profile?.name || character.slug)">
+                <span :class="character.status === 'ACTIVE' ? 'i-lucide-pause' : 'i-lucide-play'" aria-hidden="true" />
+              </button>
+            </div>
+            <span class="role-note workspace-muted">{{ character.profile?.aiDisclosure || character.timezone }}</span>
           </li>
         </ul>
         <UiButton v-if="moreCharacters" variant="text" size="small" :disabled="busy" @click="emit('loadCharacters')">加载更多角色</UiButton>
@@ -596,15 +629,20 @@ onMounted(() => { if (props.characterId) void run(load) })
         <UiSpinner v-if="busy && !workspace" aria-label="正在加载身份" />
         <UiButton v-else-if="!workspace && characterId && error && !editor" size="small" @click="run(load)">重新加载</UiButton>
         <UiEmpty v-else-if="!identities.length" :description="workspace ? '尚未添加身份。' : '选择角色后查看身份。'" />
-        <ul v-else class="workspace-list">
-          <li v-for="identity in identities" :key="identity.id" class="identity-row">
-            <div class="workspace-row">
-              <button v-if="admin && identity.version" class="identity-name" type="button" :disabled="busy"
-                :aria-label="'编辑身份 ' + identityName(identity)" @click="open('identity-edit', identity)">
-                {{ identityName(identity) }}<span class="i-lucide-pencil edit-icon" aria-hidden="true" />
+        <ul v-else class="record-list">
+          <li v-for="identity in identities" :key="identity.id" class="record-row">
+            <div class="record-header">
+              <strong class="record-name">{{ identityName(identity) }}</strong>
+              <UiBadge class="record-status" :tone="identity.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(identity.status) }}</UiBadge>
+              <button v-if="admin && identity.version" class="row-icon-button record-settings" type="button"
+                :aria-label="'编辑身份 ' + identityName(identity)" title="编辑身份" :disabled="busy" @click="open('identity-edit', identity)">
+                <span class="i-lucide-settings" aria-hidden="true" />
               </button>
-              <strong v-else>{{ identityName(identity) }}</strong>
-              <UiBadge :tone="identity.status === 'ACTIVE' ? 'success' : 'warning'">{{ status(identity.status) }}</UiBadge>
+              <button v-if="admin && identity.version != null" class="row-icon-button record-control" type="button" :aria-disabled="busy"
+                :aria-label="stateAction(identity.status) + '身份 ' + identityName(identity)" :title="stateAction(identity.status) + '身份'"
+                @click="changeState('IDENTITY', identity, identityName(identity))">
+                <span :class="identity.status === 'ACTIVE' ? 'i-lucide-pause' : 'i-lucide-play'" aria-hidden="true" />
+              </button>
             </div>
             <div v-if="accountsByIdentity.has(identity.id)" class="workspace-actions">
               <template v-for="account in accountsByIdentity.get(identity.id)" :key="account.id">
@@ -701,21 +739,25 @@ onMounted(() => { if (props.characterId) void run(load) })
 .character-list, .identity-list { min-width: 0; }
 .character-columns .character-list { padding-inline-end: 1rem; }
 .identity-list { padding-inline-start: 1rem; border-inline-start: 1px solid var(--console-line); }
-.role-list { list-style: none; margin: 0; padding: 0; }
-.role-row { position: relative; border-top: 1px solid var(--console-line); }
-.role-select, .role-settings, .identity-name { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-.role-select { display: grid; gap: .35rem; width: 100%; padding: .75rem 2.75rem .75rem .625rem; text-align: start; }
-.role-select:enabled:hover, .role-settings:enabled:hover { background: var(--console-hover); }
-.role-select[aria-pressed="true"] { background: var(--console-selected); }
-.role-title { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; overflow-wrap: anywhere; }
+.character-columns .console-section-heading { align-items: center; min-block-size: 2rem; }
+.record-list { --record-action-size: 2rem; list-style: none; margin: 0; padding: 0; }
+.record-row { display: grid; gap: .25rem; padding: .5rem .625rem; border-block-start: 1px solid var(--console-line); }
+.record-header { display: grid; grid-template-columns: minmax(0, 1fr) max-content repeat(2, var(--record-action-size));
+  grid-template-areas: "name status settings control"; align-items: center; gap: .25rem; min-block-size: var(--record-action-size); }
+.role-select, .row-icon-button { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; border-radius: 4px; }
+.role-select { align-self: stretch; padding: 0; text-align: start; }
+.role-select:enabled:hover, .row-icon-button:enabled:not([aria-disabled="true"]):hover { background: var(--console-hover); }
+.role-select:focus-visible, .row-icon-button:focus-visible { outline: 2px solid var(--console-accent-text); outline-offset: 1px; }
+.role-selected { background: var(--console-selected); }
+.record-name { grid-area: name; font-weight: 650; overflow-wrap: anywhere; }
+.record-status { grid-area: status; }
+.record-settings { grid-area: settings; }
+.record-control { grid-area: control; }
 .role-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.role-settings { position: absolute; display: grid; place-items: center; inset-inline-end: .25rem; inset-block-end: .25rem; width: 2rem; height: 2rem; border-radius: 4px; }
+.row-icon-button { display: grid; place-items: center; inline-size: var(--record-action-size); block-size: var(--record-action-size); padding: 0; }
+.row-icon-button[aria-disabled="true"] { cursor: wait; opacity: .6; }
 .workspace-muted { color: var(--console-muted); font-size: .8125rem; }
-.identity-row, .account-summary { display: grid; gap: .5rem; }
-.identity-name { display: inline-flex; align-items: center; gap: .375rem; padding: 0; text-align: start; font-weight: 650; }
-.identity-name:enabled:hover { color: var(--console-accent-text); }
-.edit-icon { opacity: 0; flex: none; }
-.identity-row:hover .edit-icon, .identity-row:focus-within .edit-icon { opacity: 1; }
+.account-summary { display: grid; gap: .5rem; }
 .workspace-overlay { position: fixed; inset: 0; z-index: 1000; background: #0006; }
 .workspace-editor { position: fixed; z-index: 1001; inset-block-start: 50%; inset-inline-start: 50%; transform: translate(-50%, -50%);
   box-sizing: border-box; width: min(34rem, calc(100% - 2rem));
@@ -737,9 +779,6 @@ onMounted(() => { if (props.characterId) void run(load) })
   .identity-list { padding-inline-start: 0; padding-block-start: 1rem; margin-block-start: 1rem; border-inline-start: 0; border-block-start: 1px solid var(--console-line); }
 }
 @media (pointer: coarse) {
-  .role-settings { width: 2.75rem; height: 2.75rem; }
-  .role-select { padding-inline-end: 3.25rem; }
-  .identity-name { min-height: 2.75rem; }
-  .edit-icon { opacity: 1; }
+  .record-list { --record-action-size: 2.75rem; }
 }
 </style>
