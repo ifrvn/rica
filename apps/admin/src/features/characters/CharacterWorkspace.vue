@@ -88,6 +88,7 @@ const accountsByIdentity = computed(() => {
 
 const identityName = (identity: Identity) => identity.profile?.displayName || identity.slug
 const boundAccountLabel = (account: Account) => connectorFor(account.platform)?.plugin.label(account) ?? account.platform + ' · ' + account.instanceKey
+const isImPlatform = (platform: string) => workspace.value?.simulationImPlatforms.some((id) => id === platform)
 
 function accountControl(account: Account, revoke = false) {
   const fromLinkedAccount = editor.value === 'linked-account'
@@ -564,10 +565,11 @@ onMounted(() => { if (props.characterId) void run(load) })
               </button>
             </div>
             <div v-if="accountsByIdentity.has(identity.id)" class="workspace-actions">
-              <template v-for="account in accountsByIdentity.get(identity.id)" :key="account.id">
+              <div v-for="account in accountsByIdentity.get(identity.id)" :key="account.id" class="workspace-actions">
                 <UiButton v-if="admin" variant="text" tone="primary" :disabled="busy" @click="openLinkedAccount(account)">{{ boundAccountLabel(account) }}</UiButton>
                 <span v-else>{{ boundAccountLabel(account) }}</span>
-              </template>
+                <UiBadge v-if="isImPlatform(account.platform)" tone="info">IM</UiBadge>
+              </div>
             </div>
             <div v-else class="workspace-row">
               <span class="workspace-muted">未关联平台账号</span>
@@ -593,9 +595,12 @@ onMounted(() => { if (props.characterId) void run(load) })
         <ul v-if="accountPool.length" class="workspace-list">
           <li v-for="item in accountPool" :key="item.id" class="workspace-row">
             <div class="account-summary">
-              <component v-if="connectorFor(item.platform)?.plugin.labelProps(item)" :is="connectorFor(item.platform)?.plugin.Label"
-                v-bind="connectorFor(item.platform)?.plugin.labelProps(item)" />
-              <span v-else>{{ accountLabel(item) }}</span>
+              <div class="workspace-actions">
+                <component v-if="connectorFor(item.platform)?.plugin.labelProps(item)" :is="connectorFor(item.platform)?.plugin.Label"
+                  v-bind="connectorFor(item.platform)?.plugin.labelProps(item)" />
+                <span v-else>{{ accountLabel(item) }}</span>
+                <UiBadge v-if="isImPlatform(item.platform)" tone="info">IM</UiBadge>
+              </div>
               <p v-if="connectorFor(item.platform)?.state.accountCheckLabel(item)" class="workspace-muted account-check" role="status">{{ connectorFor(item.platform)?.state.accountCheckLabel(item) }}</p>
             </div>
             <div class="workspace-actions">
@@ -611,10 +616,11 @@ onMounted(() => { if (props.characterId) void run(load) })
           <li v-for="account in accounts" :key="account.id" class="workspace-row">
             <div class="account-summary">
               <div class="workspace-actions">
-              <component v-if="connectorFor(account.platform)?.plugin.labelProps(account)" :is="connectorFor(account.platform)?.plugin.Label"
-                v-bind="connectorFor(account.platform)?.plugin.labelProps(account)" />
-              <strong v-else>{{ boundAccountLabel(account) }}</strong>
-              <UiBadge>{{ status(account.status) }}</UiBadge>
+                <component v-if="connectorFor(account.platform)?.plugin.labelProps(account)" :is="connectorFor(account.platform)?.plugin.Label"
+                  v-bind="connectorFor(account.platform)?.plugin.labelProps(account)" />
+                <strong v-else>{{ boundAccountLabel(account) }}</strong>
+                <UiBadge v-if="isImPlatform(account.platform)" tone="info">IM</UiBadge>
+                <UiBadge>{{ status(account.status) }}</UiBadge>
               </div>
               <span class="workspace-muted">{{ workspace.profile?.name || workspace.slug }} / {{
                 identities.find(item => item.id === account.identityId)?.profile?.displayName
