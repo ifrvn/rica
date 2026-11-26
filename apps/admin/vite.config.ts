@@ -5,6 +5,7 @@ import UnoCSS from 'unocss/vite'
 
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
+  devtools: { apply: 'serve' },
   plugins: [
     vue(),
     UnoCSS({ configFile: fileURLToPath(new URL('./uno.config.ts', import.meta.url)) }),

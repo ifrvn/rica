@@ -7,3 +7,6 @@ allowBuilds:
   esbuild: false
   msgpackr-extract: false
   prisma: false
+
+minimumReleaseAgeExclude:
+  - vite@8.4.0

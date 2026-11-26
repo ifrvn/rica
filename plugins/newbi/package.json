@@ -20,10 +20,10 @@
     "@ricajs/console-shared": "workspace:*",
     "@ricajs/contracts": "workspace:*",
     "@ricajs/plugin-host": "workspace:*",
-    "vue": "^3.5.45",
+    "vue": "^3.5.46",
     "@ricajs/persistence": "workspace:*",
     "@ricajs/runtime": "workspace:*",
-    "@vue/runtime-core": "^3.5.45",
+    "@vue/runtime-core": "^3.5.46",
     "@prisma/client": "^7.10.1",
     "@prisma/adapter-pg": "^7.10.1"
   },
