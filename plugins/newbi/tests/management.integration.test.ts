@@ -814,9 +814,10 @@ test('Newbi auto-approval requires a confirmed prior reply in the same discussio
     return { status: 'UNAVAILABLE' }
   }, async () => ({
     post: { title: 'Test thread', content: 'Public topic', isLocked: locked }, comments: [previousComment], nextCursor: null,
-  }), undefined, async (settings, { draft }, _attribution, capture) => {
+  }), undefined, async (settings, { draft, scene }, _attribution, capture) => {
     calls++
     assert.equal(settings.prompt, prompt)
+    assert.equal(scene, 'PUBLIC_COMMUNITY')
     await capture?.('Newbi review system prompt\n' + prompt, 'fixture/default-review-model')
     if (handoff) {
       assert.equal(draft, 'New assertion')

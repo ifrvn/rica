@@ -179,7 +179,8 @@ export async function autoReviewSimulation(
   const { settings, proposal, target, content } = input
   const messages = content.split(simulationMessageSeparator)
   const outcome = settings.enabled
-    ? await review(settings, { platform: target.platform, draft: messages.length > 1 ? JSON.stringify(messages) : content, discussion },
+    ? await review(settings, { scene: proposal.isIm ? 'IM_CHAT' : 'PUBLIC_COMMUNITY', platform: target.platform,
+      draft: messages.length > 1 ? JSON.stringify(messages) : content, discussion },
       { characterId, identityId: target.identityId, platform: target.platform },
       (prompt, model) => recordRunModelCall(db, proposal.runId, 'REVIEW', model, prompt))
     : { status: 'SKIPPED', category: 'POLICY', reason: '该角色未启用自动审批。' } as const

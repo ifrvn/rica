@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { startCognitionPlugins, startObservedModelPlugin } from '../../../apps/runtime-plugins.js'
 import { HostedModelError } from '../rica/model.js'
+import { defaultAutoReviewPrompt } from '@ricajs/contracts/auto-review'
 import type { ModelProvider } from '@ricajs/contracts/model-provider'
 import type { HostedUsageRecord } from '../providers/usage.js'
 
@@ -137,6 +138,34 @@ test('hosted public chat combines participation and writing without sending inte
     const participateAndWrite = host.model.implementation.participateAndWrite!
     assert.deepEqual(await participateAndWrite({ ...input, conversation, participation: 'balanced' }, AbortSignal.timeout(1_000)), reply)
     assert.equal(fetch.mock.callCount(), 1)
+  } finally {
+    await host.stop()
+  }
+})
+
+test('hosted review requests the new output format and rejects Markdown-wrapped JSON', async (t) => {
+  const verdict = { decision: 'APPROVE', risk_category: '无', reason: '' }
+  const reply = { scene: 'IM_CHAT', platform: 'mock-a', draft: '下午三点。', discussion: '活动几点开始？' } as const
+  let output = JSON.stringify(verdict)
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const { messages } = JSON.parse(String(options.body))
+    const system = String(messages[0].content)
+    assert.ok(system.startsWith('# 角色与任务\n'))
+    const formatStart = system.indexOf('# 输出格式要求')
+    assert.ok(formatStart >= 0)
+    assert.ok(system.slice(0, formatStart).trimEnd().endsWith(defaultAutoReviewPrompt))
+    assert.ok(system.includes(JSON.stringify(verdict)))
+    assert.match(system, /AI编造承诺\/附和负面节奏\/指代不明或脱节\/人设穿帮OOC\/公域措辞不当\/隐私或违规链接/u)
+    assert.deepEqual(JSON.parse(messages[1].content), reply)
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: output } }] })
+  })
+  const host = await startObservedModelPlugin({ provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
+  try {
+    const review = host.model.implementation.review!
+    const signal = new AbortController().signal
+    assert.deepEqual(await review(defaultAutoReviewPrompt, reply, signal), verdict)
+    output = '```json\n' + output + '\n```'
+    await assert.rejects(review(defaultAutoReviewPrompt, reply, signal), SyntaxError)
   } finally {
     await host.stop()
   }

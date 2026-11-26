@@ -889,11 +889,17 @@ test('role administrators can see the draft and concurrent approval has one effe
 })
 
 test('role auto-review settings are private, versioned, and fence in-flight approval when disabled', async () => {
+  await owner.character.update({ where: { id: a }, data: { status: 'ACTIVE' } })
+  await owner.identity.update({ where: { id: identityA }, data: { status: 'ACTIVE' } })
+  await owner.platformAccount.update({ where: { id: accountA }, data: { status: 'ACTIVE' } })
   const path = characterPath(a) + '/auto-review'
   const initial = await request('GET', path)
   assert.deepEqual(initial.body, {
     enabled: false, imManualReviewEnabled: true, prompt: defaultAutoReviewPrompt, version: 0, model: null,
   })
+  assert.match(initial.body.prompt, /^# 渠道差异化放行标准/u)
+  assert.match(initial.body.prompt, /# 全局 AI 失控拦截红线/u)
+  assert.doesNotMatch(initial.body.prompt, /# 角色与任务|# 输出格式要求/u)
   const first = await proposeReview()
   const input = { enabled: true, imManualReviewEnabled: true, prompt: '只批准常规回复。' }
   const save = (version: number, enabled: boolean, actor = 'admin-a') =>
@@ -907,7 +913,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
   url.searchParams.set('options', '-c role=rica_runtime')
   const runtime = createDatabase(url.href)
   const inspect = (id: string) => request('GET', actionPath(id))
-  let verdict: unknown = 'APPROVE\nextra'
+  let verdict: unknown = { decision: 'APPROVE', risk_category: '隐私或违规链接', reason: '' }
   let duringReview: (() => Promise<void>) | undefined
   let observedPrompt: string | undefined
   const review = createAutoReviewer(async (check) => check({
@@ -927,14 +933,14 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
     assert.equal(invalid.body.state, 'WAITING_APPROVAL')
     assert.equal(invalid.body.autoReviewHandoff.status, 'UNAVAILABLE')
     assert.equal(invalid.body.autoReviewHandoff.category, 'MODEL')
-    verdict = { status: 'REVIEW', reason: '回复含有未核实的事实。' }
+    verdict = { decision: 'REVIEW', risk_category: '隐私或违规链接', reason: '回复包含未经授权公开的联系方式。' }
     await attempt(first)
     assert.deepEqual((await inspect(first.action.id)).body.autoReviewHandoff, {
-      status: 'REVIEW', category: 'RISK', reason: '回复含有未核实的事实。', model: 'fixture/default-review-model',
+      status: 'REVIEW', category: 'RISK', reason: '回复包含未经授权公开的联系方式。', model: 'fixture/default-review-model',
     })
     const queue = await request('GET', characterPath(a) + '/actions', { actor: 'reviewer' })
     assert.equal(queue.body.items.find(({ id }: { id: string }) => id === first.action.id).autoReviewHandoff, null)
-    verdict = { status: 'APPROVE', reason: '回复符合当前讨论。' }
+    verdict = { decision: 'APPROVE', risk_category: '无', reason: '' }
     duringReview = async () => { assert.equal((await save(1, false)).status, 200) }
     await attempt(first)
     assert.equal((await inspect(first.action.id)).body.state, 'WAITING_APPROVAL')
@@ -949,7 +955,7 @@ test('role auto-review settings are private, versioned, and fence in-flight appr
     const approval = await owner.actionApproval.findUniqueOrThrow({ where: { actionId: second.action.id } })
     assert.equal(approval.reviewerId, autoReviewerId)
     assert.equal(approval.reviewDigest, second.action.reviewDigest)
-    assert.match(approval.reason, /回复符合当前讨论。\n自动审核规则第 3 版 · fixture\/default-review-model/)
+    assert.equal(approval.reason, '自动审核规则第 3 版 · fixture/default-review-model')
 
     await owner.simulatedDraft.update({
       where: { characterId_runId: { characterId: a, runId: first.action.runId } }, data: { content: null },
@@ -2764,6 +2770,12 @@ test('IM replies require automatic approval by default and opt in to the manual 
   assert.equal((await run(feedAction.runId)).state, 'WAITING_APPROVAL')
 
   assert.equal((await save(0, true, false)).status, 200)
+  const feedReview = await prepareTopic(runtime, feed, 'Feed response for automatic review')
+  await draft(feedReview.eventId, async (_settings, { scene }) => {
+    assert.equal(scene, 'PUBLIC_COMMUNITY')
+    return { status: 'APPROVE', model: 'fixture' }
+  })
+  assert.equal((await run(feedReview.runId)).state, 'READY')
   for (const outcome of [
     { status: 'REVIEW', category: 'RISK', reason: 'Needs review' },
     { status: 'UNAVAILABLE', category: 'MODEL', reason: 'Model unavailable' },
@@ -2774,7 +2786,10 @@ test('IM replies require automatic approval by default and opt in to the manual 
   }
 
   const approved = await prepareTopic(runtime, im, 'IM reply that can be approved')
-  await draft(approved.eventId, async () => ({ status: 'APPROVE', model: 'fixture' }))
+  await draft(approved.eventId, async (_settings, { scene }) => {
+    assert.equal(scene, 'IM_CHAT')
+    return { status: 'APPROVE', model: 'fixture' }
+  })
   assert.equal((await run(approved.runId)).state, 'READY')
   const action = await owner.actionProposal.findUniqueOrThrow({ where: { runId: approved.runId } })
   assert.equal((await owner.actionApproval.findUniqueOrThrow({ where: { actionId: action.id } })).reviewerId, autoReviewerId)
@@ -3741,7 +3756,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     const firstDraft = await prepareTurn(firstTurn.body.id)
     const firstReplay = path + '/' + firstTurn.body.id + '/replay'
     let reviewObserved = false
-    const reviewOutput = '{"status":"APPROVE","reason":"讨论相关的低风险回复。"}'
+    const reviewOutput = '{"decision":"APPROVE","risk_category":"无","reason":""}'
     const chatMessages = ['我看到了。', '两套方案我都在看。\n先比较运费吧。']
     const combinedOutput = JSON.stringify({ action: 'REPLY', reason: 'SOCIAL_OPENING', messages: chatMessages })
     const combinedPrompt = 'Participation and writing system prompt\nOriginal identity context'
@@ -3783,7 +3798,7 @@ test('console simulation runs use an isolated conversation, one approval and one
       assert.equal(race.body.error.code, 'AUTO_REVIEW_PENDING')
       reviewObserved = true
       if (captureOutput) await captureOutput(reviewOutput)
-      return { status: 'APPROVE', model: 'fixture/review', reason: '讨论相关的低风险回复。' }
+      return { status: 'APPROVE', model: 'fixture/review' }
     })
     assert.equal(reviewObserved, true)
     const automatic = await request('GET', firstReplay)
@@ -3798,8 +3813,8 @@ test('console simulation runs use an isolated conversation, one approval and one
       ['DECISION_AND_WRITING', combinedPrompt, combinedOutput],
       ['REVIEW', 'Review system prompt\nOriginal policy', reviewOutput],
     ])
-    assert.match((await request('GET', character + '/actions/' + automatic.body.proposal.id)).body.review.reason,
-      /讨论相关的低风险回复/u)
+    assert.equal((await request('GET', character + '/actions/' + automatic.body.proposal.id)).body.review.reason,
+      '自动审核规则第 0 版 · fixture/review')
     assert.equal((await request('GET', firstReplay, { actor: 'nonmember' })).status, 404)
     await assert.rejects(runtime.$queryRaw`SELECT public.rica_run_model_calls(${characterId}::uuid,${firstTurn.body.id}::uuid)`, /permission denied/i)
     const reviewCallId = automatic.body.modelCalls.at(-1).id as string

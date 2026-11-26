@@ -20,9 +20,10 @@ export function createAutoReviewer(useDefaultModel: (review: (model: ModelProvid
           const capturePrompt = capture ? (prompt: string) => capture(prompt, name) : undefined
           const outcome = await model.review(settings.prompt, reply, signal, attribution, capturePrompt)
           const result = modelReviewDecision.safeParse(outcome)
-          if (result.success) return result.data.status === 'REVIEW' ? { ...result.data, category: 'RISK', model: name }
-            : { status: 'APPROVE', reason: result.data.reason, model: name }
-          return { status: 'UNAVAILABLE', category: 'MODEL', model: modelName, reason: '模型未返回有效的审核结果和复审理由。' }
+          if (result.success) return result.data.decision === 'REVIEW'
+            ? { status: 'REVIEW', category: 'RISK', reason: result.data.reason, model: name }
+            : { status: 'APPROVE', model: name }
+          return { status: 'UNAVAILABLE', category: 'MODEL', model: modelName, reason: '模型未按要求返回审核决定、风险类别和理由。' }
         } catch {
           return { status: 'UNAVAILABLE', category: 'MODEL', model: modelName,
             reason: signal.aborted ? '模型审核超时。' : '模型调用失败，未能完成审核。' }

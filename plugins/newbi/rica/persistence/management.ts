@@ -186,7 +186,7 @@ export async function autoReviewNewbiReply(
     }
     const discussion = JSON.stringify({ title: thread.post.title, post: thread.post.content,
       comments: thread.comments.map(({ content }) => content) })
-    return review(policy, { platform: 'newbi', draft: current.content, discussion },
+    return review(policy, { scene: 'PUBLIC_COMMUNITY', platform: 'newbi', draft: current.content, discussion },
       { characterId, identityId: current.identityId, platform: 'newbi' }, async (systemPrompt, model) => {
         const { count } = await newbi.reply.updateMany({
           where: { id, characterId, status: 'WAITING', reviewDigest: current.reviewDigest,
