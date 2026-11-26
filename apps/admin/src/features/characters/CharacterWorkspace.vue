@@ -118,7 +118,7 @@ const parsed = computed(() => {
   switch (editor.value) {
     case 'character': return characterInput.safeParse({ slug: form.slug.trim(), timezone: form.timezone, coreProfile })
     case 'core': return coreInput.safeParse({ coreProfile, reason })
-    case 'identity': return identityInput.safeParse({ slug: form.slug.trim(), roleProfile })
+    case 'identity': return identityInput.safeParse({ roleProfile })
     case 'identity-edit': return identityUpdate.safeParse({ roleProfile, reason })
     case 'account': return registrationConnector.value
       ? registrationConnector.value.state.parse()
@@ -417,7 +417,7 @@ onMounted(() => { if (props.characterId) void run(load) })
       :busy="busy" :error="error" :field-error="fieldError" :field-input="fieldInput"
       @touch="touched.add($event)" @save="save" @close="closeEditor" @closed="focusWorkspaceHeading" />
     <IdentityEditorDialog :open="isIdentity" :creating="editor === 'identity'"
-      v-model:slug="form.slug" v-model:name="form.name" v-model:timezone="form.timezone" v-model:writing-style="form.style"
+      v-model:name="form.name" v-model:timezone="form.timezone" v-model:writing-style="form.style"
       v-model:draft-model-profile="form.draftModelProfile" v-model:participation="form.participation"
       v-model:writing-prompt="form.writingPrompt" v-model:reason="form.reason"
       :inherited-timezone="workspace?.timezone ?? 'UTC'" :draft-models="draftModels" :default-draft-model="defaultDraftModel"

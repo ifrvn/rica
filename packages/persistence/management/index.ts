@@ -188,8 +188,9 @@ export async function updateCore(tx: Tx, scope: Scope, expected: number, input: 
 
 export async function createIdentity(tx: Tx, scope: Scope, input: Input<typeof contracts.identityInput>) {
   const { actor, characterId } = scope
-  const { id, status } = await tx.identity.create({
-    data: { characterId, slug: input.slug }, select: { id: true, status: true },
+  const id = randomUUID()
+  const { status } = await tx.identity.create({
+    data: { id, characterId, slug: id }, select: { status: true },
   })
   await tx.identityVersion.create({
     data: { characterId, identityId: id, version: 1, roleProfile: input.roleProfile, actorId: actor.id, reason: 'Create identity' },

@@ -65,7 +65,7 @@ export const characterInput = z.strictObject({
   coreProfile,
 })
 export const coreInput = optionalReasonInput.extend({ coreProfile })
-export const identityInput = z.strictObject({ slug, roleProfile: identityProfile })
+export const identityInput = z.strictObject({ roleProfile: identityProfile })
 export const identityUpdate = optionalReasonInput.extend({ roleProfile: identityProfile })
 export const simulationPlatformId = z.enum(['mock-a', 'mock-b'])
 export const isSimulationPlatform = (platform: string) => simulationPlatformId.safeParse(platform).success

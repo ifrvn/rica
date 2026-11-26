@@ -55,7 +55,7 @@ pnpm rica admin-user reset
 | --- | --- |
 | `GET /v1/characters`、`GET /c` | 当前主体获准访问的角色与生效配置投影。角色详情包含已启用的模拟适配器选项。 |
 | `POST /v1/characters`、`PUT /c/core` | 指定主体创建初始暂停角色。ADMIN 提交新核心版本，可省略 `reason`。 |
-| `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | ADMIN 读取。ADMIN 创建初始暂停身份或提交新身份版本，修改时可省略 `reason`。可选字段 `roleProfile.writingPrompt` 最多 4000 个字符，仅 ADMIN 可读。提交新版本时省略该字段即可清除。 |
+| `GET /c/identities`、`POST /c/identities`、`PUT /c/identities/{identityId}` | ADMIN 读取。ADMIN 通过 `roleProfile` 创建初始暂停身份，身份标识由服务端生成。提交新身份版本时可省略 `reason`。可选字段 `roleProfile.writingPrompt` 最多 4000 个字符，仅 ADMIN 可读。提交新版本时省略该字段即可清除。 |
 | `GET /c/daily-energy/{utcDay}`、`POST /c/daily-energy` | ADMIN 查看审批后的档位。ADMIN 用幂等键批准一个未来 UTC 日。每天只允许批准一次。 |
 | `GET /c/plugins` | ADMIN 查看部署插件状态、配置是否存在、各进程的脱敏报告，以及可选发布清单的升级预览。预览标出目标组件缺失、降级和契约不兼容。 |
 | `GET /c/plans`、`POST /c/plans`、`PUT /c/plans/{planId}` | ADMIN 浏览、创建和编辑跨身份计划。每个参与项包含同角色下当前绑定的身份、账号和执行事项。创建使用幂等键，编辑使用计划版本。 |

@@ -15,7 +15,6 @@ defineProps<{
   maxWritingPromptLength?: number
 }>()
 const emit = defineEmits<{ save: []; close: []; closed: []; touch: [field: string] }>()
-const slug = defineModel<string>('slug', { required: true })
 const name = defineModel<string>('name', { required: true })
 const timezone = defineModel<string>('timezone', { required: true })
 const writingStyle = defineModel<string>('writingStyle', { required: true })
@@ -35,15 +34,9 @@ const styles = [
     :busy="busy" @update:open="!$event && emit('close')" @closed="emit('closed')">
     <UiAlert v-if="error" class="editor-alert" tone="error" role="alert">{{ error }}</UiAlert>
     <form @submit.prevent="emit('save')">
-      <UiField v-if="creating" label="唯一标识" for="workspace-slug" :invalid="!!fieldError('slug')">
-        <input class="ui-control" v-model="slug" v-bind="fieldInput('slug')" @blur="emit('touch', 'slug')" placeholder="小写字母、数字和连字符" maxlength="63" />
-        <template v-if="fieldError('slug')" #feedback>
-          <span id="workspace-slug-error">{{ fieldError('slug') }}</span>
-        </template>
-      </UiField>
       <UiField label="平台身份名称"
         for="workspace-name" :invalid="!!fieldError('name')">
-        <input class="ui-control" placeholder="例如：XX社区管理员"
+        <input class="ui-control" name="displayName" placeholder="例如：XX社区管理员"
           v-model="name" v-bind="fieldInput('name', 'workspace-name-hint')" @blur="emit('touch', 'name')" maxlength="120" />
         <template #feedback>
           <div id="workspace-name-hint" class="editor-hint">用于标识角色在关联平台上使用的身份，不作为称呼使用。</div>

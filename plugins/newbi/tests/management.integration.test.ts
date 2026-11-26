@@ -107,7 +107,7 @@ before(async () => {
   }
   ;[a, b] = characterIds
   const ia = await request('POST', characterPath(a) + '/identities', {
-    key: 'identity-a', data: { slug: 'one', roleProfile: { writingStyle: 'formal' } },
+    key: 'identity-a', data: { roleProfile: { writingStyle: 'formal' } },
   })
   assert.equal(ia.status, 201, JSON.stringify(ia.body))
   identityA = ia.body.id
@@ -179,7 +179,7 @@ function runtimeUrl() {
 
 async function activeIdentity(roleProfile: Record<string, unknown> = {}, characterId = a) {
   const created = await request('POST', characterPath(characterId) + '/identities', {
-    key: randomUUID(), data: { slug: 'newbi-' + randomUUID(), roleProfile },
+    key: randomUUID(), data: { roleProfile },
   })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const id: string = created.body.id

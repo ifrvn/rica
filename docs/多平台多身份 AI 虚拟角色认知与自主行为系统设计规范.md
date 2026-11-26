@@ -324,7 +324,7 @@ SIMULATION 与 LIVE 使用不同部署凭据、队列命名空间和运行标识
 | POST /v1/characters | ADMIN 创建角色。输入 slug、timezone、coreProfile。返回 201 与 id、version，初始 PAUSED。 |
 | GET /c · GET /c/identities | 读取生效版本或有权限的身份列表。返回 status、version、profile 投影。 |
 | PUT /c/core · PUT /c/policy | ADMIN 提交完整配置、If-Match、reason。返回新版本，推进 authEpoch。 |
-| POST /c/identities · PUT /c/identities/{i} | ADMIN 创建或修订身份。输入 slug、roleProfile、timeWindow，修改需 If-Match。 |
+| POST /c/identities · PUT /c/identities/{i} | ADMIN 通过 roleProfile 创建或修订身份。创建时由服务端生成身份标识，修改需 If-Match。 |
 | POST /c/accounts/connect · GET /c/accounts | 启动官方授权或列出账号。连接输入 identityId、platform、instanceKey，返回短期连接状态与受控跳转信息。 |
 | GET /v1/oauth/{platform}/callback | 一次性 state、授权码和绑定校验。成功后回到管理页。 |
 | PUT /c/accounts/{a}/permissions/{kind} | ADMIN 输入 mode、limits、If-Match 与 reason，更新动作权限并推进 authEpoch。 |

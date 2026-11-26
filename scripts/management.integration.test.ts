@@ -100,10 +100,10 @@ before(async () => {
   ;[a, b] = characterIds
   await owner.character.updateMany({ where: { id: { in: [a, b] } }, data: { imManualReviewEnabled: true } })
   const ia = await request('POST', characterPath(a) + '/identities', {
-    key: 'identity-a', data: { slug: 'one', roleProfile: { writingStyle: 'formal' } },
+    key: 'identity-a', data: { roleProfile: { writingStyle: 'formal' } },
   })
   const ib = await request('POST', characterPath(b) + '/identities', {
-    actor: 'admin-b', key: 'identity-b', data: { slug: 'two', roleProfile: { writingStyle: 'casual' } },
+    actor: 'admin-b', key: 'identity-b', data: { roleProfile: { writingStyle: 'casual' } },
   })
   assert.equal(ia.status, 201, JSON.stringify(ia.body))
   assert.equal(ib.status, 201, JSON.stringify(ib.body))
@@ -628,7 +628,7 @@ test('authentication and membership distinguish unauthenticated, forbidden and f
   assert.equal((await request('GET', membersPath, { actor: 'reviewer' })).status, 200)
   assert.equal((await request('GET', membersPath, { actor: 'admin-b' })).status, 404)
   assert.equal((await request('POST', characterPath(a) + '/identities', {
-    actor: 'nonmember', key: 'should-not-create', data: { slug: 'forbidden', roleProfile: {} },
+    actor: 'nonmember', key: 'should-not-create', data: { roleProfile: {} },
   })).status, 404)
   assert.equal((await request('POST', characterPath(a) + '/accounts', {
     key: 'foreign-identity', data: {
@@ -661,14 +661,17 @@ test('management commands reject stale updates and commit idempotency and audit 
   assert.equal(character.headers.get('etag'), '"2"')
   assert.equal(character.body.version, 2)
 
-  const data = { slug: 'single-create', roleProfile: { displayName: 'One', writingStyle: 'concise' } }
+  const data = { roleProfile: { displayName: 'One', writingStyle: 'concise' } }
   assert.equal((await request('POST', path + '/identities', { data })).status, 422)
   const results = await Promise.all(Array.from({ length: 6 }, () =>
     request('POST', path + '/identities', { key: 'same-key', data }),
   ))
   assert.ok(results.every(({ status, body }) => status === 201 && body.id === results[0].body.id))
-  assert.equal((await request('POST', path + '/identities', { key: 'same-key', data: { ...data, slug: 'different' } })).status, 409)
+  const changedData = { roleProfile: { ...data.roleProfile, displayName: 'Another name' } }
+  assert.equal((await request('POST', path + '/identities', { key: 'same-key', data: changedData })).status, 409)
   const id = results[0].body.id
+  assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u)
+  assert.equal((await owner.identity.findUniqueOrThrow({ where: { id } })).slug, id)
   assert.equal((await owner.managementAudit.count({ where: { targetId: id } })), 1)
   await assert.rejects(management.managementAudit.deleteMany({ where: { targetId: id } }), /permission denied/i)
   assert.equal((await owner.managementAudit.count({ where: { targetId: a, operation: 'character.core.update' } })), 1)
@@ -685,6 +688,9 @@ test('management commands reject stale updates and commit idempotency and audit 
   assert.ok(spec.body.paths['/characters/{characterId}/core'].put.parameters.some(
     (parameter: { name: string; required: boolean }) => parameter.name === 'if-match' && parameter.required,
   ))
+  const sameName = await request('POST', path + '/identities', { key: 'same-name', data })
+  assert.equal(sameName.status, 201)
+  assert.notEqual(sameName.body.id, id)
 })
 
 
@@ -788,7 +794,7 @@ test('deployment usage aggregates concurrent writes by role, identity, platform 
   assert.equal(rows.length, 3)
   const draft = rows.find((row: { purpose: string }) => row.purpose === 'DRAFT')
   assert.deepEqual(draft, { day, provider: 'openai', model, characterId: a, character: prefix + '-a', identityId: identityA,
-    identity: 'one', platform: 'mock-a', purpose: 'DRAFT', outcome: 'OK', requests: 6, tokenReports: 6,
+    identity: identityA, platform: 'mock-a', purpose: 'DRAFT', outcome: 'OK', requests: 6, tokenReports: 6,
     sentBytes: 720, receivedBytes: 450, elapsedMs: 240, inputTokens: 72, outputTokens: 48, totalTokens: 120 })
   const review = rows.find((row: { purpose: string }) => row.purpose === 'REVIEW')
   assert.deepEqual([review.characterId, review.identityId, review.platform, review.model, review.tokenReports],
@@ -1705,7 +1711,7 @@ test('commitments require a confirmed receipt and preserve its recipient across 
   const { runId } = await owner.actionProposal.findUniqueOrThrow({ where: { id: action.id }, select: { runId: true } })
   const candidates = characterPath(a) + '/commitment-receipts?runId=' + runId
   const identity = await request('POST', characterPath(a) + '/identities', {
-    key: 'commitment-collaborator-identity', data: { slug: 'commitment-helper', roleProfile: {} },
+    key: 'commitment-collaborator-identity', data: { roleProfile: {} },
   })
   assert.equal(identity.status, 201, JSON.stringify(identity.body))
   const helper = await owner.platformAccount.create({
@@ -2245,7 +2251,7 @@ test('belief rollback appends a revision and cannot restore revoked or out-of-sc
 
 async function reflectionIdentity(roleProfile: Record<string, unknown> = {}, characterId = a) {
   const created = await request('POST', characterPath(characterId) + '/identities', {
-    key: randomUUID(), data: { slug: 'reflection-' + randomUUID(), roleProfile },
+    key: randomUUID(), data: { roleProfile },
   })
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const id: string = created.body.id
@@ -2542,9 +2548,9 @@ test('manual goal cap is atomic and replay pins the identity version of active g
   assert.deepEqual((await request('GET', replayPath)).body.goalRefs, replay.body.goalRefs)
 })
 
-async function stateFixtureAccount(slug: string) {
+async function stateFixtureAccount(key: string) {
   const created = await request('POST', characterPath(a) + '/identities', {
-    key: slug, data: { slug, roleProfile: {} },
+    key, data: { roleProfile: {} },
   })
   assert.equal(created.status, 201)
   const identityId: string = created.body.id
@@ -2731,7 +2737,7 @@ test('IM replies require automatic approval by default and opt in to the manual 
     })
   await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12) } })
   const identity = await request('POST', base + '/identities', {
-    key: randomUUID(), data: { slug: 'replies', roleProfile: { writingStyle: 'casual' } },
+    key: randomUUID(), data: { roleProfile: { writingStyle: 'casual' } },
   })
   assert.equal(identity.status, 201, JSON.stringify(identity.body))
   await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
@@ -2857,11 +2863,12 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   const [shared, separate] = profiles
   assert.ok(firstRole && otherRole && shared && separate)
   const unavailable = await request('POST', characterPath(firstRole) + '/identities', {
-    key: randomUUID(), data: { slug: 'unavailable', roleProfile: { draftModelProfile: randomUUID() } },
+    key: randomUUID(), data: { roleProfile: { draftModelProfile: randomUUID() } },
   })
   assert.equal(unavailable.status, 422)
 
   const runIds: string[] = []
+  const identityIds: string[] = []
   for (const [index, { profile, characterId, actor }] of [
     { profile: shared, characterId: firstRole, actor: 'admin-a' },
     { profile: separate, characterId: firstRole, actor: 'admin-a' },
@@ -2869,10 +2876,10 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   ].entries()) {
     const path = characterPath(characterId) + '/identities'
     const identity = await request('POST', path, {
-      actor, key: randomUUID(), data: { slug: 'model-persona-' + index,
-        roleProfile: { draftModelProfile: profile.id, writingPrompt: 'Original identity wording ' + index } },
+      actor, key: randomUUID(), data: { roleProfile: { draftModelProfile: profile.id, writingPrompt: 'Original identity wording ' + index } },
     })
     assert.equal(identity.status, 201, JSON.stringify(identity.body))
+    identityIds.push(identity.body.id)
     if (index === 0) {
       const denied = await request('PUT', path + '/' + identity.body.id, {
         actor: 'admin-b', ifMatch: '"1"', data: { roleProfile: { draftModelProfile: separate.id } },
@@ -2890,10 +2897,7 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
   assert.deepEqual(upstream.mock.calls.map(({ arguments: [url] }) => url), [
     ...['shared', 'separate', 'shared'].flatMap((model) => Array<string>(2).fill(`https://${model}.example/v1/chat/completions`)),
   ])
-  const sharedIdentity = await owner.identity.findFirstOrThrow({
-    where: { characterId: firstRole, slug: 'model-persona-0' },
-  })
-  const identityPath = characterPath(firstRole) + '/identities/' + sharedIdentity.id
+  const identityPath = characterPath(firstRole) + '/identities/' + identityIds[0]
   await models.remove(shared.id, 2)
   modelProfileIds.delete(shared.id)
   const renamed = await request('PUT', identityPath, {
@@ -3382,7 +3386,7 @@ test('three identities on two platforms reach separate approved simulation recei
     ] as const) {
       const identity = await request('POST', characterPath(a) + '/identities', {
         key: 'e2e-' + style, data: {
-          slug: 'e2e-' + style, roleProfile: { writingStyle: style, writingPrompt: prompts.get(style) },
+          roleProfile: { writingStyle: style, writingPrompt: prompts.get(style) },
         },
       })
       assert.equal(identity.status, 201)
@@ -3413,14 +3417,15 @@ test('three identities on two platforms reach separate approved simulation recei
       const [result] = accepted
       assert.ok(deliveries.every((delivery) => 'runId' in delivery && delivery.runId === result.runId))
       assert.equal(await owner.inboundEvent.count({ where: { accountId, sourceKey: 'e2e-delivery' } }), 1)
-      runs.push({ id: result.runId, accountId, identityId, expected, conversationId: conversation.id })
+      runs.push({ id: result.runId, accountId, identityId, style, expected, conversationId: conversation.id })
     }
 
     const identitiesPath = characterPath(a) + '/identities?limit=100'
     const adminProfiles = await request('GET', identitiesPath)
     assert.equal(adminProfiles.status, 200)
     for (const [style, prompt] of prompts) {
-      assert.equal(adminProfiles.body.items.find(({ slug }: { slug: string }) => slug === 'e2e-' + style).profile.writingPrompt, prompt)
+      const identityId = runs.find((run) => run.style === style)?.identityId
+      assert.equal(adminProfiles.body.items.find(({ id }: { id: string }) => id === identityId).profile.writingPrompt, prompt)
     }
     assert.equal((await request('GET', identitiesPath, { actor: 'nonmember' })).status, 404)
 
@@ -3507,7 +3512,7 @@ test('console simulation runs use an isolated conversation, one approval and one
   characterIds.push(characterId)
   const character = characterPath(characterId)
   const identity = await request('POST', character + '/identities', {
-    key: randomUUID(), data: { slug: 'console-persona', roleProfile: { writingPrompt } },
+    key: randomUUID(), data: { roleProfile: { writingPrompt } },
   })
   assert.equal(identity.status, 201, JSON.stringify(identity.body))
   const identityId: string = identity.body.id
@@ -3804,7 +3809,7 @@ test('console simulation runs use an isolated conversation, one approval and one
     assert.deepEqual(receipts.map(({ messageCount }) => messageCount), [chatMessages.length])
 
     const newIdentity = await request('POST', character + '/identities', {
-      key: randomUUID(), data: { slug: 'another-persona', roleProfile: { displayName: '另一个身份' } },
+      key: randomUUID(), data: { roleProfile: { displayName: '另一个身份' } },
     })
     assert.equal(newIdentity.status, 201, JSON.stringify(newIdentity.body))
     const newIdentityId: string = newIdentity.body.id
@@ -3919,7 +3924,7 @@ test('group reply review drops exact repeats and stale social openings while kee
   await owner.character.update({
     where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12), imManualReviewEnabled: true },
   })
-  const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { slug: 'chat-reviewer', roleProfile: {} } })
+  const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { roleProfile: {} } })
   assert.equal(identity.status, 201)
   await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
   const account = await owner.platformAccount.create({ data: {
@@ -3996,7 +4001,7 @@ test('group glossary requires independent examples, stays in its room, and obeys
   const character = await owner.character.update({
     where: { id: characterId }, data: { status: 'ACTIVE', timezone: simulationZone(12), imManualReviewEnabled: true },
   })
-  const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { slug: 'glossary-reader', roleProfile: {} } })
+  const identity = await request('POST', root + '/identities', { key: randomUUID(), data: { roleProfile: {} } })
   assert.equal(identity.status, 201)
   await owner.identity.update({ where: { id: identity.body.id }, data: { status: 'ACTIVE' } })
   const account = await owner.platformAccount.create({ data: {
@@ -4111,7 +4116,7 @@ test('a role can register an account before its identities and associate it only
   assert.equal((await request('POST', pool + '/associations', {
     key: 'foreign-identity', data: { registrationId, identityId: identityB },
   })).status, 404)
-  const identity = await request('POST', path + '/identities', { key: 'pool-identity', data: { slug: 'pool-identity', roleProfile: {} } })
+  const identity = await request('POST', path + '/identities', { key: 'pool-identity', data: { roleProfile: {} } })
   assert.equal(identity.status, 201, JSON.stringify(identity.body))
   const identityId = identity.body.id
   const attempts = await Promise.all(['associate-first', 'associate-second'].map((key) => request('POST', pool + '/associations', {
@@ -4124,7 +4129,7 @@ test('a role can register an account before its identities and associate it only
     ({ id, identityId, status })), [{ id: registrationId, identityId, status: 'PAUSED' }])
 
   const secondIdentity = await request('POST', path + '/identities', {
-    key: 'second-pool-identity', data: { slug: 'second-pool-identity', roleProfile: {} },
+    key: 'second-pool-identity', data: { roleProfile: {} },
   })
   assert.equal(secondIdentity.status, 201)
   const candidates = await Promise.all(['a', 'b'].map((suffix) => request('POST', pool, {
@@ -4156,7 +4161,7 @@ test('collaborative plans preserve identity bindings, schedule each simulator on
   await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE' } })
   const participants: { identityId: string; accountId: string; task: string }[] = []
   for (const platform of ['mock-a', 'mock-b', 'external-fixture']) {
-    const identity = await request('POST', base + '/identities', { key: 'plan-' + platform, data: { slug: platform, roleProfile: {} } })
+    const identity = await request('POST', base + '/identities', { key: 'plan-' + platform, data: { roleProfile: {} } })
     assert.equal(identity.status, 201, JSON.stringify(identity.body))
     const identityId = identity.body.id as string
     await owner.identity.update({ where: { id: identityId }, data: { status: 'ACTIVE' } })
@@ -4341,7 +4346,7 @@ test('external account operations share the host transaction and enforce account
 
   for (const [characterId, actor, registrationId] of [[a, 'admin-a', local.body.id], [b, 'admin-b', foreign.body.id]]) {
     const identity = await request('POST', characterPath(characterId) + '/identities', { actor, key: 'external-account-identity',
-      data: { slug: 'external-account-fixture', roleProfile: {} } })
+      data: { roleProfile: {} } })
     assert.equal(identity.status, 201, JSON.stringify(identity.body))
     const bound = await request('POST', pool(characterId) + '/associations', { target, actor, key: 'external-account-association',
       data: { registrationId, identityId: identity.body.id } })
@@ -4402,7 +4407,7 @@ test('remote plugin publishers and subscribers are restricted to authorized acco
   const characterId: string = created.body.id
   characterIds.push(characterId)
   const identity = await request('POST', characterPath(characterId) + '/identities', {
-    key: 'remote-event-identity', data: { slug: 'remote-event', roleProfile: {} },
+    key: 'remote-event-identity', data: { roleProfile: {} },
   })
   assert.equal(identity.status, 201)
   await owner.character.update({ where: { id: characterId }, data: { status: 'ACTIVE' } })
