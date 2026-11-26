@@ -2738,7 +2738,7 @@ test('identity draft bindings reuse profiles across roles and keep separate prof
     assert.equal(new Headers(options.headers).get('Authorization'), 'Bearer ' + configuration.apiKey)
     const body = JSON.parse(String(options.body))
     assert.equal(body.model, configuration.model)
-    const content = body.messages[0].content.startsWith('Decide whether')
+    const content = Object.hasOwn(JSON.parse(body.messages[1].content), 'identity')
       ? JSON.stringify({ action: 'REPLY', reason: 'RELEVANT_TOPIC' }) : '这是用于验证模型绑定的回复。'
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content } }] })
   })
@@ -3472,8 +3472,8 @@ test('console simulation runs use an isolated conversation, one approval and one
       provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key',
     })
     const fetch = t.mock.method(globalThis, 'fetch', async (_url: string, request: RequestInit) => {
-      const system = JSON.parse(String(request.body)).messages[0].content
-      const content = system.startsWith('Decide whether')
+      const { messages } = JSON.parse(String(request.body))
+      const content = Object.hasOwn(JSON.parse(messages[1].content), 'identity')
         ? JSON.stringify({ action: 'REPLY', reason: 'RELEVANT_TOPIC' }) : generatedReply
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content } }] })
     })

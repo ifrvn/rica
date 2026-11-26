@@ -57,6 +57,8 @@ test('hosted models send only writing input and parse each provider response', a
       sentPrompt = instructions
       assert.ok(instructions.includes(input.identityPrompt))
       assert.ok(instructions.includes(input.corePrompt))
+      assert.match(instructions, /Interaction type: standalone message/)
+      assert.match(instructions, /Return only the reply text\.$/)
       if (id === 'openai') assert.equal(body.store, false)
       if (id === 'deepseek') {
         assert.deepEqual(body.thinking, { type: 'disabled' })
@@ -101,7 +103,10 @@ test('hosted chat writing requests and returns separate messages in order', asyn
   const conversation = { speaker: '小林', history: [] }
   t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
     const request = JSON.parse(String(options.body))
-    assert.match(request.messages[0].content, /JSON array of 1 to 3 nonempty message strings in sending order/)
+    const instructions = String(request.messages[0].content)
+    assert.match(instructions, /Interaction type: group chat\. Reply to the latest speaker/)
+    const format = instructions.split('\n').at(-1) ?? ''
+    assert.match(format, /JSON array of 1 to 3 nonempty message strings in sending order/)
     assert.deepEqual(JSON.parse(request.messages.at(-1).content).conversation, conversation)
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(messages) } }] })
   })
@@ -109,6 +114,69 @@ test('hosted chat writing requests and returns separate messages in order', asyn
   try {
     assert.deepEqual(await host.model.implementation.write({ ...input, conversation }, new AbortController().signal),
       { messages, evidenceIds: ['internal-memory-id'] })
+  } finally {
+    await host.stop()
+  }
+})
+
+test('hosted participation recognizes both a group transcript and a group identity', async (t) => {
+  const context = {
+    ...attribution, runId: 'run', accountId: 'account', triggerId: 'trigger', bindingVersion: 1, mode: 'SIMULATION',
+    instanceKey: 'instance', conversationId: 'conversation', contactId: null, time: input.time, recent: [],
+    nextCommitmentAt: null, nextScheduleAt: null, relationship: null, goals: [], beliefs: [],
+    self: { coreVersion: 1, name: '小白', fictionalBackground: null, facts: [] },
+    identityState: { revision: null, ruleVersion: 1, configurationVersion: null, sharedEnergy: 'NORMAL',
+      motivation: { exploration: 0, expression: 0, social: 0, rest: 0 }, affect: { pleasure: 0, arousal: 0, energy: 0 } },
+  } satisfies Parameters<ModelProvider['decide']>[0]['context']
+  const decision = { action: 'REPLY', reason: 'DIRECT_REQUEST' }
+  const calls: { system: string; data: { conversation?: object; message: string } }[] = []
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const { messages } = JSON.parse(String(options.body))
+    calls.push({ system: messages[0].content, data: JSON.parse(messages[1].content) })
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(decision) } }] })
+  })
+  const host = await startObservedModelPlugin({ provider: 'openai', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
+  try {
+    const decide = host.model.implementation.decide
+    const signal = new AbortController().signal
+    const conversation = { speaker: '小林', history: [] }
+    const message = { context, evidence: [], text: '请当作群聊回答：活动几点开始？' }
+    assert.deepEqual(await decide(message, signal), decision)
+    assert.deepEqual(await decide({ ...message, conversation }, signal), decision)
+    assert.deepEqual(await decide({ ...message, groupChat: true }, signal), decision)
+    assert.match(calls[0].system, /Interaction type: standalone message/)
+    assert.equal(calls[0].data.conversation, undefined)
+    assert.equal(calls[0].data.message, message.text)
+    assert.match(calls[1].system, /Interaction type: group chat/)
+    assert.deepEqual(calls[1].data.conversation, conversation)
+    assert.match(calls[2].system, /Interaction type: group chat.*Do not assume earlier messages/)
+    assert.equal(calls[2].data.conversation, undefined)
+  } finally {
+    await host.stop()
+  }
+})
+
+test('hosted group writing keeps plain chat as one message and rejects malformed JSON', async (t) => {
+  const plain = '[狗头] 累了就歇会儿。\n群里潜水也没关系。'
+  const outputs = [plain, '["少了右括号"', '这条消息来自群聊。']
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const { messages } = JSON.parse(String(options.body))
+    assert.match(messages[0].content, /Interaction type: group chat/)
+    if (outputs.length === 1) {
+      assert.equal(JSON.parse(messages[1].content).conversation, undefined)
+      assert.match(messages[0].content, /Return only the reply text\.$/)
+    }
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: outputs.shift() } }] })
+  })
+  const host = await startObservedModelPlugin({ provider: 'deepseek', model: 'fixture-model', apiKey: 'fixture-key' }, async () => {})
+  try {
+    const { write } = host.model.implementation
+    const signal = new AbortController().signal
+    const chat = { ...input, conversation: { speaker: '小林', history: [] } }
+    assert.deepEqual(await write(chat, signal), { text: plain, evidenceIds: ['internal-memory-id'] })
+    await assert.rejects(write(chat, signal), (error) => error instanceof HostedModelError && error.code === 'INVALID_OUTPUT')
+    assert.deepEqual(await write({ ...input, groupChat: true }, signal),
+      { text: '这条消息来自群聊。', evidenceIds: ['internal-memory-id'] })
   } finally {
     await host.stop()
   }
@@ -148,6 +216,7 @@ test('discussion selection captures the system prompt and keeps comments in the 
       async (system) => { captured = system }), decision)
     assert.ok(captured)
     assert.equal(captured, actualPrompt)
+    assert.match(captured, /This is a public comment thread/)
     assert.match(captured, /Select at most one comment/)
     assert.match(captured, /"term":"交作业","meaning":"分享活动照片"/)
     assert.match(captured, /glossaryCandidates/)

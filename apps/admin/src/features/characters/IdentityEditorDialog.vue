@@ -21,6 +21,7 @@ const timezone = defineModel<string>('timezone', { required: true })
 const writingStyle = defineModel<string>('writingStyle', { required: true })
 const draftModelProfile = defineModel<string>('draftModelProfile', { required: true })
 const participation = defineModel<string>('participation', { required: true })
+const groupChat = defineModel<boolean>('groupChat', { required: true })
 const writingPrompt = defineModel<string>('writingPrompt', { required: true })
 const reason = defineModel<string>('reason', { required: true })
 
@@ -72,6 +73,13 @@ const styles = [
           <option v-for="model in draftModels" :key="model.id" :value="model.id">{{ model.label }}</option>
         </select>
       </UiField>
+      <div class="ui-field">
+        <label class="ui-checkbox identity-group-chat">
+          <input v-model="groupChat" type="checkbox" :disabled="busy" aria-describedby="workspace-group-chat-hint" />
+          <span>该身份用于群聊</span>
+        </label>
+        <div id="workspace-group-chat-hint" class="ui-field-feedback">勾选后，公开模拟消息的参与判断和回复按群聊场景处理。</div>
+      </div>
       <UiField label="参与程度" for="workspace-participation">
         <select id="workspace-participation" class="ui-control" v-model="participation" :disabled="busy">
           <option value="">按身份设定（默认适中）</option>
@@ -105,3 +113,7 @@ const styles = [
     </form>
   </UiDialog>
 </template>
+
+<style scoped>
+.identity-group-chat { min-block-size: 2.75rem; }
+</style>

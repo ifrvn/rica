@@ -53,7 +53,7 @@ const error = ref('')
 const notice = ref('')
 const form = reactive({ slug: '', name: '', timezone: '', disclosure: '', style: 'neutral',
   registrationId: null as string | null, platform: '', instance: '', remoteId: '', reason: '', writingPrompt: '',
-  draftModelProfile: '', participation: '' })
+  draftModelProfile: '', participation: '', groupChat: false })
 const base = computed(() => '/v1/characters/' + encodeURIComponent(props.characterId))
 const admin = computed(() => !!workspace.value)
 const connector = computed(() => accounts.value.find(({ id, platform }) => id === props.accountDetail && connectorFor(platform)))
@@ -113,7 +113,8 @@ const parsed = computed(() => {
   const coreProfile = { ...editingCore.value?.profile, name: form.name.trim() || undefined, aiDisclosure: form.disclosure.trim() }
   const roleProfile = { ...editingIdentity.value?.profile, displayName: form.name.trim() || undefined,
     timezone: form.timezone || undefined, writingStyle: form.style, writingPrompt: form.writingPrompt.trim() || undefined,
-    draftModelProfile: form.draftModelProfile || undefined, participation: form.participation || undefined }
+    draftModelProfile: form.draftModelProfile || undefined, participation: form.participation || undefined,
+    groupChat: form.groupChat || undefined }
   switch (editor.value) {
     case 'character': return characterInput.safeParse({ slug: form.slug.trim(), timezone: form.timezone, coreProfile })
     case 'core': return coreInput.safeParse({ coreProfile, reason })
@@ -294,7 +295,7 @@ function open(kind: Editor, identity?: Identity, resource?: AccountControl) {
     disclosure: core?.aiDisclosure ?? '', style: identity?.profile?.writingStyle ?? 'neutral',
     writingPrompt: identity?.profile?.writingPrompt ?? '',
     draftModelProfile: identity?.profile?.draftModelProfile ?? '',
-    participation: identity?.profile?.participation ?? '',
+    participation: identity?.profile?.participation ?? '', groupChat: identity?.profile?.groupChat ?? false,
     registrationId: null, platform: '',
     instance: 'local', remoteId: '', reason: '' })
   void loadSchemas().catch(() => {})
@@ -418,7 +419,7 @@ onMounted(() => { if (props.characterId) void run(load) })
     <IdentityEditorDialog :open="isIdentity" :creating="editor === 'identity'"
       v-model:slug="form.slug" v-model:name="form.name" v-model:timezone="form.timezone" v-model:writing-style="form.style"
       v-model:draft-model-profile="form.draftModelProfile" v-model:participation="form.participation"
-      v-model:writing-prompt="form.writingPrompt" v-model:reason="form.reason"
+      v-model:writing-prompt="form.writingPrompt" v-model:reason="form.reason" v-model:group-chat="form.groupChat"
       :inherited-timezone="workspace?.timezone ?? 'UTC'" :draft-models="draftModels" :default-draft-model="defaultDraftModel"
       :max-writing-prompt-length="schemas?.management.maxIdentityWritingPromptLength"
       :busy="busy" :error="error" :field-error="fieldError" :field-input="fieldInput"

@@ -57,6 +57,8 @@ const stoppedReasons: Record<string, string> = {
   PROPOSAL_EXPIRED: '提案已过有效期。',
   MODEL_BUDGET_EXHAUSTED: '角色当日模型预算不足，已跳过模型调用。',
   MODEL_NO_REPLY: '此身份选择旁听。',
+  MODEL_DECISION_INVALID_OUTPUT: '模型的参与判断未通过格式校验，运行已停止。',
+  MODEL_WRITING_INVALID_OUTPUT: '模型的写作结果未通过格式校验，未生成草稿。',
   ...chatReplyStopLabels,
 }
 const participationLabels = { talkative: '话痨', balanced: '适中', reserved: '寡言' }

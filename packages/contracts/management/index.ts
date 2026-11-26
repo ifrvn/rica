@@ -42,6 +42,7 @@ export const maxIdentityWritingPromptLength = 4000
 
 export const identityProfile = z.strictObject({
   participation: z.enum(['talkative', 'balanced', 'reserved']).optional(),
+  groupChat: z.boolean().optional(),
   displayName: shortText.optional(),
   timezone: timezone.optional(),
   stateRule: stateRule.optional(),

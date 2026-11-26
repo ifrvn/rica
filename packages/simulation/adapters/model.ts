@@ -9,16 +9,16 @@ const replies = {
 }
 
 export const simulatedModel: ModelProvider = {
-  async decide({ text, context, conversation, participation }, signal) {
+  async decide({ text, context, conversation, groupChat, participation }, signal) {
     signal.throwIfAborted()
     if (!text.trim()) return { action: 'NO_OP', reason: 'UNCLEAR' }
-    if (!conversation) return 'REPLY'
+    if (!conversation && !groupChat) return 'REPLY'
     const message = text.normalize('NFKC')
     const name = context.self.name?.normalize('NFKC')
     const directed = message.includes('@角色') || (name && message.includes('@' + name))
     if (directed) return { action: 'REPLY', reason: 'DIRECT_REQUEST' }
     if (/@[^\s@]/u.test(message)) return { action: 'NO_OP', reason: 'BYSTANDER' }
-    if (conversation.history.some(({ message: previous }) => previous.trim() === text.trim())) {
+    if (conversation?.history.some(({ message: previous }) => previous.trim() === text.trim())) {
       return { action: 'NO_OP', reason: 'ALREADY_ADDRESSED' }
     }
     if (participation !== 'reserved' && /[?？]$/u.test(text.trim())) {

@@ -1024,6 +1024,68 @@ test('revocation during private writing prevents the draft from committing', asy
   }
 })
 
+test('group identities and invalid model output reach the correct terminal or approval state', async () => {
+  assert.ok(fixture)
+  const { characterId } = fixture
+  const account = await db.$transaction(async (tx) => {
+    const { id: identityId } = await tx.identity.create({ data: { characterId, slug: 'group-output-fixture' } })
+    await tx.identityVersion.create({ data: { characterId, identityId, version: 1,
+      roleProfile: { groupChat: true }, actorId: fixtureKey, reason: 'Group chat fixture' } })
+    await tx.identity.update({ where: { id: identityId }, data: { activeVersion: 1, status: 'ACTIVE' } })
+    return tx.platformAccount.create({ data: { characterId, identityId, platform: 'mock-a',
+      instanceKey: 'integration', remoteAccountId: `${fixtureKey}-group-output`, status: 'ACTIVE' } })
+  })
+  const runtime = testDatabaseRole('rica_runtime')
+  try {
+    const conversation = await db.conversation.create({ data: { characterId, identityId: account.identityId,
+      accountId: account.id, channel: 'PUBLIC', remoteKey: randomUUID() } })
+    for (const [messageText, state, stateReason, decisions, writes] of [
+      ['recover decision', 'WAITING_APPROVAL', null, 2, 1],
+      ['invalid decision', 'CANCELED', 'MODEL_DECISION_INVALID_OUTPUT', 2, 0],
+      ['invalid writing', 'CANCELED', 'MODEL_WRITING_INVALID_OUTPUT', 1, 1],
+    ] as const) {
+      const result = await ingestSimulatedEvent(runtime, { accountId: account.id, conversationId: conversation.id,
+        sourceKey: randomUUID(), kind: 'REPLY', occurredAt, messageText })
+      assert.equal(result.status, 'ACCEPTED')
+      const runId = result.runId
+      const prep = await db.outboxEvent.findFirstOrThrow({ where: { runId, type: runQueuedEvent } })
+      await prepareSimulatedRun(runtime, prep.eventId)
+      let decideCount = 0
+      let writeCount = 0
+      await consumeRuns([runId], draftQueuedEvent, {
+        ...localSimulationModel,
+        implementation: {
+          async decide(input, signal) {
+            if (input.context.runId !== runId) return simulatedModel.decide(input, signal)
+            assert.equal(input.groupChat, true)
+            assert.equal(input.conversation, undefined)
+            decideCount++
+            if (messageText === 'invalid decision' || (messageText === 'recover decision' && decideCount === 1)) {
+              return { action: 'NO_OFF', reason: 'BYSTANDER' }
+            }
+            return { action: 'REPLY', reason: 'DIRECT_REQUEST' }
+          },
+          async write(input, signal) {
+            if (input.text !== messageText) return simulatedModel.write(input, signal)
+            assert.equal(input.groupChat, true)
+            writeCount++
+            return messageText === 'invalid writing' ? { messages: [], evidenceIds: [] } : { text: '收到。', evidenceIds: [] }
+          },
+        },
+      })
+      const run = await db.agentRun.findUniqueOrThrow({ where: { id: runId } })
+      const job = await db.outboxEvent.findFirstOrThrow({ where: { runId, type: draftQueuedEvent } })
+      assert.deepEqual({ state: run.state, stateReason: run.stateReason, decideCount, writeCount },
+        { state, stateReason, decideCount: decisions, writeCount: writes })
+      assert.equal(job.attempts, 1)
+      assert.equal(job.quarantinedAt, null)
+      assert.equal(await db.actionProposal.count({ where: { runId } }), state === 'WAITING_APPROVAL' ? 1 : 0)
+    }
+  } finally {
+    await runtime.$disconnect()
+  }
+})
+
 test('a failed drafting job stays pending and concurrent retries commit it once', async () => {
   assert.ok(fixture)
   const account = fixture.accounts[1]
